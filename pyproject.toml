@@ -1,7 +1,50 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "nexus-automation"
-version = "0.1.0"
-description = "Add your description here"
+name = "nexus-tui"
+version = "1.0.0"
+description = "Готовый к продакшену Textual TUI для Nexus Sonatype CE: просмотр, загрузка, сканирование Grype и проверка артефактов"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+license = { text = "MIT" }
+authors = [{ name = "nexus-automation" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Security",
+]
+dependencies = [
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.2",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "textual>=8.2.8",
+    "rich>=15.0.0",
+    "tenacity>=9.1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[project.scripts]
+nexus-tui = "nexus_tui.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nexus_tui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
