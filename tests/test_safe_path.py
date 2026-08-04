@@ -50,3 +50,36 @@ def test_sanitize_repo_and_filename() -> None:
         sanitize_repo_name("..")
     with pytest.raises(UnsafePathError):
         sanitize_filename("")
+
+
+def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
+    from nexus_tui.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
+
+    pkg = tmp_path / "lodash"
+    pkg.mkdir()
+    assert resolve_storage_path(pkg) == pkg / ASSET_META_LEAF
+    assert resolve_storage_path(tmp_path / "missing") == tmp_path / "missing"
+
+
+def test_prepare_asset_destination_promotes_file(tmp_path: Path) -> None:
+    from nexus_tui.utils.fs import prepare_asset_destination
+    from nexus_tui.utils.safe_path import ASSET_META_LEAF
+
+    # Сначала скачан npm metadata как файл `lodash`
+    meta_file = tmp_path / "lodash"
+    meta_file.write_text('{"name":"lodash"}', encoding="utf-8")
+    sidecar = tmp_path / "lodash.metadata.json"
+    sidecar.write_text("{}", encoding="utf-8")
+
+    # Затем tarball требует каталог lodash/-/
+    tarball = tmp_path / "lodash" / "-" / "lodash-4.17.15.tgz"
+    dest = prepare_asset_destination(tarball)
+
+    assert dest == tarball
+    assert (tmp_path / "lodash").is_dir()
+    assert (tmp_path / "lodash" / ASSET_META_LEAF).is_file()
+    assert (tmp_path / "lodash" / ASSET_META_LEAF).read_text(encoding="utf-8") == (
+        '{"name":"lodash"}'
+    )
+    assert (tmp_path / "lodash" / f"{ASSET_META_LEAF}.metadata.json").is_file()
+    assert dest.parent.is_dir()

@@ -10,9 +10,26 @@ class UnsafePathError(ValueError):
     """Выбрасывается, когда путь отклонён по соображениям безопасности."""
 
 
+# Имя листа для npm-метаданных, когда путь одновременно файл и префикс каталога
+# (например ``lodash`` + ``lodash/-/lodash-4.17.15.tgz``).
+ASSET_META_LEAF = "(metadata)"
+
 # Символы, небезопасные или неудобные на распространённых ФС.
 _UNSAFE_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
 _REPO_SAFE = re.compile(r"[^A-Za-z0-9._+-]+")
+
+
+def resolve_storage_path(path: Path) -> Path:
+    """Если ``path`` уже каталог — писать файл как ``path/(metadata)``.
+
+    Нужно для npm/hosted, где metadata лежит на том же path, что и префикс tarball.
+    """
+    try:
+        if path.exists() and path.is_dir():
+            return path / ASSET_META_LEAF
+    except OSError:
+        pass
+    return path
 
 
 def sanitize_repo_name(name: str) -> str:

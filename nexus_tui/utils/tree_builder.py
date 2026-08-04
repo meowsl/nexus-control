@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from nexus_tui.models import DockerTag, NexusAsset, TreeNode
-from nexus_tui.utils.safe_path import UnsafePathError, normalize_asset_path
+from nexus_tui.utils.safe_path import (
+    ASSET_META_LEAF,
+    UnsafePathError,
+    normalize_asset_path,
+)
 
 
 def build_asset_tree(
@@ -37,17 +41,56 @@ def build_asset_tree(
             else:
                 child = node.children[part]
                 if is_last:
-                    # Файл побеждает ранее созданный каталог с тем же именем.
-                    child.is_dir = False
-                    child.asset = asset
-                    child.children.clear()
-                elif not child.is_dir and child.asset is not None:
-                    # Конфликт путей: существующий файл vs префикс каталога — сохранить файл,
-                    # пропустить более глубокую вложенность для этого артефакта.
-                    break
+                    if child.is_dir and child.children:
+                        # npm и др.: есть и файл `pkg`, и вложенность `pkg/-/…`.
+                        # Каталог не затираем — кладём метаданные листом внутрь.
+                        _attach_file_into_dir(child, asset, rel)
+                    else:
+                        child.is_dir = False
+                        child.asset = asset
+                        child.children.clear()
+                elif not child.is_dir:
+                    # Уже есть файл на префиксе пути — повышаем до каталога.
+                    _promote_file_to_dir(child)
             node = node.children[part]
     _annotate_counts(root)
     return root
+
+
+def _attach_file_into_dir(dir_node: TreeNode, asset: NexusAsset, path: str) -> None:
+    """Положить asset-файл внутрь существующего каталога без потери детей."""
+    name = ASSET_META_LEAF
+    if name in dir_node.children:
+        # Повторная загрузка того же meta-path — обновить asset.
+        leaf = dir_node.children[name]
+        leaf.asset = asset
+        leaf.path = path
+        leaf.is_dir = False
+        leaf.children.clear()
+        return
+    dir_node.children[name] = TreeNode(
+        name=name,
+        path=path,
+        is_dir=False,
+        asset=asset,
+    )
+
+
+def _promote_file_to_dir(node: TreeNode) -> None:
+    """Превратить листовой файл в каталог, сохранив прежний asset как лист."""
+    if node.is_dir:
+        return
+    file_asset = node.asset
+    file_path = node.path
+    node.is_dir = True
+    node.asset = None
+    if file_asset is not None:
+        node.children[ASSET_META_LEAF] = TreeNode(
+            name=ASSET_META_LEAF,
+            path=file_path,
+            is_dir=False,
+            asset=file_asset,
+        )
 
 
 def build_docker_tag_tree(

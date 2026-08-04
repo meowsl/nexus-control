@@ -152,9 +152,14 @@ class PipelineService:
             report("done", 1.0)
 
         summary.finished_at = datetime.now(timezone.utc)
-        if verify and any(r.verdict == Verdict.PASS for r in summary.results):
+        if verify:
+            if any(r.verdict == Verdict.PASS for r in summary.results):
+                try:
+                    self.verifier.write_manifest(summary)
+                except OSError as exc:
+                    logger.error("Failed to write verified manifest: %s", exc)
             try:
-                self.verifier.write_manifest(summary)
+                self.verifier.write_unverified_list(summary)
             except OSError as exc:
-                logger.error("Failed to write verified manifest: %s", exc)
+                logger.error("Failed to write unverified assets list: %s", exc)
         return summary

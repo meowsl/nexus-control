@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -55,15 +57,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _schedule_on_app(app: NexusTuiApp, callback: Callable[..., Any], *args: Any) -> None:
+    """Потокобезопасно вызвать UI-колбэк, не используя Screen.app из worker-потока.
+
+    Важно: не блокируем worker через ``call_from_thread().result()`` — иначе возможен
+    deadlock с TuiLogHandler, который тоже ходит в main loop из того же потока.
+    """
+    loop = getattr(app, "_loop", None)
+    if loop is None:
+        return
+
+    async def _run() -> None:
+        with app._context():
+            callback(*args)
+
+    asyncio.run_coroutine_threadsafe(_run(), loop)
+
+
 class RepositoriesScreen(Screen[None]):
     """Первый экран: просмотр репозиториев Nexus."""
 
     BINDINGS = [
-        Binding("q", "quit", "Выход"),
+        Binding("q", "app.quit", "Выход"),
         Binding("r", "refresh", "Обновить"),
-        Binding("slash", "search", "Фильтр"),
+        Binding("slash", "search", "Фильтр", priority=True),
         Binding("enter", "open_repo", "Открыть", show=True),
         Binding("question_mark", "help", "Справка"),
+        Binding("escape", "close_search", "Закрыть фильтр", show=False, priority=True),
     ]
 
     CSS = """
@@ -95,6 +115,7 @@ class RepositoriesScreen(Screen[None]):
         super().__init__()
         self._repos: list[Repository] = []
         self._filter = ""
+        self._ui_app: NexusTuiApp | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -106,9 +127,14 @@ class RepositoriesScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._ui_app = self.app
         table = self.query_one("#repo-table", DataTable)
         table.cursor_type = "row"
         table.add_columns("Name", "Format", "Type", "Support", "URL", "Attributes")
+        # Скрытый Input иначе перехватывает фокус и «съедает» клавиши экрана.
+        self.query_one("#repo-filter", Input).can_focus = False
+        self.query_one("#log", RichLog).can_focus = False
+        table.focus()
         self.action_refresh()
 
     @property
@@ -121,42 +147,65 @@ class RepositoriesScreen(Screen[None]):
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
         row.toggle_class("visible")
+        filt = self.query_one("#repo-filter", Input)
         if row.has_class("visible"):
-            self.query_one("#repo-filter", Input).focus()
+            filt.can_focus = True
+            filt.focus()
         else:
-            self._filter = ""
-            self._render_rows()
-            self.query_one("#repo-table", DataTable).focus()
+            self._close_filter(filt)
+
+    def action_close_search(self) -> None:
+        row = self.query_one("#filter-row")
+        if not row.has_class("visible"):
+            return
+        row.remove_class("visible")
+        self._close_filter(self.query_one("#repo-filter", Input))
+
+    def _close_filter(self, filt: Input) -> None:
+        filt.value = ""
+        filt.can_focus = False
+        self._filter = ""
+        self._render_rows()
+        self.query_one("#repo-table", DataTable).focus()
 
     @on(Input.Submitted, "#repo-filter")
+    def _on_filter_submitted(self, event: Input.Submitted) -> None:
+        self._filter = event.value.strip().lower()
+        self._render_rows()
+        self.action_close_search()
+
     @on(Input.Changed, "#repo-filter")
-    def _on_filter(self, event: Input.Changed | Input.Submitted) -> None:
+    def _on_filter(self, event: Input.Changed) -> None:
         self._filter = event.value.strip().lower()
         self._render_rows()
 
     def action_refresh(self) -> None:
+        self._ui_app = self.app
         self.query_one("#status", Static).update("Loading repositories…")
         self._load_repos()
 
     @work(thread=True, exclusive=True)
     def _load_repos(self) -> None:
+        app = self._ui_app
+        if app is None:
+            return
         try:
-            self.app.ensure_client()
-            repos = self.app.client.list_repositories()
+            app.ensure_client()
+            repos = app.client.list_repositories()
         except NexusAuthError as exc:
-            self.app.call_from_thread(self._on_error, "Authentication error", str(exc))
+            _schedule_on_app(app, self._on_error, "Authentication error", str(exc))
             return
         except NexusNetworkError as exc:
-            self.app.call_from_thread(self._on_error, "Network error", str(exc))
+            _schedule_on_app(app, self._on_error, "Network error", str(exc))
             return
         except NexusAPIError as exc:
-            self.app.call_from_thread(self._on_error, "Nexus API error", str(exc))
+            _schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unexpected error listing repositories")
-            self.app.call_from_thread(self._on_error, "Unexpected error", str(exc))
+            _schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
             return
-        self.app.call_from_thread(self._on_repos_loaded, repos)
+        _schedule_on_app(app, self._on_repos_loaded, repos)
 
     def _on_repos_loaded(self, repos: list[Repository]) -> None:
         self._repos = repos
@@ -200,6 +249,15 @@ class RepositoriesScreen(Screen[None]):
                 name = str(table.get_row_at(table.cursor_row)[0])
             except Exception:  # noqa: BLE001
                 return
+        self._open_repo_by_name(name)
+
+    @on(DataTable.RowSelected, "#repo-table")
+    def _on_repo_selected(self, event: DataTable.RowSelected) -> None:
+        name = str(event.row_key.value) if event.row_key else None
+        if name:
+            self._open_repo_by_name(name)
+
+    def _open_repo_by_name(self, name: str) -> None:
         repo = next((r for r in self._repos if r.name == name), None)
         if repo is None:
             return
@@ -218,10 +276,10 @@ class AssetsScreen(Screen[None]):
     """Просмотр артефактов репозитория в виде дерева; действия загрузки/сканирования/проверки."""
 
     BINDINGS = [
-        Binding("escape", "back", "Назад"),
+        Binding("escape", "escape", "Назад", priority=True),
         Binding("q", "back", "Назад"),
         Binding("r", "refresh", "Обновить"),
-        Binding("slash", "search", "Фильтр"),
+        Binding("slash", "search", "Фильтр", priority=True),
         Binding("enter", "toggle_node", "Раскрыть"),
         Binding("d", "download_selected", "Скачать"),
         Binding("s", "scan_selected", "Скан"),
@@ -280,6 +338,7 @@ class AssetsScreen(Screen[None]):
         self._last_summary: PipelineSummary | None = None
         self._cancel = False
         self._busy = False
+        self._ui_app: NexusTuiApp | None = None
         # Соответствие id узла textual tree -> доменный TreeNode
         self._node_map: dict[int, TreeNode] = {}
 
@@ -298,11 +357,15 @@ class AssetsScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._ui_app = self.app
         support = self.repository.support_level
         self.query_one("#status", Static).update(
             f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
             f"type={self.repository.type}  support={support}"
         )
+        self.query_one("#asset-filter", Input).can_focus = False
+        self.query_one("#log", RichLog).can_focus = False
+        self.query_one("#asset-tree", Tree).focus()
         self.action_refresh()
 
     @property
@@ -312,18 +375,34 @@ class AssetsScreen(Screen[None]):
     def action_back(self) -> None:
         self.app.pop_screen()
 
+    def action_escape(self) -> None:
+        """Esc: сначала закрыть фильтр, иначе вернуться к репозиториям."""
+        row = self.query_one("#filter-row")
+        if row.has_class("visible"):
+            row.remove_class("visible")
+            self._close_asset_filter(self.query_one("#asset-filter", Input))
+            return
+        self.action_back()
+
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(HELP_TEXT))
 
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
         row.toggle_class("visible")
+        filt = self.query_one("#asset-filter", Input)
         if row.has_class("visible"):
-            self.query_one("#asset-filter", Input).focus()
+            filt.can_focus = True
+            filt.focus()
         else:
-            self._filter = ""
-            self._populate_tree(self._root_tree)
-            self.query_one("#asset-tree", Tree).focus()
+            self._close_asset_filter(filt)
+
+    def _close_asset_filter(self, filt: Input) -> None:
+        filt.value = ""
+        filt.can_focus = False
+        self._filter = ""
+        self._populate_tree(self._root_tree)
+        self.query_one("#asset-tree", Tree).focus()
 
     @on(Input.Changed, "#asset-filter")
     def _on_filter_changed(self, event: Input.Changed) -> None:
@@ -331,7 +410,19 @@ class AssetsScreen(Screen[None]):
         view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
         self._populate_tree(view)
 
+    @on(Input.Submitted, "#asset-filter")
+    def _on_filter_submitted(self, event: Input.Submitted) -> None:
+        self._filter = event.value.strip()
+        view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
+        self._populate_tree(view)
+        row = self.query_one("#filter-row")
+        row.remove_class("visible")
+        filt = self.query_one("#asset-filter", Input)
+        filt.can_focus = False
+        self.query_one("#asset-tree", Tree).focus()
+
     def action_toggle_node(self) -> None:
+        """Раскрыть/свернуть узел (Space / Enter через Tree.auto_expand)."""
         tree = self.query_one("#asset-tree", Tree)
         if tree.cursor_node is not None:
             tree.cursor_node.toggle()
@@ -345,26 +436,30 @@ class AssetsScreen(Screen[None]):
         if self._busy:
             self._log("[yellow]Busy; wait for the current job.[/yellow]")
             return
+        self._ui_app = self.app
         self._log(f"Loading assets for {self.repository.name}…")
         self._load_assets()
 
     @work(thread=True, exclusive=True)
     def _load_assets(self) -> None:
+        app = self._ui_app
+        if app is None:
+            return
         try:
-            self.app.ensure_client()
+            app.ensure_client()
             if self.repository.is_docker:
-                tags = self.app.client.list_docker_tags(self.repository)
+                tags = app.client.list_docker_tags(self.repository)
                 tree = build_docker_tag_tree(tags, root_name=self.repository.name)
-                self.app.call_from_thread(self._on_docker_loaded, tags, tree)
+                _schedule_on_app(app, self._on_docker_loaded, tags, tree)
             else:
-                assets = self.app.client.list_assets(self.repository.name)
+                assets = app.client.list_assets(self.repository.name)
                 tree = build_asset_tree(assets, root_name=self.repository.name)
-                self.app.call_from_thread(self._on_assets_loaded, assets, tree)
+                _schedule_on_app(app, self._on_assets_loaded, assets, tree)
         except NexusAPIError as exc:
-            self.app.call_from_thread(self._show_error, "Failed to load assets", str(exc))
+            _schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Asset load failed")
-            self.app.call_from_thread(self._show_error, "Unexpected error", str(exc))
+            _schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
 
     def _on_assets_loaded(self, assets: list[NexusAsset], tree: TreeNode) -> None:
         self._flat_assets = assets
@@ -399,6 +494,8 @@ class AssetsScreen(Screen[None]):
     def _populate_tree(self, root: TreeNode) -> None:
         tree = self.query_one("#asset-tree", Tree)
         tree.clear()
+        # Enter уже раскрывает через Tree.auto_expand — не дублируем toggle в handlers.
+        tree.auto_expand = True
         self._node_map.clear()
         tree.root.expand()
         self._node_map[id(tree.root)] = root
@@ -407,14 +504,17 @@ class AssetsScreen(Screen[None]):
 
     def _add_node(self, parent: TuiTreeNode[Any], node: TreeNode) -> None:
         label = self._label_for(node)
-        tui_node = parent.add(label, data=node, expand=False)
-        self._node_map[id(tui_node)] = node
         if node.is_dir:
+            tui_node = parent.add(label, data=node, expand=False)
+            self._node_map[id(tui_node)] = node
             for child in sorted(
                 node.children.values(),
                 key=lambda n: (not n.is_dir, n.name.lower()),
             ):
                 self._add_node(tui_node, child)
+        else:
+            tui_node = parent.add_leaf(label, data=node)
+            self._node_map[id(tui_node)] = node
 
     def _label_for(self, node: TreeNode) -> str:
         if node.is_dir:
@@ -529,6 +629,7 @@ class AssetsScreen(Screen[None]):
         scan: bool,
         verify: bool,
     ) -> None:
+        self._ui_app = self.app
         self._busy = True
         self._cancel = False
         self.query_one("#job-label", Label).update("Starting…")
@@ -543,12 +644,16 @@ class AssetsScreen(Screen[None]):
         scan: bool,
         verify: bool,
     ) -> None:
+        app = self._ui_app
+        if app is None:
+            return
+
         def on_progress(asset_path: str, progress: float, stage: str) -> None:
-            self.app.call_from_thread(self._update_progress, asset_path, progress, stage)
+            _schedule_on_app(app, self._update_progress, asset_path, progress, stage)
 
         try:
-            self.app.ensure_client()
-            pipeline = PipelineService(self.app.settings, self.app.client)
+            app.ensure_client()
+            pipeline = PipelineService(app.settings, app.client)
             summary = pipeline.run(
                 repository=self.repository.name,
                 items=items,
@@ -558,10 +663,10 @@ class AssetsScreen(Screen[None]):
                 on_progress=on_progress,
                 should_cancel=lambda: self._cancel,
             )
-            self.app.call_from_thread(self._on_pipeline_done, summary)
+            _schedule_on_app(app, self._on_pipeline_done, summary)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Pipeline failed")
-            self.app.call_from_thread(self._on_pipeline_failed, str(exc))
+            _schedule_on_app(app, self._on_pipeline_failed, str(exc))
 
     def _update_progress(self, asset_path: str, progress: float, stage: str) -> None:
         self.query_one("#job-label", Label).update(

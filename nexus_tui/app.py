@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
+import threading
 from typing import Any
 
 from textual.app import App
@@ -74,10 +76,21 @@ class NexusTuiApp(App[None]):
                 # У экрана может не быть панели логов (модальные окна).
                 pass
 
+        # Неблокирующая доставка: blocking call_from_thread из worker + logging
+        # из того же потока легко приводит к deadlock / обрыву UI-контекста.
         try:
-            self.call_from_thread(_write)
+            if (
+                self._loop is not None
+                and self._thread_id != threading.get_ident()
+            ):
+                async def _run() -> None:
+                    with self._context():
+                        _write()
+
+                asyncio.run_coroutine_threadsafe(_run(), self._loop)
+            else:
+                _write()
         except Exception:  # noqa: BLE001
-            # Не в потоке / приложение ещё не запущено.
             try:
                 _write()
             except Exception:  # noqa: BLE001

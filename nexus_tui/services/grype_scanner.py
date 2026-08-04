@@ -213,13 +213,20 @@ class GrypeScanner:
 
 
 def _infer_scheme(path: Path) -> str:
+    """Выбрать схему цели Grype по типу локального пути.
+
+    Важно: npm-пакеты приходят как ``.tgz`` / ``.tar.gz`` — это *не* docker save.
+    ``docker-archive`` оставляем только для «голого» ``.tar`` (типичный ``docker save`` /
+    skopeo copy). Иначе grype падает с ``invalid tar header`` на npm tarball.
+    """
     if path.is_dir():
         return "dir"
     name = path.name.lower()
-    if name.endswith(".tar") or name.endswith(".tar.gz") or name.endswith(".tgz"):
-        return "docker-archive"
-    if name.endswith(".oci"):
+    if name.endswith(".oci") or name.endswith(".oci.tar"):
         return "oci-archive"
+    # Только *.tar без .gz — кандидат в docker image archive.
+    if name.endswith(".tar") and not name.endswith((".tar.gz", ".tar.bz2", ".tar.xz")):
+        return "docker-archive"
     return "file"
 
 

@@ -11,7 +11,7 @@ from nexus_tui.models import DownloadResult, DownloadStatus, DockerTag, NexusAss
 from nexus_tui.nexus.client import NexusClient, NexusAPIError
 from nexus_tui.utils.fs import (
     disable_execute_bit_best_effort,
-    ensure_parent_dir,
+    prepare_asset_destination,
     utc_now_iso,
     write_json,
 )
@@ -19,6 +19,7 @@ from nexus_tui.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
     docker_archive_path,
+    resolve_storage_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,27 +44,30 @@ class Downloader:
                 error=f"Unsafe path: {exc}",
             )
 
-        if dest.exists() and not self.settings.overwrite_downloads:
+        # Учесть уже созданный каталог на месте файла (npm metadata vs tarball).
+        existing = resolve_storage_path(dest)
+        if existing.is_file() and not self.settings.overwrite_downloads:
             meta = self._write_metadata(
-                dest,
+                existing,
                 repository=asset.repository,
                 asset_path=asset.path,
                 download_url=asset.download_url,
-                size=dest.stat().st_size,
+                size=existing.stat().st_size,
                 checksum=asset.checksum,
                 source="nexus-rest",
                 skipped=True,
             )
             return DownloadResult(
                 status=DownloadStatus.SKIPPED_EXISTING,
-                local_path=dest,
+                local_path=existing,
                 metadata_path=meta,
-                bytes_written=dest.stat().st_size,
+                bytes_written=existing.stat().st_size,
                 source="nexus-rest",
             )
 
         url = self.client.resolve_download_url(asset)
-        ensure_parent_dir(dest)
+        # npm и др.: path может быть и файлом, и префиксом каталога.
+        dest = prepare_asset_destination(dest)
         tmp = dest.with_suffix(dest.suffix + ".partial")
         hasher = hashlib.sha256()
         written = 0

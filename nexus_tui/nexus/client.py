@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import Any, Iterator
 from urllib.parse import urljoin
 
@@ -16,7 +17,7 @@ from tenacity import (
 
 from nexus_tui.config import Settings
 from nexus_tui.models import AuthType, DockerTag, NexusAsset, Repository
-from nexus_tui.nexus.assets import parse_asset, parse_assets_page
+from nexus_tui.nexus.assets import parse_assets_page
 from nexus_tui.nexus.repositories import parse_repositories
 from nexus_tui.nexus.session import SessionCache, SessionStore
 
@@ -283,12 +284,24 @@ class NexusClient:
     def list_assets(self, repository: str) -> list[NexusAsset]:
         return list(self.iter_assets(repository))
 
-    def stream_download(self, url: str) -> httpx.Response:
+    @contextmanager
+    def stream_download(self, url: str) -> Iterator[httpx.Response]:
         """Открыть потоковый GET для загрузки артефакта.
 
-        Вызывающий код должен закрыть response. Повторы применяются только до
-        передачи потока вызывающему (при ошибках подключения / HTTP-статуса).
+        Контекстный менеджер: закрывает response при выходе.
+        Повторы применяются только до передачи потока вызывающему
+        (при ошибках подключения / HTTP-статуса).
+
+        httpx>=0.28: ``Response`` сам по себе больше не context manager,
+        поэтому оборачиваем ``send(stream=True)`` явно.
         """
+        response = self._open_stream_download(url)
+        try:
+            yield response
+        finally:
+            response.close()
+
+    def _open_stream_download(self, url: str) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(1, 4):
             try:

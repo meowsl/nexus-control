@@ -83,3 +83,29 @@ def test_skips_traversal_paths() -> None:
     assert "ok" in root.children
     assert ".." not in root.children
     assert root.child_count == 1
+
+
+def test_npm_package_file_and_nested_tarball() -> None:
+    """Nexus npm: metadata at `axios` + tarball at `axios/-/axios-0.21.1.tgz`."""
+    meta = _asset("axios")
+    meta.content_type = "application/json"
+    tarball = _asset("axios/-/axios-0.21.1.tgz")
+    tarball.content_type = "application/octet-stream"
+
+    # metadata first, then nested
+    root = build_asset_tree([meta, tarball])
+    pkg = root.children["axios"]
+    assert pkg.is_dir
+    assert "(metadata)" in pkg.children
+    assert pkg.children["(metadata)"].asset is meta
+    assert "-" in pkg.children
+    assert pkg.children["-"].children["axios-0.21.1.tgz"].asset is tarball
+    assert root.child_count == 2
+
+    # nested first, then metadata (must not wipe children)
+    root2 = build_asset_tree([tarball, meta])
+    pkg2 = root2.children["axios"]
+    assert pkg2.is_dir
+    assert "(metadata)" in pkg2.children
+    assert "-" in pkg2.children
+    assert len(collect_leaf_assets(pkg2)) == 2

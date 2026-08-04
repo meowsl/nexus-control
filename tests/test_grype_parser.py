@@ -77,3 +77,14 @@ def test_vulnerabilities_list_compat() -> None:
     result = parse_grype_json(json.dumps(payload))
     assert result.verdict == Verdict.FAIL
     assert result.counts.medium == 1
+
+
+def test_infer_scheme_distinguishes_npm_and_docker_archives() -> None:
+    from pathlib import Path
+
+    from nexus_tui.services.grype_scanner import _infer_scheme
+
+    assert _infer_scheme(Path("lodash-4.17.15.tgz")) == "file"
+    assert _infer_scheme(Path("pkg.tar.gz")) == "file"
+    assert _infer_scheme(Path("image.tar")) == "docker-archive"
+    assert _infer_scheme(Path("bundle.oci")) == "oci-archive"

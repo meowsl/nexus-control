@@ -13,7 +13,7 @@ from nexus_tui.models import (
     Verdict,
     VerifyResult,
 )
-from nexus_tui.utils.fs import copy_file, ensure_dir, write_json
+from nexus_tui.utils.fs import copy_file, ensure_dir, prepare_asset_destination, write_json
 from nexus_tui.utils.safe_path import UnsafePathError, asset_verified_path
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class Verifier:
         except UnsafePathError as exc:
             return VerifyResult(error=f"Unsafe verified path: {exc}")
 
-        ensure_dir(dest.parent)
+        dest = prepare_asset_destination(dest)
         try:
             copied, skipped = copy_file(
                 local_path,
@@ -109,6 +109,33 @@ class Verifier:
         path = repo_dir / "verified-manifest.json"
         write_json(path, manifest)
         logger.info("Wrote verified manifest %s", path)
+        return path
+
+    def write_unverified_list(self, summary: PipelineSummary) -> Path | None:
+        """Записать ``unverified_assets.txt`` — по одному asset_path на строку.
+
+        В список попадают ассеты с verdict FAIL или ERROR (не прошедшие проверку).
+        Если таких нет — файл не создаётся, возвращается ``None``.
+        """
+        failed_paths = [
+            r.asset_path
+            for r in summary.results
+            if r.verdict in {Verdict.FAIL, Verdict.ERROR}
+        ]
+        if not failed_paths:
+            return None
+
+        repo_dir = self.verified_dir(summary.repository)
+        ensure_dir(repo_dir)
+        path = repo_dir / "unverified_assets.txt"
+        # Стабильный порядок + уникальность на случай дублей в summary.
+        lines = sorted(dict.fromkeys(failed_paths))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info(
+            "Wrote unverified assets list %s (%d entries)",
+            path,
+            len(lines),
+        )
         return path
 
 
