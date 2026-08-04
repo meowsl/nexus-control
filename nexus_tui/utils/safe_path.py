@@ -85,7 +85,7 @@ def normalize_asset_path(asset_path: str) -> PurePosixPath:
 
 
 def safe_join(root: Path, *relative_parts: str) -> Path:
-    """Объединить ``relative_parts`` под ``root`` и убедиться, что результат остаётся внутри root."""
+    """Объединить ``relative_parts`` под ``root``, результат обязан остаться внутри root."""
     root_resolved = root.expanduser().resolve()
     candidate = root_resolved
     for part in relative_parts:

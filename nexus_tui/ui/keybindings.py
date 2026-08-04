@@ -7,6 +7,7 @@ REPO_BINDINGS = [
     ("r", "refresh", "Обновить"),
     ("slash", "search", "Фильтр"),
     ("enter", "open", "Открыть"),
+    ("L", "logout", "Logout"),
     ("question_mark", "help", "Справка"),
 ]
 
@@ -32,6 +33,7 @@ HELP_TEXT = """
   r           Обновить список репозиториев
   /           Фильтр по имени
   Enter       Открыть ассеты
+  L           Logout (сброс Nexus-сессии и encrypted credentials)
   ?           Справка
 
 [b]Ассеты[/b]

@@ -37,10 +37,12 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Обязательные
+    # Обязательный URL. Username/password опциональны в .env:
+    # при отсутствии запрашиваются при старте и хранятся зашифрованно
+    # до истечения Nexus-сессии (см. nexus.credentials).
     nexus_url: str = Field(..., description="Базовый URL Nexus")
-    nexus_username: str = Field(..., description="Имя пользователя Nexus")
-    nexus_password: str = Field(..., description="Пароль Nexus")
+    nexus_username: str = Field(default="", description="Имя пользователя Nexus")
+    nexus_password: str = Field(default="", description="Пароль Nexus")
 
     # Клиент Nexus
     nexus_verify_ssl: bool = True
@@ -95,9 +97,9 @@ class Settings(BaseSettings):
 
     @field_validator("nexus_username", "nexus_password", mode="before")
     @classmethod
-    def _require_non_empty(cls, value: object, info) -> str:  # type: ignore[no-untyped-def]
-        if value is None or not str(value).strip():
-            raise ValueError(f"{info.field_name.upper()} is required")
+    def _coerce_optional_secret(cls, value: object) -> str:
+        if value is None:
+            return ""
         return str(value)
 
     @field_validator("grype_use_docker", mode="before")
@@ -193,8 +195,9 @@ def load_settings(env_file: str | Path | None = ".env") -> Settings:
         return Settings()  # type: ignore[call-arg]
     except Exception as exc:
         raise ConfigError(
-            "Failed to load configuration. Ensure NEXUS_URL, NEXUS_USERNAME, "
-            f"and NEXUS_PASSWORD are set in .env or the environment.\nDetails: {exc}"
+            "Failed to load configuration. Ensure NEXUS_URL is set in .env or "
+            "the environment. Username/password may be omitted and will be "
+            f"prompted interactively.\nDetails: {exc}"
         ) from exc
 
 

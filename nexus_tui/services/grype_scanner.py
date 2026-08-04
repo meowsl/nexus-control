@@ -165,8 +165,8 @@ class GrypeScanner:
         try:
             return self._run(argv_tail, timeout=1800)
         except CommandError as exc:
-            # grype может завершиться с ненулевым кодом при найденных уязвимостях, если задан --fail-on.
-            # Если stdout всё ещё содержит JSON, обрабатывать как успешный разбор.
+            # grype может вернуть ненулевой код при CVE, если задан --fail-on.
+            # Если stdout всё ещё JSON — считать разбор успешным.
             if exc.result and exc.result.stdout.strip().startswith("{"):
                 return exc.result
             stderr = (exc.result.stderr if exc.result else "") or str(exc)

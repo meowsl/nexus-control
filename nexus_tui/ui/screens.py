@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -35,6 +33,7 @@ from nexus_tui.models import (
 from nexus_tui.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_tui.services.pipeline import PipelineService
 from nexus_tui.ui.keybindings import HELP_TEXT
+from nexus_tui.ui.thread_ui import schedule_on_app
 from nexus_tui.ui.widgets import (
     ConfirmModal,
     HelpModal,
@@ -57,23 +56,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _schedule_on_app(app: NexusTuiApp, callback: Callable[..., Any], *args: Any) -> None:
-    """Потокобезопасно вызвать UI-колбэк, не используя Screen.app из worker-потока.
-
-    Важно: не блокируем worker через ``call_from_thread().result()`` — иначе возможен
-    deadlock с TuiLogHandler, который тоже ходит в main loop из того же потока.
-    """
-    loop = getattr(app, "_loop", None)
-    if loop is None:
-        return
-
-    async def _run() -> None:
-        with app._context():
-            callback(*args)
-
-    asyncio.run_coroutine_threadsafe(_run(), loop)
-
-
 class RepositoriesScreen(Screen[None]):
     """Первый экран: просмотр репозиториев Nexus."""
 
@@ -82,6 +64,7 @@ class RepositoriesScreen(Screen[None]):
         Binding("r", "refresh", "Обновить"),
         Binding("slash", "search", "Фильтр", priority=True),
         Binding("enter", "open_repo", "Открыть", show=True),
+        Binding("L", "logout", "Logout"),
         Binding("question_mark", "help", "Справка"),
         Binding("escape", "close_search", "Закрыть фильтр", show=False, priority=True),
     ]
@@ -144,6 +127,15 @@ class RepositoriesScreen(Screen[None]):
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(HELP_TEXT))
 
+    def action_logout(self) -> None:
+        """Сбросить Nexus-сессию и encrypted credentials, затем выйти."""
+        try:
+            self.app.client.logout()
+        except Exception:  # noqa: BLE001
+            logger.exception("Logout failed")
+        logger.info("Logged out: Nexus session and credential vault cleared")
+        self.app.exit()
+
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
         row.toggle_class("visible")
@@ -193,19 +185,19 @@ class RepositoriesScreen(Screen[None]):
             app.ensure_client()
             repos = app.client.list_repositories()
         except NexusAuthError as exc:
-            _schedule_on_app(app, self._on_error, "Authentication error", str(exc))
+            schedule_on_app(app, self._on_error, "Authentication error", str(exc))
             return
         except NexusNetworkError as exc:
-            _schedule_on_app(app, self._on_error, "Network error", str(exc))
+            schedule_on_app(app, self._on_error, "Network error", str(exc))
             return
         except NexusAPIError as exc:
-            _schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
+            schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unexpected error listing repositories")
-            _schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
             return
-        _schedule_on_app(app, self._on_repos_loaded, repos)
+        schedule_on_app(app, self._on_repos_loaded, repos)
 
     def _on_repos_loaded(self, repos: list[Repository]) -> None:
         self._repos = repos
@@ -450,16 +442,16 @@ class AssetsScreen(Screen[None]):
             if self.repository.is_docker:
                 tags = app.client.list_docker_tags(self.repository)
                 tree = build_docker_tag_tree(tags, root_name=self.repository.name)
-                _schedule_on_app(app, self._on_docker_loaded, tags, tree)
+                schedule_on_app(app, self._on_docker_loaded, tags, tree)
             else:
                 assets = app.client.list_assets(self.repository.name)
                 tree = build_asset_tree(assets, root_name=self.repository.name)
-                _schedule_on_app(app, self._on_assets_loaded, assets, tree)
+                schedule_on_app(app, self._on_assets_loaded, assets, tree)
         except NexusAPIError as exc:
-            _schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
+            schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Asset load failed")
-            _schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
 
     def _on_assets_loaded(self, assets: list[NexusAsset], tree: TreeNode) -> None:
         self._flat_assets = assets
@@ -566,27 +558,65 @@ class AssetsScreen(Screen[None]):
 
     # ---- действия -----------------------------------------------------------
     def action_download_selected(self) -> None:
-        self._confirm_and_run("download", self._items_for_selected(), download=True, scan=False, verify=False)
+        self._confirm_and_run(
+            "download",
+            self._items_for_selected(),
+            download=True,
+            scan=False,
+            verify=False,
+        )
 
     def action_scan_selected(self) -> None:
-        # Сканирование подразумевает предварительную загрузку при отсутствии файла — pipeline сначала загружает, затем сканирует.
-        self._confirm_and_run("scan", self._items_for_selected(), download=True, scan=True, verify=False)
+        # Scan: pipeline сначала download (если нет файла), затем scan.
+        self._confirm_and_run(
+            "scan",
+            self._items_for_selected(),
+            download=True,
+            scan=True,
+            verify=False,
+        )
 
     def action_verify_selected(self) -> None:
-        self._confirm_and_run("verify", self._items_for_selected(), download=True, scan=True, verify=True)
+        self._confirm_and_run(
+            "verify",
+            self._items_for_selected(),
+            download=True,
+            scan=True,
+            verify=True,
+        )
 
     def action_download_all(self) -> None:
-        self._confirm_and_run("download ALL", self._all_items(), download=True, scan=False, verify=False)
+        self._confirm_and_run(
+            "download ALL",
+            self._all_items(),
+            download=True,
+            scan=False,
+            verify=False,
+        )
 
     def action_scan_all(self) -> None:
-        self._confirm_and_run("scan ALL", self._all_items(), download=True, scan=True, verify=False)
+        self._confirm_and_run(
+            "scan ALL",
+            self._all_items(),
+            download=True,
+            scan=True,
+            verify=False,
+        )
 
     def action_verify_all(self) -> None:
-        self._confirm_and_run("verify ALL", self._all_items(), download=True, scan=True, verify=True)
+        self._confirm_and_run(
+            "verify ALL",
+            self._all_items(),
+            download=True,
+            scan=True,
+            verify=True,
+        )
 
     def action_open_report(self) -> None:
         if self._last_summary is None:
-            self.app.push_screen(MessageModal("Report", "No report yet. Run a scan/verify first."))
+            self.app.push_screen(
+                MessageModal("Report", "No report yet. Run a scan/verify first.")
+            )
             return
         self.app.push_screen(ReportModal(self._last_summary))
 
@@ -603,7 +633,12 @@ class AssetsScreen(Screen[None]):
             self._log("[yellow]Another job is running.[/yellow]")
             return
         if not items:
-            self.app.push_screen(MessageModal("Nothing to do", "No assets selected or repository is empty."))
+            self.app.push_screen(
+                MessageModal(
+                    "Nothing to do",
+                    "No assets selected or repository is empty.",
+                )
+            )
             return
 
         settings = self.app.settings
@@ -649,7 +684,7 @@ class AssetsScreen(Screen[None]):
             return
 
         def on_progress(asset_path: str, progress: float, stage: str) -> None:
-            _schedule_on_app(app, self._update_progress, asset_path, progress, stage)
+            schedule_on_app(app, self._update_progress, asset_path, progress, stage)
 
         try:
             app.ensure_client()
@@ -663,10 +698,10 @@ class AssetsScreen(Screen[None]):
                 on_progress=on_progress,
                 should_cancel=lambda: self._cancel,
             )
-            _schedule_on_app(app, self._on_pipeline_done, summary)
+            schedule_on_app(app, self._on_pipeline_done, summary)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Pipeline failed")
-            _schedule_on_app(app, self._on_pipeline_failed, str(exc))
+            schedule_on_app(app, self._on_pipeline_failed, str(exc))
 
     def _update_progress(self, asset_path: str, progress: float, stage: str) -> None:
         self.query_one("#job-label", Label).update(
