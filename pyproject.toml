@@ -25,6 +25,8 @@ dependencies = [
     "textual>=8.2.8",
     "rich>=15.0.0",
     "tenacity>=9.1.4",
+    "flake8>=7.3.0",
+    "cryptography>=50.0.0",
 ]
 
 [project.optional-dependencies]
