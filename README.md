@@ -1,9 +1,9 @@
-# nexus-tui
+# nexus-control
 
 Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
 
 ```bash
-python -m nexus_tui
+python -m nexus_control
 ```
 
 Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md).
@@ -14,7 +14,7 @@ python -m nexus_tui
 
 - Загрузка конфигурации из `.env` / переменных окружения ОС (приоритет у ОС)
 - Клиент Nexus REST API (`httpx`) с Basic Auth
-- Локальный кэш сессии (`~/.cache/nexus-tui/session.json`) с TTL — без лишних проверок авторизации
+- Локальный кэш сессии (`~/.cache/nexus-control/session.json`) с TTL — без лишних проверок авторизации
 - Список репозиториев с фильтром и обновлением
 - Дерево ассетов по полю Nexus `path` (раскрытие / сворачивание / фильтр)
 - Docker-репозитории через адаптер тегов (Registry v2 API + fallback по assets)
@@ -30,7 +30,7 @@ python -m nexus_tui
 ## Архитектура
 
 ```
-nexus_tui/
+nexus_control/
   config.py          # pydantic-settings
   models.py          # доменные dataclasses
   logging_setup.py
@@ -93,16 +93,16 @@ cp .env.example .env
 |------------|--------------|----------|
 | `NEXUS_VERIFY_SSL` | `true` | `false` только для self-signed TLS в лаборатории (будет warning) |
 | `NEXUS_SESSION_TTL` | `3600` | TTL кэша сессии (секунды) |
-| `NEXUS_CACHE_DIR` | `~/.cache/nexus-tui` | Каталог кэша сессии (режим 700) |
+| `NEXUS_CACHE_DIR` | `~/.cache/nexus-control` | Каталог кэша сессии (режим 700) |
 | `NEXUS_DOCKER_REGISTRY` | _(пусто)_ | Переопределение docker connector `host:port` |
-| `DOWNLOAD_ROOT` | `~/nexus-automation/downloads` | Скачанные артефакты |
-| `REPORTS_ROOT` | `~/nexus-automation/reports` | JSON/TXT отчёты Grype |
-| `VERIFIED_ROOT` | `~/nexus-automation` | Родитель каталогов `<repo>-verified/` |
+| `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
+| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты Grype |
+| `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
-| `LOG_FILE` | `~/nexus-automation/logs/nexus-tui.log` | Ротируемый лог |
+| `LOG_FILE` | `~/nexus-control/logs/nexus-control.log` | Ротируемый лог |
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
 
@@ -113,9 +113,9 @@ cp .env.example .env
 ## Запуск
 
 ```bash
-python -m nexus_tui
+python -m nexus_control
 # или
-nexus-tui          # после pip install -e .
+nexus-control          # после pip install -e .
 # или
 python main.py
 ```
@@ -174,12 +174,12 @@ python main.py
 
 | Тип | Путь |
 |-----|------|
-| Downloads | `/home/alice/nexus-automation/downloads/my-repo/...` |
-| Reports | `/home/alice/nexus-automation/reports/my-repo/...grype.json` |
-| Verified | `/home/alice/nexus-automation/my-repo-verified/...` |
-| Manifest | `/home/alice/nexus-automation/my-repo-verified/verified-manifest.json` |
-| Logs | `/home/alice/nexus-automation/logs/nexus-tui.log` |
-| Session | `~/.cache/nexus-tui/session.json` |
+| Downloads | `/home/alice/nexus-control/downloads/my-repo/...` |
+| Reports | `/home/alice/nexus-control/reports/my-repo/...grype.json` |
+| Verified | `/home/alice/nexus-control/my-repo-verified/...` |
+| Manifest | `/home/alice/nexus-control/my-repo-verified/verified-manifest.json` |
+| Logs | `/home/alice/nexus-control/logs/nexus-control.log` |
+| Session | `~/.cache/nexus-control/session.json` |
 
 Docker-образы сохраняются как:
 
@@ -285,8 +285,8 @@ pytest
 ## Структура проекта
 
 ```
-nexus-automation/
-├── nexus_tui/           # пакет приложения
+nexus-control/
+├── nexus_control/           # пакет приложения
 ├── tests/
 ├── .env.example
 ├── QUICKSTART.md

@@ -3,13 +3,13 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nexus-tui"
+name = "nexus-control"
 version = "0.1.0"
 description = "Готовый к продакшену Textual TUI для Nexus Sonatype CE: просмотр, загрузка, сканирование Grype и проверка артефактов"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
-authors = [{ name = "nexus-automation" }]
+authors = [{ name = "meowsl" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
@@ -36,11 +36,11 @@ dev = [
 ]
 
 [project.scripts]
-nexus-tui = "nexus_tui.__main__:main"
+nexus-control = "nexus_control.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nexus_tui*"]
+include = ["nexus_control*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

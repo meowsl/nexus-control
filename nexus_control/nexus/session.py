@@ -9,8 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from nexus_tui.models import AuthType
-from nexus_tui.utils.fs import ensure_dir, read_json, utc_now_iso, write_json
+from nexus_control.models import AuthType
+from nexus_control.utils.fs import ensure_dir, read_json, utc_now_iso, write_json
 
 logger = logging.getLogger(__name__)
 

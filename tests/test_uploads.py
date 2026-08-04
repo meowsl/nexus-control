@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nexus_tui.nexus.uploads import (
+from nexus_control.nexus.uploads import (
     build_hosted_create_payload,
     format_api_slug,
     is_uploadable_asset,

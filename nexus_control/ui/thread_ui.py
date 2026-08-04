@@ -7,10 +7,10 @@ from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nexus_tui.app import NexusTuiApp
+    from nexus_control.app import NexusControlApp
 
 
-def schedule_on_app(app: NexusTuiApp, callback: Callable[..., Any], *args: Any) -> None:
+def schedule_on_app(app: NexusControlApp, callback: Callable[..., Any], *args: Any) -> None:
     """Вызвать UI-колбэк из worker-потока без блокировки.
 
     Не использует ``Screen.app`` (ContextVar) и не ждёт ``call_from_thread().result()``,

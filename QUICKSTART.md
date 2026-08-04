@@ -1,4 +1,4 @@
-# Быстрый старт — nexus-tui
+# Быстрый старт — nexus-control
 
 Краткая инструкция, чтобы за 5 минут открыть TUI и прогнать сценарий download / verify.
 
@@ -19,8 +19,8 @@
 ## 2. Установка
 
 ```bash
-git clone <repo-url> nexus-automation
-cd nexus-automation
+git clone <repo-url> nexus-control
+cd nexus-control
 
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -64,17 +64,17 @@ NEXUS_DOCKER_REGISTRY=localhost:8082
 
 | Назначение | Путь |
 |------------|------|
-| Downloads | `~/nexus-automation/downloads` |
-| Reports | `~/nexus-automation/reports` |
-| Verified | `~/nexus-automation/<repo>-verified` |
-| Logs | `~/nexus-automation/logs/nexus-tui.log` |
+| Downloads | `~/nexus-control/downloads` |
+| Reports | `~/nexus-control/reports` |
+| Verified | `~/nexus-control/<repo>-verified` |
+| Logs | `~/nexus-control/logs/nexus-control.log` |
 
 ---
 
 ## 4. Запуск
 
 ```bash
-python -m nexus_tui
+python -m nexus_control
 ```
 
 или:
@@ -107,7 +107,7 @@ python main.py
 Чистые артефакты (`PASS`) окажутся в:
 
 ```text
-~/nexus-automation/<имя-репозитория>-verified/
+~/nexus-control/<имя-репозитория>-verified/
 ```
 
 ---
@@ -136,16 +136,16 @@ python main.py
 
 ```bash
 # скачанные файлы
-ls ~/nexus-automation/downloads/<repo>/
+ls ~/nexus-control/downloads/<repo>/
 
 # отчёты Grype
-ls ~/nexus-automation/reports/<repo>/
+ls ~/nexus-control/reports/<repo>/
 
 # только чистые артефакты
-ls ~/nexus-automation/<repo>-verified/
+ls ~/nexus-control/<repo>-verified/
 
 # лог
-tail -n 50 ~/nexus-automation/logs/nexus-tui.log
+tail -n 50 ~/nexus-control/logs/nexus-control.log
 ```
 
 Критерий успеха:

@@ -347,7 +347,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nexus-tui"
+name = "nexus-control"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [

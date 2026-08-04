@@ -11,17 +11,17 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, RichLog, Static
 
-from nexus_tui.models import AssetPipelineResult, PipelineSummary, Verdict
-from nexus_tui.services.verified_uploader import (
+from nexus_control.models import AssetPipelineResult, PipelineSummary, Verdict
+from nexus_control.services.verified_uploader import (
     UploadSummary,
     VerifiedUploader,
     verified_repo_name,
 )
-from nexus_tui.ui.thread_ui import schedule_on_app
-from nexus_tui.utils.text import human_size, truncate
+from nexus_control.ui.thread_ui import schedule_on_app
+from nexus_control.utils.text import human_size, truncate
 
 if TYPE_CHECKING:
-    from nexus_tui.app import NexusTuiApp
+    from nexus_control.app import NexusControlApp
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ class ReportModal(ModalScreen[None]):
         super().__init__()
         self.summary = summary
         self._rows: list[AssetPipelineResult] = list(summary.results)
-        self._ui_app: NexusTuiApp | None = None
+        self._ui_app: NexusControlApp | None = None
         self._uploading = False
         self._uploadable = [
             r

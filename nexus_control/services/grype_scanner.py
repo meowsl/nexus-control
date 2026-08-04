@@ -7,8 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from nexus_tui.config import Settings
-from nexus_tui.models import (
+from nexus_control.config import Settings
+from nexus_control.models import (
     ScanResult,
     ScanStatus,
     Severity,
@@ -16,9 +16,9 @@ from nexus_tui.models import (
     Verdict,
     Vulnerability,
 )
-from nexus_tui.utils.fs import ensure_parent_dir, write_json
-from nexus_tui.utils.safe_path import report_paths
-from nexus_tui.utils.subprocess_runner import CommandError, CommandResult, run_command, which
+from nexus_control.utils.fs import ensure_parent_dir, write_json
+from nexus_control.utils.safe_path import report_paths
+from nexus_control.utils.subprocess_runner import CommandError, CommandResult, run_command, which
 
 logger = logging.getLogger(__name__)
 

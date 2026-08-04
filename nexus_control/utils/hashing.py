@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nexus_tui.models import NexusAsset
+    from nexus_control.models import NexusAsset
 
 logger = logging.getLogger(__name__)
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from nexus_tui.models import NexusAsset
-from nexus_tui.utils.tree_builder import (
+from nexus_control.models import NexusAsset
+from nexus_control.utils.tree_builder import (
     build_asset_tree,
     collect_leaf_assets,
     empty_tree,

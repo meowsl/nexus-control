@@ -6,10 +6,10 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from nexus_tui.models import PipelineSummary, Verdict
-from nexus_tui.nexus.client import NexusAPIError, NexusClient
-from nexus_tui.nexus.uploads import is_uploadable_asset
-from nexus_tui.utils.safe_path import sanitize_repo_name
+from nexus_control.models import PipelineSummary, Verdict
+from nexus_control.nexus.client import NexusAPIError, NexusClient
+from nexus_control.nexus.uploads import is_uploadable_asset
+from nexus_control.utils.safe_path import sanitize_repo_name
 
 logger = logging.getLogger(__name__)
 

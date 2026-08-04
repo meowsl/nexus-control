@@ -6,16 +6,16 @@ import json
 import logging
 from pathlib import Path
 
-from nexus_tui.config import Settings
-from nexus_tui.models import DownloadResult, DownloadStatus, DockerTag, NexusAsset
-from nexus_tui.nexus.client import NexusClient, NexusAPIError
-from nexus_tui.utils.fs import (
+from nexus_control.config import Settings
+from nexus_control.models import DownloadResult, DownloadStatus, DockerTag, NexusAsset
+from nexus_control.nexus.client import NexusClient, NexusAPIError
+from nexus_control.utils.fs import (
     disable_execute_bit_best_effort,
     prepare_asset_destination,
     utc_now_iso,
     write_json,
 )
-from nexus_tui.utils.hashing import (
+from nexus_control.utils.hashing import (
     checksum_is_authoritative,
     checksums_mismatch,
     hashers_for_expected,
@@ -23,7 +23,7 @@ from nexus_tui.utils.hashing import (
     remote_identity_unchanged,
     soft_checksum_warning,
 )
-from nexus_tui.utils.safe_path import (
+from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
     docker_archive_path,
@@ -155,7 +155,7 @@ class Downloader:
         )
 
     def download_docker_tag(self, tag: DockerTag) -> DownloadResult:
-        from nexus_tui.services.docker_assets import DockerAssetService
+        from nexus_control.services.docker_assets import DockerAssetService
 
         try:
             dest = docker_archive_path(

@@ -23,26 +23,26 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode as TuiTreeNode
 
-from nexus_tui.models import (
+from nexus_control.models import (
     DockerTag,
     NexusAsset,
     PipelineSummary,
     Repository,
     TreeNode,
 )
-from nexus_tui.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
-from nexus_tui.services.pipeline import PipelineService
-from nexus_tui.ui.keybindings import HELP_TEXT
-from nexus_tui.ui.thread_ui import schedule_on_app
-from nexus_tui.ui.widgets import (
+from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
+from nexus_control.services.pipeline import PipelineService
+from nexus_control.ui.keybindings import HELP_TEXT
+from nexus_control.ui.thread_ui import schedule_on_app
+from nexus_control.ui.widgets import (
     ConfirmModal,
     HelpModal,
     MessageModal,
     ReportModal,
     format_confirm_body,
 )
-from nexus_tui.utils.text import format_attrs, human_size, truncate
-from nexus_tui.utils.tree_builder import (
+from nexus_control.utils.text import format_attrs, human_size, truncate
+from nexus_control.utils.tree_builder import (
     build_asset_tree,
     build_docker_tag_tree,
     collect_leaf_assets,
@@ -51,7 +51,7 @@ from nexus_tui.utils.tree_builder import (
 )
 
 if TYPE_CHECKING:
-    from nexus_tui.app import NexusTuiApp
+    from nexus_control.app import NexusControlApp
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class RepositoriesScreen(Screen[None]):
         super().__init__()
         self._repos: list[Repository] = []
         self._filter = ""
-        self._ui_app: NexusTuiApp | None = None
+        self._ui_app: NexusControlApp | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -150,7 +150,7 @@ class RepositoriesScreen(Screen[None]):
         self.action_refresh()
 
     @property
-    def app(self) -> NexusTuiApp:  # type: ignore[override]
+    def app(self) -> NexusControlApp:  # type: ignore[override]
         return super().app  # type: ignore[return-value]
 
     def action_help(self) -> None:
@@ -359,7 +359,7 @@ class AssetsScreen(Screen[None]):
         self._last_summary: PipelineSummary | None = None
         self._cancel = False
         self._busy = False
-        self._ui_app: NexusTuiApp | None = None
+        self._ui_app: NexusControlApp | None = None
         # Соответствие id узла textual tree -> доменный TreeNode
         self._node_map: dict[int, TreeNode] = {}
         # Мультивыбор: ключи `_node_mark_key`
@@ -388,7 +388,7 @@ class AssetsScreen(Screen[None]):
         self.action_refresh()
 
     @property
-    def app(self) -> NexusTuiApp:  # type: ignore[override]
+    def app(self) -> NexusControlApp:  # type: ignore[override]
         return super().app  # type: ignore[return-value]
 
     def action_back(self) -> None:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from nexus_tui.models import DockerTag, NexusAsset, TreeNode
-from nexus_tui.utils.safe_path import (
+from nexus_control.models import DockerTag, NexusAsset, TreeNode
+from nexus_control.utils.safe_path import (
     ASSET_META_LEAF,
     UnsafePathError,
     normalize_asset_path,

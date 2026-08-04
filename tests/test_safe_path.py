@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from nexus_tui.utils.safe_path import (
+from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
     normalize_asset_path,
@@ -53,7 +53,7 @@ def test_sanitize_repo_and_filename() -> None:
 
 
 def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
-    from nexus_tui.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
+    from nexus_control.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
 
     pkg = tmp_path / "lodash"
     pkg.mkdir()
@@ -62,8 +62,8 @@ def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
 
 
 def test_prepare_asset_destination_promotes_file(tmp_path: Path) -> None:
-    from nexus_tui.utils.fs import prepare_asset_destination
-    from nexus_tui.utils.safe_path import ASSET_META_LEAF
+    from nexus_control.utils.fs import prepare_asset_destination
+    from nexus_control.utils.safe_path import ASSET_META_LEAF
 
     # Сначала скачан npm metadata как файл `lodash`
     meta_file = tmp_path / "lodash"

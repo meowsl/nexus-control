@@ -8,8 +8,8 @@ from urllib.parse import quote
 
 import httpx
 
-from nexus_tui.models import Repository
-from nexus_tui.nexus.errors import NexusAPIError, NexusAuthError
+from nexus_control.models import Repository
+from nexus_control.nexus.errors import NexusAPIError, NexusAuthError
 
 logger = logging.getLogger(__name__)
 

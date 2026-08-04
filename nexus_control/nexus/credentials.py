@@ -18,9 +18,9 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from nexus_tui.config import ConfigError, Settings
-from nexus_tui.nexus.session import SessionStore, config_fingerprint
-from nexus_tui.utils.fs import ensure_dir
+from nexus_control.config import ConfigError, Settings
+from nexus_control.nexus.session import SessionStore, config_fingerprint
+from nexus_control.utils.fs import ensure_dir
 
 logger = logging.getLogger(__name__)
 

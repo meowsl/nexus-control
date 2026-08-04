@@ -11,19 +11,19 @@ from typing import Any
 from textual.app import App
 from textual.binding import Binding
 
-from nexus_tui.config import ConfigError, Settings, load_settings
-from nexus_tui.logging_setup import attach_tui_handler, setup_logging
-from nexus_tui.nexus.client import NexusClient
-from nexus_tui.nexus.credentials import resolve_runtime_credentials
-from nexus_tui.ui.screens import RepositoriesScreen
+from nexus_control.config import ConfigError, Settings, load_settings
+from nexus_control.logging_setup import attach_tui_handler, setup_logging
+from nexus_control.nexus.client import NexusClient
+from nexus_control.nexus.credentials import resolve_runtime_credentials
+from nexus_control.ui.screens import RepositoriesScreen
 
 logger = logging.getLogger(__name__)
 
 
-class NexusTuiApp(App[None]):
+class NexusControlApp(App[None]):
     """Основное Textual-приложение."""
 
-    TITLE = "nexus-tui"
+    TITLE = "nexus-control"
     SUB_TITLE = "Nexus Sonatype CE browser / Grype verifier"
     CSS = """
     Screen {
@@ -52,7 +52,7 @@ class NexusTuiApp(App[None]):
             password=self.settings.nexus_password,
         )
         self.push_screen(RepositoriesScreen())
-        logger.info("nexus-tui started settings=%s", self.settings.masked_dict())
+        logger.info("nexus-control started settings=%s", self.settings.masked_dict())
 
     def on_unmount(self) -> None:
         try:
@@ -118,5 +118,5 @@ def run_app(settings: Settings | None = None) -> None:
         raise SystemExit(2)
 
     setup_logging(cfg.log_level, cfg.log_file, password=cfg.nexus_password)
-    app = NexusTuiApp(cfg)
+    app = NexusControlApp(cfg)
     app.run()

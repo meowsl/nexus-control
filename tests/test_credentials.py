@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from nexus_tui.config import ConfigError, Settings
-from nexus_tui.nexus.credentials import (
+from nexus_control.config import ConfigError, Settings
+from nexus_control.nexus.credentials import (
     CredentialVault,
     prompt_nexus_credentials,
     resolve_runtime_credentials,
 )
-from nexus_tui.nexus.session import SessionStore
+from nexus_control.nexus.session import SessionStore
 
 
 def _settings(tmp_path: Path, **kwargs: object) -> Settings:

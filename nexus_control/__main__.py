@@ -1,4 +1,4 @@
-"""Точка входа: ``python -m nexus_tui``."""
+"""Точка входа: ``python -m nexus_control``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 
 def main() -> None:
     """Загрузить конфигурацию, настроить логирование и запустить Textual-приложение."""
-    from nexus_tui.app import run_app
+    from nexus_control.app import run_app
 
     try:
         run_app()

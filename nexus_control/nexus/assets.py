@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nexus_tui.models import NexusAsset
+from nexus_control.models import NexusAsset
 
 
 def parse_asset(item: dict[str, Any]) -> NexusAsset | None:

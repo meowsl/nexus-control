@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from nexus_tui.models import AuthType
-from nexus_tui.nexus.session import SessionStore, config_fingerprint
+from nexus_control.models import AuthType
+from nexus_control.nexus.session import SessionStore, config_fingerprint
 
 
 def test_session_cache_created(tmp_path: Path) -> None:

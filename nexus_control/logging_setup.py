@@ -8,7 +8,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable
 
-from nexus_tui.utils.fs import ensure_parent_dir
+from nexus_control.utils.fs import ensure_parent_dir
 
 SECRET_PATTERNS = [
     re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*\S+"),
@@ -70,7 +70,7 @@ def setup_logging(
 ) -> logging.Logger:
     """Настроить корневой логгер с ротируемым файловым обработчиком.
 
-    Возвращает логгер пакета ``nexus_tui``.
+    Возвращает логгер пакета ``nexus_control``.
     """
     ensure_parent_dir(log_file)
     root = logging.getLogger()
@@ -96,7 +96,7 @@ def setup_logging(
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    pkg = logging.getLogger("nexus_tui")
+    pkg = logging.getLogger("nexus_control")
     pkg.debug("Logging initialized file=%s level=%s", log_file, level)
     return pkg
 

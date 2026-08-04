@@ -6,15 +6,15 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nexus_tui.config import Settings
-from nexus_tui.models import (
+from nexus_control.config import Settings
+from nexus_control.models import (
     AssetPipelineResult,
     PipelineSummary,
     Verdict,
     VerifyResult,
 )
-from nexus_tui.utils.fs import copy_file, ensure_dir, prepare_asset_destination, write_json
-from nexus_tui.utils.safe_path import UnsafePathError, asset_verified_path
+from nexus_control.utils.fs import copy_file, ensure_dir, prepare_asset_destination, write_json
+from nexus_control.utils.safe_path import UnsafePathError, asset_verified_path
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class Verifier:
         try:
             if is_docker and tag is not None:
                 # Повторить структуру загрузки: images/<tag>.tar под verified root.
-                from nexus_tui.utils.safe_path import sanitize_filename
+                from nexus_control.utils.safe_path import sanitize_filename
 
                 safe_tag = sanitize_filename(tag.replace(":", "_").replace("/", "_"))
                 dest = asset_verified_path(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nexus_tui.models import Repository
+from nexus_control.models import Repository
 
 
 def parse_repositories(data: Any) -> list[Repository]:

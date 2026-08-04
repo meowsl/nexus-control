@@ -16,23 +16,23 @@ from tenacity import (
     wait_exponential,
 )
 
-from nexus_tui.config import Settings
-from nexus_tui.models import AuthType, DockerTag, NexusAsset, Repository
-from nexus_tui.nexus.assets import parse_assets_page
-from nexus_tui.nexus.errors import (
+from nexus_control.config import Settings
+from nexus_control.models import AuthType, DockerTag, NexusAsset, Repository
+from nexus_control.nexus.assets import parse_assets_page
+from nexus_control.nexus.errors import (
     NexusAPIError,
     NexusAuthError,
     NexusNetworkError,
     NexusNotFoundError,
 )
-from nexus_tui.nexus.repositories import parse_repositories
-from nexus_tui.nexus.credentials import CredentialVault
-from nexus_tui.nexus.session import SessionCache, SessionStore
-from nexus_tui.nexus.uploads import RepositoryUploader
+from nexus_control.nexus.repositories import parse_repositories
+from nexus_control.nexus.credentials import CredentialVault
+from nexus_control.nexus.session import SessionCache, SessionStore
+from nexus_control.nexus.uploads import RepositoryUploader
 
 logger = logging.getLogger(__name__)
 
-# Реэкспорт для стабильного импорта из ``nexus_tui.nexus.client``.
+# Реэкспорт для стабильного импорта из ``nexus_control.nexus.client``.
 __all__ = [
     "NexusClient",
     "NexusAPIError",
@@ -71,7 +71,7 @@ class NexusClient:
             base_url=self.settings.nexus_url,
             timeout=self.settings.nexus_timeout,
             verify=self.settings.nexus_verify_ssl,
-            headers={"Accept": "application/json", "User-Agent": "nexus-tui/1.0"},
+            headers={"Accept": "application/json", "User-Agent": "nexus-control/1.0"},
             follow_redirects=True,
             auth=httpx.BasicAuth(
                 self.settings.nexus_username,

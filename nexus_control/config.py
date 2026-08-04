@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from nexus_tui.utils.fs import ensure_dir, ensure_parent_dir
+from nexus_control.utils.fs import ensure_dir, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def _expand_path(value: str | Path) -> Path:
 
 
 class Settings(BaseSettings):
-    """Проверенные настройки выполнения для nexus-tui.
+    """Проверенные настройки выполнения для nexus-control.
 
     Приоритет (сверху вниз): переменные окружения ОС, затем ``.env`` в CWD,
     затем значения по умолчанию полей.
@@ -48,13 +48,13 @@ class Settings(BaseSettings):
     nexus_verify_ssl: bool = True
     nexus_timeout: float = 30.0
     nexus_session_ttl: int = 3600
-    nexus_cache_dir: Path = Path("~/.cache/nexus-tui")
+    nexus_cache_dir: Path = Path("~/.cache/nexus-control")
     nexus_docker_registry: str = ""
 
     # Пути
-    download_root: Path = Path("~/nexus-automation/downloads")
-    reports_root: Path = Path("~/nexus-automation/reports")
-    verified_root: Path = Path("~/nexus-automation")
+    download_root: Path = Path("~/nexus-control/downloads")
+    reports_root: Path = Path("~/nexus-control/reports")
+    verified_root: Path = Path("~/nexus-control")
 
     # Grype
     grype_binary: str = "grype"
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     # Логирование
     log_level: str = "INFO"
-    log_file: Path = Path("~/nexus-automation/logs/nexus-tui.log")
+    log_file: Path = Path("~/nexus-control/logs/nexus-control.log")
 
     # Перезапись
     overwrite_downloads: bool = False
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
 
     def verified_repo_dir(self, repository_name: str) -> Path:
         """Вернуть ``VERIFIED_ROOT/<repository>-verified``."""
-        from nexus_tui.utils.safe_path import sanitize_repo_name
+        from nexus_control.utils.safe_path import sanitize_repo_name
 
         safe = sanitize_repo_name(repository_name)
         return self.verified_root / f"{safe}-verified"

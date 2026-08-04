@@ -6,8 +6,8 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from nexus_tui.config import Settings
-from nexus_tui.models import (
+from nexus_control.config import Settings
+from nexus_control.models import (
     AssetKind,
     AssetPipelineResult,
     DownloadResult,
@@ -19,10 +19,10 @@ from nexus_tui.models import (
     ScanStatus,
     Verdict,
 )
-from nexus_tui.nexus.client import NexusClient
-from nexus_tui.services.downloader import Downloader
-from nexus_tui.services.grype_scanner import GrypeScanner
-from nexus_tui.services.verifier import Verifier, apply_verify_for_result
+from nexus_control.nexus.client import NexusClient
+from nexus_control.services.downloader import Downloader
+from nexus_control.services.grype_scanner import GrypeScanner
+from nexus_control.services.verifier import Verifier, apply_verify_for_result
 
 logger = logging.getLogger(__name__)
 

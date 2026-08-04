@@ -8,10 +8,10 @@ import os
 import tempfile
 from pathlib import Path
 
-from nexus_tui.config import Settings
-from nexus_tui.models import DockerTag
-from nexus_tui.utils.fs import ensure_parent_dir
-from nexus_tui.utils.subprocess_runner import CommandError, run_command, which
+from nexus_control.config import Settings
+from nexus_control.models import DockerTag
+from nexus_control.utils.fs import ensure_parent_dir
+from nexus_control.utils.subprocess_runner import CommandError, run_command, which
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class DockerAssetService:
         src = f"docker://{tag.image_ref}"
         # Пути docker-archive должны быть абсолютными для предсказуемости
         dst = f"docker-archive:{dest.resolve()}"
-        with tempfile.TemporaryDirectory(prefix="nexus-tui-skopeo-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="nexus-control-skopeo-") as tmp:
             auth_file = Path(tmp) / "auth.json"
             self._write_skopeo_auth(auth_file, tag.image_ref)
             argv = [
@@ -71,7 +71,7 @@ class DockerAssetService:
                 raise DockerAssetError(f"skopeo copy failed: {exc}") from exc
 
     def _docker_pull_save(self, docker: str, tag: DockerTag, dest: Path) -> None:
-        with tempfile.TemporaryDirectory(prefix="nexus-tui-docker-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="nexus-control-docker-") as tmp:
             cfg_dir = Path(tmp)
             self._write_docker_config(cfg_dir, tag.image_ref)
             env = {**os.environ, "DOCKER_CONFIG": str(cfg_dir)}

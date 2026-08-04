@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from nexus_tui.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
+from nexus_control.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
 
 logger = logging.getLogger(__name__)
 

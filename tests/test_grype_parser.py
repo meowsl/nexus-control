@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from nexus_tui.models import Severity, Verdict
-from nexus_tui.services.grype_scanner import normalize_severity, parse_grype_json
+from nexus_control.models import Severity, Verdict
+from nexus_control.services.grype_scanner import normalize_severity, parse_grype_json
 
 
 MATCHES_JSON = {
@@ -82,7 +82,7 @@ def test_vulnerabilities_list_compat() -> None:
 def test_infer_scheme_distinguishes_npm_and_docker_archives() -> None:
     from pathlib import Path
 
-    from nexus_tui.services.grype_scanner import _infer_scheme
+    from nexus_control.services.grype_scanner import _infer_scheme
 
     assert _infer_scheme(Path("lodash-4.17.15.tgz")) == "file"
     assert _infer_scheme(Path("pkg.tar.gz")) == "file"
