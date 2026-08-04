@@ -1,0 +1,54 @@
+"""Тесты выбора uploadable-ассетов и maven coordinates."""
+
+from __future__ import annotations
+
+from nexus_tui.nexus.uploads import (
+    build_hosted_create_payload,
+    format_api_slug,
+    is_uploadable_asset,
+    parse_maven_coordinates,
+)
+
+
+def test_format_api_slug() -> None:
+    assert format_api_slug("maven2") == "maven"
+    assert format_api_slug("npm") == "npm"
+    assert format_api_slug("unknown") is None
+
+
+def test_is_uploadable_by_format() -> None:
+    assert is_uploadable_asset("npm", "lodash/-/lodash-4.17.21.tgz")
+    assert not is_uploadable_asset("npm", "lodash")
+    assert is_uploadable_asset("pypi", "packages/urllib3/urllib3-1.26.4-py2.py3-none-any.whl")
+    assert not is_uploadable_asset("pypi", "simple/urllib3/")
+    assert is_uploadable_asset(
+        "maven2",
+        "org/apache/commons/commons-text/1.9/commons-text-1.9.jar",
+    )
+    assert is_uploadable_asset(
+        "maven2",
+        "org/apache/commons/commons-text/maven-metadata.xml",
+    )
+    assert is_uploadable_asset(
+        "maven2",
+        "org/apache/commons/commons-text/maven-metadata.xml.sha1",
+    )
+    assert is_uploadable_asset(
+        "maven2",
+        "org/apache/commons/commons-text/1.9/commons-text-1.9.jar.md5",
+    )
+    assert is_uploadable_asset("raw", "docs/readme.txt")
+    assert not is_uploadable_asset("docker", "library/alpine/latest")
+
+
+def test_parse_maven_coordinates() -> None:
+    assert parse_maven_coordinates(
+        "org/apache/commons/commons-text/1.9/commons-text-1.9.jar"
+    ) == ("org.apache.commons", "commons-text", "1.9", "jar")
+
+
+def test_maven_create_payload_has_maven_block() -> None:
+    payload = build_hosted_create_payload("x-verified", "maven2")
+    assert payload["maven"]["versionPolicy"] == "MIXED"
+    npm = build_hosted_create_payload("n-verified", "npm")
+    assert "maven" not in npm
