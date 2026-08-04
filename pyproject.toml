@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-tui"
-version = "1.0.0"
+version = "0.1.0"
 description = "Готовый к продакшену Textual TUI для Nexus Sonatype CE: просмотр, загрузка, сканирование Grype и проверка артефактов"
 readme = "README.md"
 requires-python = ">=3.13"
