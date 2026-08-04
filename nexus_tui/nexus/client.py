@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urljoin
 
@@ -18,30 +19,27 @@ from tenacity import (
 from nexus_tui.config import Settings
 from nexus_tui.models import AuthType, DockerTag, NexusAsset, Repository
 from nexus_tui.nexus.assets import parse_assets_page
+from nexus_tui.nexus.errors import (
+    NexusAPIError,
+    NexusAuthError,
+    NexusNetworkError,
+    NexusNotFoundError,
+)
 from nexus_tui.nexus.repositories import parse_repositories
+from nexus_tui.nexus.credentials import CredentialVault
 from nexus_tui.nexus.session import SessionCache, SessionStore
+from nexus_tui.nexus.uploads import RepositoryUploader
 
 logger = logging.getLogger(__name__)
 
-
-class NexusAPIError(Exception):
-    """Базовая ошибка Nexus API с опциональным HTTP-статусом."""
-
-    def __init__(self, message: str, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
-class NexusAuthError(NexusAPIError):
-    """Ошибка аутентификации / авторизации."""
-
-
-class NexusNotFoundError(NexusAPIError):
-    """Ресурс не найден."""
-
-
-class NexusNetworkError(NexusAPIError):
-    """Ошибка подключения / транспорта."""
+# Реэкспорт для стабильного импорта из ``nexus_tui.nexus.client``.
+__all__ = [
+    "NexusClient",
+    "NexusAPIError",
+    "NexusAuthError",
+    "NexusNetworkError",
+    "NexusNotFoundError",
+]
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -58,6 +56,7 @@ class NexusClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.session_store = SessionStore(settings.nexus_cache_dir)
+        self.credential_vault = CredentialVault(settings.nexus_cache_dir)
         self._client: httpx.Client | None = None
         self._session: SessionCache | None = None
         self._reauth_attempts = 0
@@ -85,6 +84,13 @@ class NexusClient:
         if self._client is not None:
             self._client.close()
             self._client = None
+
+    def logout(self) -> None:
+        """Сбросить Nexus-сессию и зашифрованный vault учётных данных."""
+        self.session_store.invalidate()
+        self.credential_vault.clear()
+        self._session = None
+        self.close()
 
     def __enter__(self) -> NexusClient:
         self.open()
@@ -124,6 +130,7 @@ class NexusClient:
             except NexusAuthError:
                 logger.info("Cached session rejected by server; re-authenticating")
                 self.session_store.invalidate()
+                self.credential_vault.clear()
             except NexusAPIError as exc:
                 # Сеть / 5xx при проверке: всё равно попробовать свежую аутентификацию
                 logger.warning("Session verify failed (%s); re-authenticating", exc)
@@ -141,9 +148,11 @@ class NexusClient:
             self._status_check()
         except NexusAuthError:
             self.session_store.invalidate()
+            self.credential_vault.clear()
             raise NexusAuthError(
                 "Authentication failed: invalid username/password or insufficient "
-                "permissions. Check NEXUS_USERNAME / NEXUS_PASSWORD."
+                "permissions. Re-run and enter credentials, or check "
+                "NEXUS_USERNAME / NEXUS_PASSWORD for non-interactive mode."
             ) from None
 
         cookies = {c.name: c.value for c in self.client.cookies.jar}
@@ -155,6 +164,12 @@ class NexusClient:
             auth_type=auth_type,
             cookies=cookies,
         )
+        self.credential_vault.save(
+            nexus_url=self.settings.nexus_url,
+            username=self.settings.nexus_username,
+            password=self.settings.nexus_password,
+            expires_at=self._session.expires_at,
+        )
         self._reauth_attempts = 0
         logger.info("Nexus authentication successful (auth_type=%s)", auth_type.value)
 
@@ -165,6 +180,7 @@ class NexusClient:
 
     def invalidate_and_reauth(self) -> None:
         self.session_store.invalidate()
+        self.credential_vault.clear()
         self._session = None
         self._authenticate()
 
@@ -266,6 +282,40 @@ class NexusClient:
         repos = parse_repositories(data)
         repos.sort(key=lambda r: r.name.lower())
         return repos
+
+    def get_repository(self, name: str) -> Repository | None:
+        """Найти репозиторий по имени или вернуть ``None``."""
+        for repo in self.list_repositories():
+            if repo.name == name:
+                return repo
+        return None
+
+    def ensure_hosted(self, name: str, fmt: str) -> Repository:
+        """Вернуть hosted-репозиторий ``name`` нужного format, создав при отсутствии."""
+        uploader = RepositoryUploader(
+            self.client,
+            timeout=self.settings.nexus_timeout,
+        )
+        return uploader.ensure_hosted(name, fmt, get_repository=self.get_repository)
+
+    def upload_asset(
+        self,
+        repository: str,
+        fmt: str,
+        asset_path: str,
+        local_path: Path,
+    ) -> None:
+        """Загрузить ассет в hosted-репозиторий соответствующего format."""
+        uploader = RepositoryUploader(
+            self.client,
+            timeout=self.settings.nexus_timeout,
+        )
+        uploader.upload_asset(
+            repository=repository,
+            fmt=fmt,
+            asset_path=asset_path,
+            local_path=local_path,
+        )
 
     def iter_assets(self, repository: str) -> Iterator[NexusAsset]:
         """Перебирать все артефакты, следуя пагинации ``continuationToken``."""
@@ -434,7 +484,7 @@ class NexusClient:
         repository: str,
         registry: str | None,
     ) -> list[DockerTag]:
-        """Запасной вариант: вывести теги из путей артефактов вроде ``v2/<repo>/manifests/<tag>``."""
+        """Запасной вариант: теги из путей артефактов ``v2/<repo>/manifests/<tag>``."""
         tags: dict[str, DockerTag] = {}
         host = (registry or "unknown-registry").removeprefix("http://").removeprefix("https://")
         for asset in self.iter_assets(repository):

@@ -1,0 +1,11 @@
+[flake8]
+max-line-length = 100
+extend-exclude =
+    .venv,
+    venv,
+    .git,
+    __pycache__,
+    .pytest_cache,
+    dist,
+    build,
+    *.egg-info

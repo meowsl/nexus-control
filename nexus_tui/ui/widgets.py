@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+import logging
+from typing import TYPE_CHECKING
+
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, RichLog, Static
 
 from nexus_tui.models import AssetPipelineResult, PipelineSummary, Verdict
+from nexus_tui.services.verified_uploader import (
+    UploadSummary,
+    VerifiedUploader,
+    verified_repo_name,
+)
+from nexus_tui.ui.thread_ui import schedule_on_app
 from nexus_tui.utils.text import human_size, truncate
+
+if TYPE_CHECKING:
+    from nexus_tui.app import NexusTuiApp
+
+logger = logging.getLogger(__name__)
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -145,10 +160,32 @@ class ReportModal(ModalScreen[None]):
         border: heavy $accent;
         background: $surface;
         padding: 1 1;
+        layout: vertical;
+    }
+    ReportModal #report-header {
+        height: auto;
+        max-height: 3;
+        margin-bottom: 0;
+    }
+    ReportModal #report-table {
+        height: 1fr;
+        min-height: 5;
+    }
+    ReportModal #report-footer {
+        height: auto;
+        dock: bottom;
+        margin-top: 1;
     }
     ReportModal #details {
-        height: 12;
+        height: 10;
+        min-height: 8;
+        max-height: 12;
         border: solid $primary;
+    }
+    ReportModal .buttons {
+        height: 3;
+        min-height: 3;
+        align: center middle;
         margin-top: 1;
     }
     """
@@ -157,22 +194,42 @@ class ReportModal(ModalScreen[None]):
         super().__init__()
         self.summary = summary
         self._rows: list[AssetPipelineResult] = list(summary.results)
+        self._ui_app: NexusTuiApp | None = None
+        self._uploading = False
+        self._uploadable = [
+            r
+            for r in self._rows
+            if r.verdict == Verdict.PASS
+            and r.verify.verified_path is not None
+            and (r.verify.copied or r.verify.skipped_existing)
+        ]
 
     def compose(self) -> ComposeResult:
         s = self.summary
+        target = verified_repo_name(s.repository)
         header = (
             f"[b]Results — {s.repository}[/b]  "
             f"scanned={s.total_scanned}  PASS={s.total_passed}  "
             f"FAIL={s.total_failed}  ERROR={s.total_errors}  "
-            f"copied={s.total_copied}"
+            f"copied={s.total_copied}  "
+            f"uploadable={len(self._uploadable)} → {target}"
         )
         with Vertical():
-            yield Label(header)
+            yield Label(header, id="report-header")
             yield DataTable(id="report-table", zebra_stripes=True)
-            yield RichLog(id="details", highlight=True, markup=True)
-            yield Button("Close", variant="primary", id="ok")
+            with Vertical(id="report-footer"):
+                yield RichLog(id="details", highlight=True, markup=True)
+                with Horizontal(classes="buttons"):
+                    yield Button(
+                        "Upload verified",
+                        variant="success",
+                        id="upload",
+                        disabled=not self._uploadable,
+                    )
+                    yield Button("Close", variant="primary", id="ok")
 
     def on_mount(self) -> None:
+        self._ui_app = self.app  # type: ignore[assignment]
         table = self.query_one("#report-table", DataTable)
         table.add_columns(
             "Asset",
@@ -216,6 +273,8 @@ class ReportModal(ModalScreen[None]):
             self._show_details(idx)
 
     def _show_details(self, index: int) -> None:
+        if self._uploading:
+            return
         result = self._rows[index]
         log = self.query_one("#details", RichLog)
         log.clear()
@@ -242,11 +301,100 @@ class ReportModal(ModalScreen[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "ok":
+            if self._uploading:
+                return
             self.dismiss(None)
+        elif event.button.id == "upload":
+            self._start_upload()
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key in {"escape", "q"}:
+            if self._uploading:
+                return
             self.dismiss(None)
+
+    def _start_upload(self) -> None:
+        if self._uploading or not self._uploadable:
+            return
+        self._uploading = True
+        upload_btn = self.query_one("#upload", Button)
+        close_btn = self.query_one("#ok", Button)
+        upload_btn.disabled = True
+        close_btn.disabled = True
+        target = verified_repo_name(self.summary.repository)
+        log = self.query_one("#details", RichLog)
+        log.clear()
+        log.write(
+            f"[b]Uploading {len(self._uploadable)} verified asset(s) "
+            f"→ [cyan]{target}[/cyan][/b]"
+        )
+        log.write(
+            "Creating repository if missing "
+            "(same format as source, hosted)..."
+        )
+        self._run_upload()
+
+    @work(thread=True, exclusive=True, group="upload-verified")
+    def _run_upload(self) -> None:
+        app = self._ui_app
+        if app is None:
+            return
+
+        def on_progress(asset_path: str, progress: float, stage: str) -> None:
+            schedule_on_app(app, self._on_upload_progress, asset_path, progress, stage)
+
+        try:
+            app.ensure_client()
+            uploader = VerifiedUploader(app.client)
+            summary = uploader.upload(self.summary, on_progress=on_progress)
+            schedule_on_app(app, self._on_upload_done, summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Verified upload failed")
+            schedule_on_app(app, self._on_upload_failed, str(exc))
+
+    def _on_upload_progress(self, asset_path: str, progress: float, stage: str) -> None:
+        log = self.query_one("#details", RichLog)
+        pct = int(progress * 100)
+        log.write(f"[{stage} {pct}%] {truncate(asset_path, 72)}")
+
+    def _on_upload_done(self, summary: UploadSummary) -> None:
+        self._uploading = False
+        self.query_one("#ok", Button).disabled = False
+        # Keep upload disabled after success to avoid duplicate pushes;
+        # re-enable only if there were failures (retry remaining).
+        upload_btn = self.query_one("#upload", Button)
+        upload_btn.disabled = summary.failed == 0 or not self._uploadable
+
+        log = self.query_one("#details", RichLog)
+        created = "created" if summary.created_repository else "existing"
+        fmt = summary.source_format or "?"
+        log.write(
+            f"[green]Upload finished[/green] → "
+            f"[cyan]{summary.target_repository}[/cyan] "
+            f"format={fmt} ({created}): "
+            f"uploaded={summary.uploaded} skipped={summary.skipped} "
+            f"failed={summary.failed}"
+        )
+        for item in summary.results:
+            if item.skipped:
+                log.write(
+                    f"  [yellow]SKIP[/yellow] {truncate(item.asset_path, 50)}: "
+                    f"{item.error or 'skipped'}"
+                )
+            elif item.ok:
+                log.write(f"  [green]OK[/green] {truncate(item.asset_path, 70)}")
+            else:
+                log.write(
+                    f"  [red]FAIL[/red] {truncate(item.asset_path, 50)}: "
+                    f"{item.error or 'unknown error'}"
+                )
+
+    def _on_upload_failed(self, message: str) -> None:
+        self._uploading = False
+        self.query_one("#ok", Button).disabled = False
+        self.query_one("#upload", Button).disabled = not self._uploadable
+        log = self.query_one("#details", RichLog)
+        log.write(f"[red]Upload failed:[/red] {message}")
 
 
 def _verdict_style(verdict: Verdict) -> str:

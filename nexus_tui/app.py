@@ -14,6 +14,7 @@ from textual.binding import Binding
 from nexus_tui.config import ConfigError, Settings, load_settings
 from nexus_tui.logging_setup import attach_tui_handler, setup_logging
 from nexus_tui.nexus.client import NexusClient
+from nexus_tui.nexus.credentials import resolve_runtime_credentials
 from nexus_tui.ui.screens import RepositoriesScreen
 
 logger = logging.getLogger(__name__)
@@ -98,12 +99,23 @@ class NexusTuiApp(App[None]):
 
 
 def run_app(settings: Settings | None = None) -> None:
-    """Загрузить конфигурацию (при необходимости) и запустить TUI."""
+    """Загрузить конфигурацию, разрешить credentials и запустить TUI."""
     try:
         cfg = settings or load_settings()
+        # Prompt / vault / env — до старта Textual, пока есть TTY.
+        if settings is None:
+            cfg = resolve_runtime_credentials(cfg)
     except ConfigError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
+
+    if not cfg.nexus_username or not cfg.nexus_password:
+        print(
+            "Nexus username/password are required. "
+            "Set NEXUS_USERNAME/NEXUS_PASSWORD or run in a TTY to be prompted.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     setup_logging(cfg.log_level, cfg.log_file, password=cfg.nexus_password)
     app = NexusTuiApp(cfg)

@@ -18,7 +18,7 @@ python -m nexus_tui
 - Список репозиториев с фильтром и обновлением
 - Дерево ассетов по полю Nexus `path` (раскрытие / сворачивание / фильтр)
 - Docker-репозитории через адаптер тегов (Registry v2 API + fallback по assets)
-- Кейбинды для download / scan / verify по выбору или для всего репозитория
+- Мультивыбор ассетов/папок (Space), затем download или verify; либо действие на весь репозиторий
 - Фоновые workers для сети, скачивания, Grype и копирования (UI не блокируется)
 - Потоковое скачивание с защитой от path traversal
 - Локальный Grype или fallback через Docker-образ
@@ -70,7 +70,7 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-# заполнить NEXUS_URL, NEXUS_USERNAME, NEXUS_PASSWORD
+# заполнить NEXUS_URL; username/password лучше вводить при запуске
 ```
 
 ### Обязательные переменные
@@ -78,8 +78,14 @@ cp .env.example .env
 | Переменная | Описание |
 |------------|----------|
 | `NEXUS_URL` | Базовый URL Nexus, например `http://localhost:8081` |
-| `NEXUS_USERNAME` | Пользователь с правами на чтение |
-| `NEXUS_PASSWORD` | Пароль (никогда не пишется в кэш сессии и логи) |
+
+### Учётные данные
+
+| Переменная | Описание |
+|------------|----------|
+| `NEXUS_USERNAME` / `NEXUS_PASSWORD` | Опционально. Если не заданы — prompt при старте (TTY). Для CI задайте в env. |
+
+После успешного логина пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
 
 ### Важные опциональные
 
@@ -94,7 +100,7 @@ cp .env.example .env
 | `VERIFIED_ROOT` | `~/nexus-automation` | Родитель каталогов `<repo>-verified/` |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
-| `OVERWRITE_DOWNLOADS` | `false` | Перекачивать существующие файлы |
+| `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `LOG_FILE` | `~/nexus-automation/logs/nexus-tui.log` | Ротируемый лог |
 
@@ -119,7 +125,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. Нажмите `v`: download → Grype-scan → копирование PASS в verified.
+4. Space — отметить нужные файлы/папки; `v` — download → Grype → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` откроет последний отчёт.
 
@@ -223,15 +229,15 @@ Docker-grype монтирует только `DOWNLOAD_ROOT` (ro) и `REPORTS_RO
 2. Основная авторизация — **HTTP Basic**; cookies сохраняются, если сервер их выставляет.
 3. Docker connector в лабораториях часто на отдельном HTTP-порту; задайте `NEXUS_DOCKER_REGISTRY`, если автоопределение не сработало.
 4. Имя verified-каталога: `<repository>-verified` под `VERIFIED_ROOT` (без хардкода `/home/...`).
-5. `scan` (`s` / `S`) сначала скачивает файл, если локальной копии нет (удобно для offline Grype).
-6. Проверка checksum использует `sha256` от Nexus при наличии; mismatch → download `ERROR`, verify не выполняется.
-7. Целевая ОС — Linux; биты прав на других платформах — best-effort.
+5. При повторной загрузке локальный файл сверяется с remote checksum (`sha256` → `sha1` → `md5`); совпадение → skip, расхождение → перекачка. После скачивания mismatch → download `ERROR` (для blob-ассетов). Для npm package-root/metadata Nexus часто отдаёт sha1, не совпадающий с телом ответа — там checksum не hard-fail, skip идёт по неизменности remote identity в sidecar. `OVERWRITE_DOWNLOADS=true` форсирует перекачку.
+6. Целевая ОС — Linux; биты прав на других платформах — best-effort.
 
 ---
 
 ## Ограничения текущей версии
 
-- Только read / download / scan / verify — **нет** upload, delete и admin write в Nexus
+- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются
+- Нет delete и произвольного admin write в Nexus
 - Для docker нужны skopeo или docker CLI
 - Очень большие репозитории загружают все ассеты в память для построения дерева (пагинация используется на проводе)
 - Нет порога severity — по умолчанию строгий zero vulnerabilities

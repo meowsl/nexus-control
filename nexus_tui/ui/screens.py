@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -35,6 +33,7 @@ from nexus_tui.models import (
 from nexus_tui.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_tui.services.pipeline import PipelineService
 from nexus_tui.ui.keybindings import HELP_TEXT
+from nexus_tui.ui.thread_ui import schedule_on_app
 from nexus_tui.ui.widgets import (
     ConfirmModal,
     HelpModal,
@@ -57,21 +56,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _schedule_on_app(app: NexusTuiApp, callback: Callable[..., Any], *args: Any) -> None:
-    """Потокобезопасно вызвать UI-колбэк, не используя Screen.app из worker-потока.
+def _node_mark_key(node: TreeNode) -> str:
+    """Стабильный ключ для мультивыбора (path у npm metadata может совпадать с dir)."""
+    if node.docker_tag is not None:
+        return f"docker:{node.docker_tag.repository}:{node.docker_tag.tag}"
+    if node.asset is not None:
+        return f"asset:{node.asset.id}"
+    return f"dir:{node.path}"
 
-    Важно: не блокируем worker через ``call_from_thread().result()`` — иначе возможен
-    deadlock с TuiLogHandler, который тоже ходит в main loop из того же потока.
-    """
-    loop = getattr(app, "_loop", None)
-    if loop is None:
-        return
 
-    async def _run() -> None:
-        with app._context():
-            callback(*args)
+def _item_dedupe_key(item: NexusAsset | DockerTag) -> str:
+    if isinstance(item, DockerTag):
+        return f"docker:{item.repository}:{item.tag}"
+    return f"asset:{item.id}"
 
-    asyncio.run_coroutine_threadsafe(_run(), loop)
+
+class AssetTree(Tree[TreeNode]):
+    """Tree, где Space отмечает узлы, а Enter раскрывает (через экран)."""
+
+    BINDINGS = [
+        *[b for b in Tree.BINDINGS if getattr(b, "key", None) != "space"],
+        Binding("space", "toggle_mark", "Отметить", show=False),
+    ]
+
+    def action_toggle_mark(self) -> None:
+        screen = self.screen
+        if isinstance(screen, AssetsScreen):
+            screen.action_toggle_mark()
 
 
 class RepositoriesScreen(Screen[None]):
@@ -82,6 +93,7 @@ class RepositoriesScreen(Screen[None]):
         Binding("r", "refresh", "Обновить"),
         Binding("slash", "search", "Фильтр", priority=True),
         Binding("enter", "open_repo", "Открыть", show=True),
+        Binding("L", "logout", "Logout"),
         Binding("question_mark", "help", "Справка"),
         Binding("escape", "close_search", "Закрыть фильтр", show=False, priority=True),
     ]
@@ -144,6 +156,15 @@ class RepositoriesScreen(Screen[None]):
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(HELP_TEXT))
 
+    def action_logout(self) -> None:
+        """Сбросить Nexus-сессию и encrypted credentials, затем выйти."""
+        try:
+            self.app.client.logout()
+        except Exception:  # noqa: BLE001
+            logger.exception("Logout failed")
+        logger.info("Logged out: Nexus session and credential vault cleared")
+        self.app.exit()
+
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
         row.toggle_class("visible")
@@ -193,19 +214,19 @@ class RepositoriesScreen(Screen[None]):
             app.ensure_client()
             repos = app.client.list_repositories()
         except NexusAuthError as exc:
-            _schedule_on_app(app, self._on_error, "Authentication error", str(exc))
+            schedule_on_app(app, self._on_error, "Authentication error", str(exc))
             return
         except NexusNetworkError as exc:
-            _schedule_on_app(app, self._on_error, "Network error", str(exc))
+            schedule_on_app(app, self._on_error, "Network error", str(exc))
             return
         except NexusAPIError as exc:
-            _schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
+            schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
             return
         except Exception as exc:  # noqa: BLE001
             logger.exception("Unexpected error listing repositories")
-            _schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
             return
-        _schedule_on_app(app, self._on_repos_loaded, repos)
+        schedule_on_app(app, self._on_repos_loaded, repos)
 
     def _on_repos_loaded(self, repos: list[Repository]) -> None:
         self._repos = repos
@@ -273,7 +294,7 @@ class RepositoriesScreen(Screen[None]):
 
 
 class AssetsScreen(Screen[None]):
-    """Просмотр артефактов репозитория в виде дерева; действия загрузки/сканирования/проверки."""
+    """Просмотр артефактов репозитория в виде дерева; download / verify."""
 
     BINDINGS = [
         Binding("escape", "escape", "Назад", priority=True),
@@ -281,11 +302,11 @@ class AssetsScreen(Screen[None]):
         Binding("r", "refresh", "Обновить"),
         Binding("slash", "search", "Фильтр", priority=True),
         Binding("enter", "toggle_node", "Раскрыть"),
+        Binding("space", "toggle_mark", "Отметить", show=False),
+        Binding("u", "clear_marks", "Снять отметки"),
         Binding("d", "download_selected", "Скачать"),
-        Binding("s", "scan_selected", "Скан"),
         Binding("v", "verify_selected", "Verify"),
         Binding("D", "download_all", "Скачать всё"),
-        Binding("S", "scan_all", "Скан всё"),
         Binding("V", "verify_all", "Verify всё"),
         Binding("o", "open_report", "Отчёт"),
         Binding("question_mark", "help", "Справка"),
@@ -341,6 +362,8 @@ class AssetsScreen(Screen[None]):
         self._ui_app: NexusTuiApp | None = None
         # Соответствие id узла textual tree -> доменный TreeNode
         self._node_map: dict[int, TreeNode] = {}
+        # Мультивыбор: ключи `_node_mark_key`
+        self._marked: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -348,7 +371,7 @@ class AssetsScreen(Screen[None]):
         with Vertical(id="filter-row"):
             yield Input(placeholder="Filter assets…", id="asset-filter")
         with Horizontal(id="main"):
-            yield Tree(self.repository.name, id="asset-tree")
+            yield AssetTree(self.repository.name, id="asset-tree")
             with Vertical(id="side"):
                 with Vertical(id="progress"):
                     yield Label("Idle", id="job-label")
@@ -358,14 +381,10 @@ class AssetsScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self._ui_app = self.app
-        support = self.repository.support_level
-        self.query_one("#status", Static).update(
-            f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
-            f"type={self.repository.type}  support={support}"
-        )
+        self._update_status_bar()
         self.query_one("#asset-filter", Input).can_focus = False
         self.query_one("#log", RichLog).can_focus = False
-        self.query_one("#asset-tree", Tree).focus()
+        self.query_one("#asset-tree", AssetTree).focus()
         self.action_refresh()
 
     @property
@@ -402,7 +421,7 @@ class AssetsScreen(Screen[None]):
         filt.can_focus = False
         self._filter = ""
         self._populate_tree(self._root_tree)
-        self.query_one("#asset-tree", Tree).focus()
+        self.query_one("#asset-tree", AssetTree).focus()
 
     @on(Input.Changed, "#asset-filter")
     def _on_filter_changed(self, event: Input.Changed) -> None:
@@ -419,13 +438,34 @@ class AssetsScreen(Screen[None]):
         row.remove_class("visible")
         filt = self.query_one("#asset-filter", Input)
         filt.can_focus = False
-        self.query_one("#asset-tree", Tree).focus()
+        self.query_one("#asset-tree", AssetTree).focus()
 
     def action_toggle_node(self) -> None:
-        """Раскрыть/свернуть узел (Space / Enter через Tree.auto_expand)."""
-        tree = self.query_one("#asset-tree", Tree)
+        """Раскрыть/свернуть узел под курсором."""
+        tree = self.query_one("#asset-tree", AssetTree)
         if tree.cursor_node is not None:
             tree.cursor_node.toggle()
+
+    def action_toggle_mark(self) -> None:
+        """Отметить / снять отметку с узла под курсором."""
+        node = self._selected_domain_node()
+        if node is None:
+            return
+        key = _node_mark_key(node)
+        if key in self._marked:
+            self._marked.discard(key)
+        else:
+            self._marked.add(key)
+        self._refresh_tree_labels()
+        self._update_status_bar()
+
+    def action_clear_marks(self) -> None:
+        if not self._marked:
+            return
+        self._marked.clear()
+        self._refresh_tree_labels()
+        self._update_status_bar()
+        self._log("[dim]Selection cleared[/dim]")
 
     def action_cancel_job(self) -> None:
         if self._busy:
@@ -450,21 +490,22 @@ class AssetsScreen(Screen[None]):
             if self.repository.is_docker:
                 tags = app.client.list_docker_tags(self.repository)
                 tree = build_docker_tag_tree(tags, root_name=self.repository.name)
-                _schedule_on_app(app, self._on_docker_loaded, tags, tree)
+                schedule_on_app(app, self._on_docker_loaded, tags, tree)
             else:
                 assets = app.client.list_assets(self.repository.name)
                 tree = build_asset_tree(assets, root_name=self.repository.name)
-                _schedule_on_app(app, self._on_assets_loaded, assets, tree)
+                schedule_on_app(app, self._on_assets_loaded, assets, tree)
         except NexusAPIError as exc:
-            _schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
+            schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Asset load failed")
-            _schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
 
     def _on_assets_loaded(self, assets: list[NexusAsset], tree: TreeNode) -> None:
         self._flat_assets = assets
         self._docker_tags = []
         self._root_tree = tree
+        self._marked.clear()
         if not assets:
             self._log("[yellow]Repository is empty (no assets).[/yellow]")
         else:
@@ -476,11 +517,13 @@ class AssetsScreen(Screen[None]):
             )
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
+        self._update_status_bar()
 
     def _on_docker_loaded(self, tags: list[DockerTag], tree: TreeNode) -> None:
         self._docker_tags = tags
         self._flat_assets = []
         self._root_tree = tree
+        self._marked.clear()
         if not tags:
             self._log(
                 "[yellow]No docker tags found. If the docker connector port is "
@@ -490,16 +533,20 @@ class AssetsScreen(Screen[None]):
             self._log(f"Loaded {len(tags)} docker tags (adapter view)")
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
+        self._update_status_bar()
 
     def _populate_tree(self, root: TreeNode) -> None:
-        tree = self.query_one("#asset-tree", Tree)
+        tree = self.query_one("#asset-tree", AssetTree)
         tree.clear()
-        # Enter уже раскрывает через Tree.auto_expand — не дублируем toggle в handlers.
+        # Enter раскрывает через auto_expand; Space — отметки (AssetTree).
         tree.auto_expand = True
         self._node_map.clear()
         tree.root.expand()
         self._node_map[id(tree.root)] = root
-        for child in sorted(root.children.values(), key=lambda n: (not n.is_dir, n.name.lower())):
+        for child in sorted(
+            root.children.values(),
+            key=lambda n: (not n.is_dir, n.name.lower()),
+        ):
             self._add_node(tree.root, child)
 
     def _add_node(self, parent: TuiTreeNode[Any], node: TreeNode) -> None:
@@ -517,22 +564,64 @@ class AssetsScreen(Screen[None]):
             self._node_map[id(tui_node)] = node
 
     def _label_for(self, node: TreeNode) -> str:
+        # Не использовать `[x]` / `[dir]` — Rich/Textual съедает это как markup.
+        if _node_mark_key(node) in self._marked:
+            mark = "[bold green]●[/] "
+            name_style_open, name_style_close = "[bold]", "[/]"
+        else:
+            mark = "[dim]○[/] "
+            name_style_open, name_style_close = "", ""
+
         if node.is_dir:
-            return f"[dir] {node.name}/ ({node.child_count})"
+            return (
+                f"{mark}[cyan]dir[/] "
+                f"{name_style_open}{node.name}/{name_style_close} "
+                f"({node.child_count})"
+            )
         if node.docker_tag is not None:
-            return f"[img] {node.name}"
+            return (
+                f"{mark}[magenta]img[/] "
+                f"{name_style_open}{node.name}{name_style_close}"
+            )
         asset = node.asset
         size = human_size(asset.file_size) if asset else "-"
         ctype = (asset.content_type or "-") if asset else "-"
         modified = (asset.last_modified or "-") if asset else "-"
         return (
-            f"[file] {node.name}  [{size}]  "
-            f"{truncate(ctype, 24)}  {truncate(str(modified), 20)}"
+            f"{mark}[yellow]file[/] "
+            f"{name_style_open}{node.name}{name_style_close}  "
+            f"{size}  {truncate(ctype, 24)}  {truncate(str(modified), 20)}"
+        )
+
+    def _refresh_tree_labels(self) -> None:
+        tree = self.query_one("#asset-tree", AssetTree)
+
+        def _walk(tui_node: TuiTreeNode[Any]) -> None:
+            data = tui_node.data
+            if isinstance(data, TreeNode):
+                tui_node.set_label(self._label_for(data))
+            for child in tui_node.children:
+                _walk(child)
+
+        _walk(tree.root)
+
+    def _update_status_bar(self) -> None:
+        support = self.repository.support_level
+        marked_nodes = len(self._marked)
+        marked_assets = len(self._items_from_marks()) if self._marked else 0
+        sel = (
+            f"  marked={marked_nodes} nodes → {marked_assets} assets"
+            if marked_nodes
+            else "  marked=0 (Space to select)"
+        )
+        self.query_one("#status", Static).update(
+            f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
+            f"type={self.repository.type}  support={support}{sel}"
         )
 
     # ---- вспомогательные функции выбора -------------------------------------------------
     def _selected_domain_node(self) -> TreeNode | None:
-        tree = self.query_one("#asset-tree", Tree)
+        tree = self.query_one("#asset-tree", AssetTree)
         cursor = tree.cursor_node
         if cursor is None:
             return self._root_tree
@@ -541,11 +630,42 @@ class AssetsScreen(Screen[None]):
             return data
         return self._node_map.get(id(cursor), self._root_tree)
 
-    def _items_for_selected(self) -> list[NexusAsset | DockerTag]:
+    def _find_node_by_mark_key(self, key: str, root: TreeNode | None = None) -> TreeNode | None:
+        node = root if root is not None else self._root_tree
+        if _node_mark_key(node) == key:
+            return node
+        for child in node.children.values():
+            found = self._find_node_by_mark_key(key, child)
+            if found is not None:
+                return found
+        return None
+
+    def _items_from_marks(self) -> list[NexusAsset | DockerTag]:
+        items: list[NexusAsset | DockerTag] = []
+        seen: set[str] = set()
+        for key in self._marked:
+            node = self._find_node_by_mark_key(key)
+            if node is None:
+                continue
+            if node.path == "":
+                batch = self._all_items()
+            else:
+                batch = collect_leaf_assets(node)
+            for item in batch:
+                dedupe = _item_dedupe_key(item)
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                items.append(item)
+        return items
+
+    def _items_for_action(self) -> list[NexusAsset | DockerTag]:
+        """Отмеченные узлы, иначе узел под курсором."""
+        if self._marked:
+            return self._items_from_marks()
         node = self._selected_domain_node()
         if node is None:
             return []
-        # Корень (пустой path) → весь репозиторий
         if node.path == "":
             return self._all_items()
         return collect_leaf_assets(node)
@@ -566,27 +686,50 @@ class AssetsScreen(Screen[None]):
 
     # ---- действия -----------------------------------------------------------
     def action_download_selected(self) -> None:
-        self._confirm_and_run("download", self._items_for_selected(), download=True, scan=False, verify=False)
-
-    def action_scan_selected(self) -> None:
-        # Сканирование подразумевает предварительную загрузку при отсутствии файла — pipeline сначала загружает, затем сканирует.
-        self._confirm_and_run("scan", self._items_for_selected(), download=True, scan=True, verify=False)
+        items = self._items_for_action()
+        label = "download marked" if self._marked else "download"
+        self._confirm_and_run(
+            label,
+            items,
+            download=True,
+            scan=False,
+            verify=False,
+        )
 
     def action_verify_selected(self) -> None:
-        self._confirm_and_run("verify", self._items_for_selected(), download=True, scan=True, verify=True)
+        items = self._items_for_action()
+        label = "verify marked" if self._marked else "verify"
+        self._confirm_and_run(
+            label,
+            items,
+            download=True,
+            scan=True,
+            verify=True,
+        )
 
     def action_download_all(self) -> None:
-        self._confirm_and_run("download ALL", self._all_items(), download=True, scan=False, verify=False)
-
-    def action_scan_all(self) -> None:
-        self._confirm_and_run("scan ALL", self._all_items(), download=True, scan=True, verify=False)
+        self._confirm_and_run(
+            "download ALL",
+            self._all_items(),
+            download=True,
+            scan=False,
+            verify=False,
+        )
 
     def action_verify_all(self) -> None:
-        self._confirm_and_run("verify ALL", self._all_items(), download=True, scan=True, verify=True)
+        self._confirm_and_run(
+            "verify ALL",
+            self._all_items(),
+            download=True,
+            scan=True,
+            verify=True,
+        )
 
     def action_open_report(self) -> None:
         if self._last_summary is None:
-            self.app.push_screen(MessageModal("Report", "No report yet. Run a scan/verify first."))
+            self.app.push_screen(
+                MessageModal("Report", "No report yet. Run verify first.")
+            )
             return
         self.app.push_screen(ReportModal(self._last_summary))
 
@@ -603,11 +746,19 @@ class AssetsScreen(Screen[None]):
             self._log("[yellow]Another job is running.[/yellow]")
             return
         if not items:
-            self.app.push_screen(MessageModal("Nothing to do", "No assets selected or repository is empty."))
+            self.app.push_screen(
+                MessageModal(
+                    "Nothing to do",
+                    "No assets marked/selected or repository is empty.",
+                )
+            )
             return
 
         settings = self.app.settings
-        body = format_confirm_body(
+        marked_note = (
+            f"Marked nodes: [b]{len(self._marked)}[/b]\n" if self._marked else ""
+        )
+        body = marked_note + format_confirm_body(
             action=action,
             count=len(items),
             total_size=self._approx_size(items),
@@ -649,7 +800,7 @@ class AssetsScreen(Screen[None]):
             return
 
         def on_progress(asset_path: str, progress: float, stage: str) -> None:
-            _schedule_on_app(app, self._update_progress, asset_path, progress, stage)
+            schedule_on_app(app, self._update_progress, asset_path, progress, stage)
 
         try:
             app.ensure_client()
@@ -663,10 +814,10 @@ class AssetsScreen(Screen[None]):
                 on_progress=on_progress,
                 should_cancel=lambda: self._cancel,
             )
-            _schedule_on_app(app, self._on_pipeline_done, summary)
+            schedule_on_app(app, self._on_pipeline_done, summary)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Pipeline failed")
-            _schedule_on_app(app, self._on_pipeline_failed, str(exc))
+            schedule_on_app(app, self._on_pipeline_failed, str(exc))
 
     def _update_progress(self, asset_path: str, progress: float, stage: str) -> None:
         self.query_one("#job-label", Label).update(
