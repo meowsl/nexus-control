@@ -18,7 +18,7 @@ python -m nexus_tui
 - Список репозиториев с фильтром и обновлением
 - Дерево ассетов по полю Nexus `path` (раскрытие / сворачивание / фильтр)
 - Docker-репозитории через адаптер тегов (Registry v2 API + fallback по assets)
-- Кейбинды для download / scan / verify по выбору или для всего репозитория
+- Мультивыбор ассетов/папок (Space), затем download или verify; либо действие на весь репозиторий
 - Фоновые workers для сети, скачивания, Grype и копирования (UI не блокируется)
 - Потоковое скачивание с защитой от path traversal
 - Локальный Grype или fallback через Docker-образ
@@ -125,7 +125,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. Нажмите `v`: download → Grype-scan → копирование PASS в verified.
+4. Space — отметить нужные файлы/папки; `v` — download → Grype → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` откроет последний отчёт.
 
@@ -229,9 +229,8 @@ Docker-grype монтирует только `DOWNLOAD_ROOT` (ro) и `REPORTS_RO
 2. Основная авторизация — **HTTP Basic**; cookies сохраняются, если сервер их выставляет.
 3. Docker connector в лабораториях часто на отдельном HTTP-порту; задайте `NEXUS_DOCKER_REGISTRY`, если автоопределение не сработало.
 4. Имя verified-каталога: `<repository>-verified` под `VERIFIED_ROOT` (без хардкода `/home/...`).
-5. `scan` (`s` / `S`) сначала скачивает файл, если локальной копии нет (удобно для offline Grype).
-6. При повторной загрузке локальный файл сверяется с remote checksum (`sha256` → `sha1` → `md5`); совпадение → skip, расхождение → перекачка. После скачивания mismatch → download `ERROR` (для blob-ассетов). Для npm package-root/metadata Nexus часто отдаёт sha1, не совпадающий с телом ответа — там checksum не hard-fail, skip идёт по неизменности remote identity в sidecar. `OVERWRITE_DOWNLOADS=true` форсирует перекачку.
-7. Целевая ОС — Linux; биты прав на других платформах — best-effort.
+5. При повторной загрузке локальный файл сверяется с remote checksum (`sha256` → `sha1` → `md5`); совпадение → skip, расхождение → перекачка. После скачивания mismatch → download `ERROR` (для blob-ассетов). Для npm package-root/metadata Nexus часто отдаёт sha1, не совпадающий с телом ответа — там checksum не hard-fail, skip идёт по неизменности remote identity в sidecar. `OVERWRITE_DOWNLOADS=true` форсирует перекачку.
+6. Целевая ОС — Linux; биты прав на других платформах — best-effort.
 
 ---
 
