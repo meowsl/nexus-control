@@ -11,10 +11,13 @@ from nexus_control.config import Settings
 from nexus_control.models import (
     ScanResult,
     ScanStatus,
-    Severity,
     SeverityCounts,
     Verdict,
     Vulnerability,
+)
+from nexus_control.services.scan_common import (  # noqa: F401 — re-export for tests
+    format_text_report,
+    normalize_severity,
 )
 from nexus_control.utils.fs import ensure_parent_dir, write_json
 from nexus_control.utils.safe_path import report_paths
@@ -22,16 +25,7 @@ from nexus_control.utils.subprocess_runner import CommandError, CommandResult, r
 
 logger = logging.getLogger(__name__)
 
-SEVERITY_MAP = {
-    "critical": Severity.CRITICAL,
-    "high": Severity.HIGH,
-    "medium": Severity.MEDIUM,
-    "moderate": Severity.MEDIUM,
-    "low": Severity.LOW,
-    "negligible": Severity.NEGLIGIBLE,
-    "unknown": Severity.UNKNOWN,
-    "": Severity.UNKNOWN,
-}
+SCANNER_NAME = "grype"
 
 
 class GrypeError(RuntimeError):
@@ -108,6 +102,7 @@ class GrypeScanner:
             return ScanResult(
                 status=ScanStatus.ERROR,
                 verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
                 error=str(exc),
             )
 
@@ -115,6 +110,7 @@ class GrypeScanner:
             return ScanResult(
                 status=ScanStatus.ERROR,
                 verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
                 error=f"Scan target does not exist: {local_path}",
             )
 
@@ -124,8 +120,10 @@ class GrypeScanner:
             self.settings.reports_root,
             repository,
             asset_path,
+            scanner=SCANNER_NAME,
         )
         ensure_parent_dir(json_path)
+        version = self.get_version()
 
         try:
             result = self._run_scan(target, json_path)
@@ -134,10 +132,12 @@ class GrypeScanner:
             return ScanResult(
                 status=ScanStatus.ERROR,
                 verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
                 json_report_path=json_path if json_path.exists() else None,
                 text_report_path=txt_path,
                 error=str(exc),
-                grype_version=self.get_version(),
+                scanner_version=version,
+                grype_version=version,
             )
 
         parsed = parse_grype_json(result.stdout)
@@ -151,10 +151,15 @@ class GrypeScanner:
         else:
             json_path.write_text(result.stdout, encoding="utf-8")
 
-        _write_text(txt_path, format_text_report(parsed, asset_path, local_path))
+        _write_text(
+            txt_path,
+            format_text_report(parsed, asset_path, local_path, scanner=SCANNER_NAME),
+        )
         parsed.json_report_path = json_path
         parsed.text_report_path = txt_path
-        parsed.grype_version = self.get_version()
+        parsed.scanner = SCANNER_NAME
+        parsed.scanner_version = version
+        parsed.grype_version = version
         return parsed
 
     def _run_scan(self, target: str, json_report_path: Path) -> CommandResult:
@@ -230,12 +235,6 @@ def _infer_scheme(path: Path) -> str:
     return "file"
 
 
-def normalize_severity(value: str | None) -> Severity:
-    if not value:
-        return Severity.UNKNOWN
-    return SEVERITY_MAP.get(str(value).strip().lower(), Severity.UNKNOWN)
-
-
 def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
     """Совместимый парсер JSON Grype (matches и/или vulnerabilities)."""
     if isinstance(payload, str):
@@ -244,6 +243,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
             return ScanResult(
                 status=ScanStatus.ERROR,
                 verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
                 error="Empty grype JSON output",
             )
         try:
@@ -252,6 +252,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
             return ScanResult(
                 status=ScanStatus.ERROR,
                 verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
                 error=f"Failed to parse grype JSON: {exc}",
             )
     else:
@@ -261,6 +262,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
         return ScanResult(
             status=ScanStatus.ERROR,
             verdict=Verdict.ERROR,
+            scanner=SCANNER_NAME,
             error="Grype JSON root must be an object",
             raw={"raw": data},
         )
@@ -269,6 +271,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
         return ScanResult(
             status=ScanStatus.ERROR,
             verdict=Verdict.ERROR,
+            scanner=SCANNER_NAME,
             error=str(data.get("error")),
             raw=data,
         )
@@ -293,6 +296,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
                 return ScanResult(
                     status=ScanStatus.ERROR,
                     verdict=Verdict.ERROR,
+                    scanner=SCANNER_NAME,
                     error="Unrecognized grype JSON structure (no matches/vulnerabilities)",
                     raw=data,
                 )
@@ -311,6 +315,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
         verdict=verdict,
         vulnerabilities=vulns,
         counts=counts,
+        scanner=SCANNER_NAME,
         raw=data,
     )
 
@@ -349,32 +354,6 @@ def _from_vulnerability(item: Any) -> Vulnerability | None:
         ),
         description=(str(item["description"]) if item.get("description") else None),
     )
-
-
-def format_text_report(result: ScanResult, asset_path: str, local_path: Path) -> str:
-    lines = [
-        f"Asset: {asset_path}",
-        f"Local path: {local_path}",
-        f"Verdict: {result.verdict.value}",
-        f"Vulnerabilities: {result.vulnerability_count}",
-        (
-            f"Severity: critical={result.counts.critical} high={result.counts.high} "
-            f"medium={result.counts.medium} low={result.counts.low} "
-            f"negligible={result.counts.negligible} unknown={result.counts.unknown}"
-        ),
-        "",
-    ]
-    if result.error:
-        lines.append(f"Error: {result.error}")
-    for vuln in result.vulnerabilities[:50]:
-        lines.append(
-            f"- [{vuln.severity.value}] {vuln.id} "
-            f"{vuln.package_name}@{vuln.package_version}"
-            + (f" fix:{vuln.fix_version}" if vuln.fix_version else "")
-        )
-    if len(result.vulnerabilities) > 50:
-        lines.append(f"... and {len(result.vulnerabilities) - 50} more")
-    return "\n".join(lines) + "\n"
 
 
 def _write_text(path: Path, text: str) -> None:

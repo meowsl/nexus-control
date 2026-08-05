@@ -208,7 +208,9 @@ class ScanResult:
     counts: SeverityCounts = field(default_factory=SeverityCounts)
     json_report_path: Path | None = None
     text_report_path: Path | None = None
-    grype_version: str | None = None
+    scanner: str = ""
+    scanner_version: str | None = None
+    grype_version: str | None = None  # совместимость; дублирует scanner_version для grype
     error: str | None = None
     raw: dict[str, Any] | None = None
 
@@ -242,8 +244,15 @@ class AssetPipelineResult:
     asset_path: str
     kind: AssetKind
     download: DownloadResult
-    scan: ScanResult
+    scans: dict[str, ScanResult] = field(default_factory=dict)
     verify: VerifyResult = field(default_factory=VerifyResult)
+
+    @property
+    def scan(self) -> ScanResult:
+        """Сводный результат по всем включённым сканерам."""
+        from nexus_control.services.scan_common import aggregate_scan_results
+
+        return aggregate_scan_results(self.scans)
 
     @property
     def verdict(self) -> Verdict:
@@ -256,8 +265,13 @@ class PipelineSummary:
     results: list[AssetPipelineResult] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
-    grype_version: str | None = None
+    scanners: list[str] = field(default_factory=list)
+    scanner_versions: dict[str, str | None] = field(default_factory=dict)
     cancelled: bool = False
+
+    @property
+    def grype_version(self) -> str | None:
+        return self.scanner_versions.get("grype")
 
     @property
     def total_scanned(self) -> int:

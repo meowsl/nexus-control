@@ -9,7 +9,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Label, RichLog, Static
+from textual.widgets import Button, Checkbox, DataTable, Label, RichLog, Static
 
 from nexus_control.models import AssetPipelineResult, PipelineSummary, Verdict
 from nexus_control.services.verified_uploader import (
@@ -147,6 +147,84 @@ class HelpModal(ModalScreen[None]):
             self.dismiss(None)
 
 
+class ScannerSettingsModal(ModalScreen[list[str] | None]):
+    """Выбор сканеров для verify: grype / trivy / оба."""
+
+    DEFAULT_CSS = """
+    ScannerSettingsModal {
+        align: center middle;
+    }
+    ScannerSettingsModal > Vertical {
+        width: 64;
+        height: auto;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    ScannerSettingsModal .hint {
+        color: $text-muted;
+        margin: 1 0;
+    }
+    ScannerSettingsModal .error {
+        color: $error;
+        height: 1;
+    }
+    ScannerSettingsModal .buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, selected: list[str]) -> None:
+        super().__init__()
+        self._selected = {s.lower() for s in selected}
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("[b]Сканеры уязвимостей[/b]")
+            yield Static(
+                "Включите один или оба. Verify копирует в *-verified только если "
+                "все включённые сканеры дали PASS.",
+                classes="hint",
+            )
+            yield Checkbox(
+                "Grype",
+                value="grype" in self._selected,
+                id="scan-grype",
+            )
+            yield Checkbox(
+                "Trivy",
+                value="trivy" in self._selected,
+                id="scan-trivy",
+            )
+            yield Static("", id="scan-error", classes="error")
+            with Horizontal(classes="buttons"):
+                yield Button("Сохранить", variant="primary", id="ok")
+                yield Button("Отмена", variant="default", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "ok":
+            chosen: list[str] = []
+            if self.query_one("#scan-grype", Checkbox).value:
+                chosen.append("grype")
+            if self.query_one("#scan-trivy", Checkbox).value:
+                chosen.append("trivy")
+            if not chosen:
+                self.query_one("#scan-error", Static).update(
+                    "Выберите хотя бы один сканер."
+                )
+                return
+            self.dismiss(chosen)
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "escape":
+            self.dismiss(None)
+
+
 class ReportModal(ModalScreen[None]):
     """Показать сводную таблицу pipeline с опциональными деталями строк."""
 
@@ -207,8 +285,10 @@ class ReportModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         s = self.summary
         target = verified_repo_name(s.repository)
+        scanners = "+".join(s.scanners) if s.scanners else "-"
         header = (
             f"[b]Results — {s.repository}[/b]  "
+            f"scanners={scanners}  "
             f"scanned={s.total_scanned}  PASS={s.total_passed}  "
             f"FAIL={s.total_failed}  ERROR={s.total_errors}  "
             f"copied={s.total_copied}  "
@@ -280,22 +360,26 @@ class ReportModal(ModalScreen[None]):
         log.clear()
         log.write(f"[b]{result.asset_path}[/b]")
         log.write(f"Local: {result.download.local_path or '-'}")
-        log.write(f"JSON report: {result.scan.json_report_path or '-'}")
-        log.write(f"Verdict: {result.verdict.value}")
+        log.write(f"Verdict (all scanners): {result.verdict.value}")
         if result.download.error:
             log.write(f"[red]Download error:[/red] {result.download.error}")
-        if result.scan.error:
-            log.write(f"[red]Scan error:[/red] {result.scan.error}")
         if result.verify.error:
             log.write(f"[red]Verify error:[/red] {result.verify.error}")
-        vulns = result.scan.vulnerabilities[:20]
-        if vulns:
-            log.write("[b]Top vulnerabilities[/b]")
-            for v in vulns:
+
+        if result.scans:
+            for name, sc in result.scans.items():
                 log.write(
-                    f"  [{v.severity.value}] {v.id} "
-                    f"{v.package_name}@{v.package_version}"
+                    f"[b]{name}[/b]: {sc.verdict.value}  "
+                    f"vulns={sc.vulnerability_count}  "
+                    f"json={sc.json_report_path or '-'}"
                 )
+                if sc.error:
+                    log.write(f"  [red]error:[/red] {sc.error}")
+                for v in sc.vulnerabilities[:10]:
+                    log.write(
+                        f"  [{v.severity.value}] {v.id} "
+                        f"{v.package_name}@{v.package_version}"
+                    )
         elif result.verdict == Verdict.PASS:
             log.write("[green]No vulnerabilities found.[/green]")
 
@@ -414,11 +498,14 @@ def format_confirm_body(
     total_size: int | None,
     download_root: str,
     verified_root: str,
+    scanners: list[str] | None = None,
 ) -> str:
     size_txt = human_size(total_size) if total_size is not None else "unknown"
+    scanners_txt = "+".join(scanners) if scanners else "-"
     return (
         f"Action: [b]{action}[/b]\n"
         f"Items: [b]{count}[/b]\n"
+        f"Scanners: [b]{scanners_txt}[/b]\n"
         f"Approx. size: {size_txt}\n"
         f"Download path: {download_root}\n"
         f"Verified path: {verified_root}\n\n"

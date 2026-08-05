@@ -39,6 +39,7 @@ from nexus_control.ui.widgets import (
     HelpModal,
     MessageModal,
     ReportModal,
+    ScannerSettingsModal,
     format_confirm_body,
 )
 from nexus_control.utils.text import format_attrs, human_size, truncate
@@ -309,6 +310,7 @@ class AssetsScreen(Screen[None]):
         Binding("D", "download_all", "Скачать всё"),
         Binding("V", "verify_all", "Verify всё"),
         Binding("o", "open_report", "Отчёт"),
+        Binding("s", "scanner_settings", "Сканеры"),
         Binding("question_mark", "help", "Справка"),
         Binding("c", "cancel_job", "Отмена", show=False),
     ]
@@ -364,6 +366,8 @@ class AssetsScreen(Screen[None]):
         self._node_map: dict[int, TreeNode] = {}
         # Мультивыбор: ключи `_node_mark_key`
         self._marked: set[str] = set()
+        # Включённые сканеры для verify (инициализируются в on_mount из settings)
+        self._enabled_scanners: list[str] = ["grype"]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -381,6 +385,10 @@ class AssetsScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self._ui_app = self.app
+        try:
+            self._enabled_scanners = list(self.app.settings.scanners_list)
+        except Exception:  # noqa: BLE001
+            self._enabled_scanners = ["grype"]
         self._update_status_bar()
         self.query_one("#asset-filter", Input).can_focus = False
         self.query_one("#log", RichLog).can_focus = False
@@ -614,9 +622,11 @@ class AssetsScreen(Screen[None]):
             if marked_nodes
             else "  marked=0 (Space to select)"
         )
+        scanners = "+".join(self._enabled_scanners) or "-"
         self.query_one("#status", Static).update(
             f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
-            f"type={self.repository.type}  support={support}{sel}"
+            f"type={self.repository.type}  support={support}  "
+            f"scanners={scanners}{sel}"
         )
 
     # ---- вспомогательные функции выбора -------------------------------------------------
@@ -733,6 +743,18 @@ class AssetsScreen(Screen[None]):
             return
         self.app.push_screen(ReportModal(self._last_summary))
 
+    def action_scanner_settings(self) -> None:
+        def _after(chosen: list[str] | None) -> None:
+            if chosen:
+                self._enabled_scanners = chosen
+                self._update_status_bar()
+                self._log(f"Scanners: {'+'.join(chosen)}")
+
+        self.app.push_screen(
+            ScannerSettingsModal(self._enabled_scanners),
+            _after,
+        )
+
     def _confirm_and_run(
         self,
         action: str,
@@ -764,6 +786,7 @@ class AssetsScreen(Screen[None]):
             total_size=self._approx_size(items),
             download_root=str(settings.download_root / self.repository.name),
             verified_root=str(settings.verified_repo_dir(self.repository.name)),
+            scanners=self._enabled_scanners if scan else None,
         )
 
         def _after(confirmed: bool | None) -> None:
@@ -811,6 +834,7 @@ class AssetsScreen(Screen[None]):
                 download=download,
                 scan=scan,
                 verify=verify,
+                scanners=self._enabled_scanners if scan else None,
                 on_progress=on_progress,
                 should_cancel=lambda: self._cancel,
             )

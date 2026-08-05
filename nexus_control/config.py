@@ -16,7 +16,8 @@ from nexus_control.utils.fs import ensure_dir, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
-GrypeDockerMode = Literal["auto", "true", "false"]
+ScannerDockerMode = Literal["auto", "true", "false"]
+GrypeDockerMode = ScannerDockerMode  # совместимость
 
 
 def _expand_path(value: str | Path) -> Path:
@@ -56,11 +57,20 @@ class Settings(BaseSettings):
     reports_root: Path = Path("~/nexus-control/reports")
     verified_root: Path = Path("~/nexus-control")
 
+    # Сканеры (через запятую: grype, trivy). Можно менять в TUI (клавиша s).
+    scanners: str = "grype"
+
     # Grype
     grype_binary: str = "grype"
-    grype_use_docker: GrypeDockerMode = "auto"
+    grype_use_docker: ScannerDockerMode = "auto"
     grype_docker_image: str = "anchore/grype:latest"
     grype_extra_args: str = ""
+
+    # Trivy
+    trivy_binary: str = "trivy"
+    trivy_use_docker: ScannerDockerMode = "auto"
+    trivy_docker_image: str = "aquasec/trivy:latest"
+    trivy_extra_args: str = ""
 
     # Docker / skopeo
     docker_binary: str = "docker"
@@ -102,17 +112,25 @@ class Settings(BaseSettings):
             return ""
         return str(value)
 
-    @field_validator("grype_use_docker", mode="before")
+    @field_validator("grype_use_docker", "trivy_use_docker", mode="before")
     @classmethod
-    def _normalize_grype_docker(cls, value: object) -> str:
+    def _normalize_scanner_docker(cls, value: object) -> str:
         text = str(value).strip().lower()
         if text in {"1", "yes", "on"}:
             return "true"
         if text in {"0", "no", "off"}:
             return "false"
         if text not in {"auto", "true", "false"}:
-            raise ValueError("GRYPE_USE_DOCKER must be auto, true, or false")
+            raise ValueError("scanner USE_DOCKER must be auto, true, or false")
         return text
+
+    @field_validator("scanners", mode="before")
+    @classmethod
+    def _normalize_scanners(cls, value: object) -> str:
+        from nexus_control.services.scan_common import parse_scanner_names
+
+        names = parse_scanner_names(str(value if value is not None else "grype"))
+        return ",".join(names)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -142,11 +160,25 @@ class Settings(BaseSettings):
         return f"{self.nexus_url}/service/rest/v1"
 
     @property
+    def scanners_list(self) -> list[str]:
+        """Включённые сканеры по умолчанию (из ``SCANNERS``)."""
+        from nexus_control.services.scan_common import parse_scanner_names
+
+        return parse_scanner_names(self.scanners)
+
+    @property
     def grype_extra_args_list(self) -> list[str]:
         """Безопасный разбор GRYPE_EXTRA_ARGS (без shell)."""
         if not self.grype_extra_args.strip():
             return []
         return shlex.split(self.grype_extra_args)
+
+    @property
+    def trivy_extra_args_list(self) -> list[str]:
+        """Безопасный разбор TRIVY_EXTRA_ARGS (без shell)."""
+        if not self.trivy_extra_args.strip():
+            return []
+        return shlex.split(self.trivy_extra_args)
 
     def verified_repo_dir(self, repository_name: str) -> Path:
         """Вернуть ``VERIFIED_ROOT/<repository>-verified``."""
@@ -168,8 +200,11 @@ class Settings(BaseSettings):
             "download_root": str(self.download_root),
             "reports_root": str(self.reports_root),
             "verified_root": str(self.verified_root),
+            "scanners": self.scanners,
             "grype_binary": self.grype_binary,
             "grype_use_docker": self.grype_use_docker,
+            "trivy_binary": self.trivy_binary,
+            "trivy_use_docker": self.trivy_use_docker,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
         }

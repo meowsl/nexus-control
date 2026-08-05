@@ -82,6 +82,8 @@ class Verifier:
         manifest = {
             "repository": summary.repository,
             "scanned_at": (summary.finished_at or datetime.now(timezone.utc)).isoformat(),
+            "scanners": list(summary.scanners),
+            "scanner_versions": dict(summary.scanner_versions),
             "grype_version": summary.grype_version,
             "total_scanned": summary.total_scanned,
             "total_passed": summary.total_passed,
@@ -97,8 +99,18 @@ class Verifier:
                         str(r.verify.verified_path) if r.verify.verified_path else None
                     ),
                     "size": r.download.bytes_written,
-                    "scan_report_path": (
-                        str(r.scan.json_report_path) if r.scan.json_report_path else None
+                    "scan_reports": {
+                        name: str(sc.json_report_path)
+                        for name, sc in r.scans.items()
+                        if sc.json_report_path is not None
+                    },
+                    "scan_report_path": next(
+                        (
+                            str(sc.json_report_path)
+                            for sc in r.scans.values()
+                            if sc.json_report_path is not None
+                        ),
+                        None,
                     ),
                     "vulnerability_count": 0,
                 }

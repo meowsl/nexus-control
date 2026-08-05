@@ -128,15 +128,26 @@ def asset_verified_path(verified_root: Path, repository: str, asset_path: str) -
     return safe_join(verified_root, repo_dir, *norm.parts)
 
 
-def report_paths(reports_root: Path, repository: str, asset_path: str) -> tuple[Path, Path]:
-    """Вернуть пути ``(json_report, text_report)`` для артефакта."""
+def report_paths(
+    reports_root: Path,
+    repository: str,
+    asset_path: str,
+    *,
+    scanner: str = "grype",
+) -> tuple[Path, Path]:
+    """Вернуть пути ``(json_report, text_report)`` для артефакта.
+
+    Имена: ``{scanner}_{flat}.json`` / ``{scanner}_{flat}.txt``
+    (например ``grype_pkg__1.0.jar.json``, ``trivy_pkg__1.0.jar.txt``).
+    """
     repo = sanitize_repo_name(repository)
     norm = normalize_asset_path(asset_path)
     # Свести путь с __, чтобы избежать глубоких деревьев отчётов, сохраняя уникальность.
     flat = "__".join(norm.parts)
     flat = sanitize_filename(flat)
-    base = safe_join(reports_root, repo, flat)
-    return Path(str(base) + ".grype.json"), Path(str(base) + ".grype.txt")
+    prefix = sanitize_filename(scanner.strip().lower() or "scanner")
+    base = safe_join(reports_root, repo, f"{prefix}_{flat}")
+    return Path(str(base) + ".json"), Path(str(base) + ".txt")
 
 
 def docker_archive_path(download_root: Path, repository: str, tag: str) -> Path:
