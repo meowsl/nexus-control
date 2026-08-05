@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from nexus_tui.utils.safe_path import (
+from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
     normalize_asset_path,
+    report_paths,
     safe_join,
     sanitize_filename,
     sanitize_repo_name,
@@ -52,8 +53,23 @@ def test_sanitize_repo_and_filename() -> None:
         sanitize_filename("")
 
 
+def test_report_paths_scanner_prefix(tmp_path: Path) -> None:
+    json_p, txt_p = report_paths(
+        tmp_path, "my-repo", "com/pkg/1.0.jar", scanner="grype"
+    )
+    assert json_p.name == "grype_com__pkg__1.0.jar.json"
+    assert txt_p.name == "grype_com__pkg__1.0.jar.txt"
+    assert json_p.parent.name == "my-repo"
+
+    t_json, t_txt = report_paths(
+        tmp_path, "my-repo", "com/pkg/1.0.jar", scanner="trivy"
+    )
+    assert t_json.name.startswith("trivy_")
+    assert t_txt.name.endswith(".txt")
+
+
 def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
-    from nexus_tui.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
+    from nexus_control.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
 
     pkg = tmp_path / "lodash"
     pkg.mkdir()
@@ -62,8 +78,8 @@ def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
 
 
 def test_prepare_asset_destination_promotes_file(tmp_path: Path) -> None:
-    from nexus_tui.utils.fs import prepare_asset_destination
-    from nexus_tui.utils.safe_path import ASSET_META_LEAF
+    from nexus_control.utils.fs import prepare_asset_destination
+    from nexus_control.utils.safe_path import ASSET_META_LEAF
 
     # Сначала скачан npm metadata как файл `lodash`
     meta_file = tmp_path / "lodash"

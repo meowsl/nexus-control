@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from nexus_tui.models import NexusAsset
-from nexus_tui.utils.hashing import (
+from nexus_control.models import NexusAsset
+from nexus_control.utils.hashing import (
     checksum_is_authoritative,
     checksums_mismatch,
     hash_file,

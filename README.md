@@ -1,9 +1,9 @@
-# nexus-tui
+# nexus-control
 
-Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
+Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype** и/или **Trivy** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
 
 ```bash
-python -m nexus_tui
+python -m nexus_control
 ```
 
 Быстрый старт: см. [QUICKSTART.md](QUICKSTART.md).
@@ -14,15 +14,15 @@ python -m nexus_tui
 
 - Загрузка конфигурации из `.env` / переменных окружения ОС (приоритет у ОС)
 - Клиент Nexus REST API (`httpx`) с Basic Auth
-- Локальный кэш сессии (`~/.cache/nexus-tui/session.json`) с TTL — без лишних проверок авторизации
+- Локальный кэш сессии (`~/.cache/nexus-control/session.json`) с TTL — без лишних проверок авторизации
 - Список репозиториев с фильтром и обновлением
 - Дерево ассетов по полю Nexus `path` (раскрытие / сворачивание / фильтр)
 - Docker-репозитории через адаптер тегов (Registry v2 API + fallback по assets)
 - Мультивыбор ассетов/папок (Space), затем download или verify; либо действие на весь репозиторий
-- Фоновые workers для сети, скачивания, Grype и копирования (UI не блокируется)
+- Фоновые workers для сети, скачивания, сканеров и копирования (UI не блокируется)
 - Потоковое скачивание с защитой от path traversal
-- Локальный Grype или fallback через Docker-образ
-- Строгая политика verify: в `<repo>-verified` копируются **только** ассеты с нулём уязвимостей
+- Grype и/или Trivy (локально или Docker-fallback); в TUI — клавиша `s`
+- Строгая политика verify: в `<repo>-verified` только если все включённые сканеры дали PASS
 - Ротация логов в файл + панель логов в TUI (секреты маскируются)
 
 ---
@@ -30,12 +30,12 @@ python -m nexus_tui
 ## Архитектура
 
 ```
-nexus_tui/
+nexus_control/
   config.py          # pydantic-settings
   models.py          # доменные dataclasses
   logging_setup.py
   nexus/             # REST-клиент, кэш сессии, парсеры
-  services/          # downloader, grype, verifier, docker, pipeline
+  services/          # downloader, grype, trivy, verifier, docker, pipeline
   ui/                # экраны / виджеты / кейбинды Textual
   utils/             # safe_path, fs, subprocess, tree_builder
 ```
@@ -49,7 +49,7 @@ nexus_tui/
 - **Python 3.13+**
 - Целевая среда — **Linux** (TUI + POSIX-права). На Windows возможны unit-тесты и ограниченный UI
 - Доступный **Nexus Repository CE** с REST API (`/service/rest/v1`)
-- **grype** в `PATH` **или** Docker (для fallback `anchore/grype`)
+- **grype** и/или **trivy** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy`)
 - Опционально для docker-репозиториев: **skopeo** (предпочтительно) или **docker** CLI
 
 ---
@@ -93,16 +93,19 @@ cp .env.example .env
 |------------|--------------|----------|
 | `NEXUS_VERIFY_SSL` | `true` | `false` только для self-signed TLS в лаборатории (будет warning) |
 | `NEXUS_SESSION_TTL` | `3600` | TTL кэша сессии (секунды) |
-| `NEXUS_CACHE_DIR` | `~/.cache/nexus-tui` | Каталог кэша сессии (режим 700) |
+| `NEXUS_CACHE_DIR` | `~/.cache/nexus-control` | Каталог кэша сессии (режим 700) |
 | `NEXUS_DOCKER_REGISTRY` | _(пусто)_ | Переопределение docker connector `host:port` |
-| `DOWNLOAD_ROOT` | `~/nexus-automation/downloads` | Скачанные артефакты |
-| `REPORTS_ROOT` | `~/nexus-automation/reports` | JSON/TXT отчёты Grype |
-| `VERIFIED_ROOT` | `~/nexus-automation` | Родитель каталогов `<repo>-verified/` |
+| `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
+| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*`) |
+| `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
+| `SCANNERS` | `grype` | Через запятую: `grype`, `trivy` (в TUI — клавиша `s`) |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
+| `TRIVY_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
+| `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
-| `LOG_FILE` | `~/nexus-automation/logs/nexus-tui.log` | Ротируемый лог |
+| `LOG_FILE` | `~/nexus-control/logs/nexus-control.log` | Ротируемый лог |
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
 
@@ -113,9 +116,9 @@ cp .env.example .env
 ## Запуск
 
 ```bash
-python -m nexus_tui
+python -m nexus_control
 # или
-nexus-tui          # после pip install -e .
+nexus-control          # после pip install -e .
 # или
 python main.py
 ```
@@ -125,7 +128,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. Space — отметить нужные файлы/папки; `v` — download → Grype → copy PASS в verified (`d` — только download).
+4. `s` — выбрать сканеры (grype / trivy / оба). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` откроет последний отчёт.
 
@@ -174,12 +177,12 @@ python main.py
 
 | Тип | Путь |
 |-----|------|
-| Downloads | `/home/alice/nexus-automation/downloads/my-repo/...` |
-| Reports | `/home/alice/nexus-automation/reports/my-repo/...grype.json` |
-| Verified | `/home/alice/nexus-automation/my-repo-verified/...` |
-| Manifest | `/home/alice/nexus-automation/my-repo-verified/verified-manifest.json` |
-| Logs | `/home/alice/nexus-automation/logs/nexus-tui.log` |
-| Session | `~/.cache/nexus-tui/session.json` |
+| Downloads | `/home/alice/nexus-control/downloads/my-repo/...` |
+| Reports | `/home/alice/nexus-control/reports/my-repo/grype_....json` / `trivy_....json` |
+| Verified | `/home/alice/nexus-control/my-repo-verified/...` |
+| Manifest | `/home/alice/nexus-control/my-repo-verified/verified-manifest.json` |
+| Logs | `/home/alice/nexus-control/logs/nexus-control.log` |
+| Session | `~/.cache/nexus-control/session.json` |
 
 Docker-образы сохраняются как:
 
@@ -200,17 +203,19 @@ Docker-образы сохраняются как:
 
 ---
 
-## Grype и Docker-fallback
+## Сканеры (Grype / Trivy) и Docker-fallback
 
-Порядок выбора:
+Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify оба могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`.
 
-1. Локальный `GRYPE_BINARY`, если найден и `GRYPE_USE_DOCKER` не принудительно `true`
-2. Иначе `docker run` образа `GRYPE_DOCKER_IMAGE`, если режим `auto`/`true` и docker доступен
+Порядок выбора бэкенда (для каждого сканера отдельно):
+
+1. Локальный бинарник, если найден и `*_USE_DOCKER` не принудительно `true`
+2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
 3. Иначе понятная ошибка в UI / логах
 
-Docker-grype монтирует только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется (сканируются локальные `file:` / `docker-archive:`).
+Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется.
 
-**Политика вердикта (строгая):** любая уязвимость (включая Low / Negligible) → `FAIL` → не копируется в verified. Пустой список → `PASS`.
+**Политика вердикта (строгая):** у каждого сканера любая уязвимость → `FAIL`. В verified копируется только если **все** включённые сканеры дали `PASS`.
 
 ---
 
@@ -262,7 +267,7 @@ pytest
 | Auth failed | Логин/пароль; права пользователя на репозитории |
 | Ошибки TLS | Self-signed в лаборатории → `NEXUS_VERIFY_SSL=false` (ожидается warning) |
 | Пустые docker-теги | Задайте `NEXUS_DOCKER_REGISTRY=host:port` |
-| Grype не найден | Установите grype **или** docker + образ `anchore/grype` |
+| Grype/Trivy не найден | Установите бинарник **или** docker + образ; либо выключите сканер клавишей `s` |
 | skopeo/docker pull падает | Auth к registry; для insecure HTTP помогает `NEXUS_VERIFY_SSL=false` |
 | Путь отклонён | В path был `..` или абсолютный путь — пропуск из соображений безопасности |
 | UI «зависает» | Не должен; проверьте панель логов / файл лога |
@@ -285,8 +290,8 @@ pytest
 ## Структура проекта
 
 ```
-nexus-automation/
-├── nexus_tui/           # пакет приложения
+nexus-control/
+├── nexus_control/           # пакет приложения
 ├── tests/
 ├── .env.example
 ├── QUICKSTART.md
