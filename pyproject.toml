@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-control"
-version = "0.1.0"
-description = "Готовый к продакшену Textual TUI для Nexus Sonatype CE: просмотр, загрузка, сканирование Grype и проверка артефактов"
+version = "0.2.0"
+description = "Готовый к продакшену Textual TUI для Nexus Sonatype CE: просмотр, загрузка, сканирование Grype/Trivy и проверка артефактов"
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -21,11 +21,11 @@ dependencies = [
     "httpx>=0.28.1",
     "python-dotenv>=1.2.2",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.14.2",
+    "pydantic-settings[toml]>=2.14.2",
+    "tomli-w>=1.2.0",
     "textual>=8.2.8",
     "rich>=15.0.0",
     "tenacity>=9.1.4",
-    "flake8>=7.3.0",
     "cryptography>=50.0.0",
 ]
 
@@ -33,7 +33,11 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "flake8>=7.3.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/meowsl/nexus-control"
 
 [project.scripts]
 nexus-control = "nexus_control.__main__:main"

@@ -1,12 +1,11 @@
-# Зависимости времени выполнения (Python 3.13+)
+# Legacy pin-file for pip users. Source of truth: pyproject.toml
+# Prefer:  uv tool install .   or   pip install -e .
 httpx>=0.28.1
 python-dotenv>=1.2.2
 pydantic>=2.13.4
-pydantic-settings>=2.14.2
+pydantic-settings[toml]>=2.14.2
+tomli-w>=1.2.0
 textual>=8.2.8
 rich>=15.0.0
 tenacity>=9.1.4
-
-# Разработка / тесты
-pytest>=9.1.1
-pytest-cov>=7.1.0
+cryptography>=50.0.0

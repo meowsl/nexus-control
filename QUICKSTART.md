@@ -1,6 +1,6 @@
 # Быстрый старт — nexus-control
 
-Краткая инструкция, чтобы за 5 минут открыть TUI и прогнать сценарий download / verify.
+Краткая инструкция: установить → запустить → пользоваться.
 
 Полное описание — в [README.md](README.md).
 
@@ -8,62 +8,78 @@
 
 ## 1. Требования
 
-- Python 3.13+
-- Доступ к Nexus Sonatype CE (`NEXUS_URL`)
+- Python 3.13+ **или** [uv](https://docs.astral.sh/uv/) (подтянет Python сам)
+- Доступ к Nexus Sonatype CE
 - Учётная запись с правами на чтение репозиториев/ассетов
 - Для сканирования: `grype` и/или `trivy` **или** Docker
 - Для docker-репозиториев (опционально): `skopeo` или `docker`
 
 ---
 
-## 2. Установка
+## 2. Установка (рекомендуется)
 
 ```bash
-git clone <repo-url> nexus-control
-cd nexus-control
-
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-pip install -r requirements.txt
+# Убедитесь, что ~/.local/bin в PATH
+uv tool install git+https://github.com/meowsl/nexus-control.git@dev
 ```
 
-Альтернатива через `uv`:
+Запуск из **любого** каталога:
 
 ```bash
+nexus-control
+```
+
+При первом запуске:
+
+1. Wizard спросит Nexus URL (и опционально TLS / scanners)
+2. Сохранит `~/.config/nexus-control/config.toml`
+3. Спросит username/password (encrypted vault до TTL сессии)
+
+Повторные запуски wizard не показывают.
+
+### Разработка из клона
+
+```bash
+git clone https://github.com/meowsl/nexus-control.git
+cd nexus-control
 uv sync --extra dev
+uv run nexus-control
 ```
 
 ---
 
-## 3. Настройка `.env`
+## 3. Конфиг (если нужен вручную)
+
+Обычно wizard достаточно. Ручной TOML:
 
 ```bash
-cp .env.example .env
+mkdir -p ~/.config/nexus-control
+cp config.toml.example ~/.config/nexus-control/config.toml
+# отредактировать nexus_url
 ```
 
-Минимум, что нужно заполнить:
+Или только env:
 
-```env
-NEXUS_URL=http://localhost:8081
-NEXUS_USERNAME=admin
-NEXUS_PASSWORD=your_password_here
+```bash
+export NEXUS_URL=http://localhost:8081
+nexus-control
 ```
 
-Частые опции для лаборатории:
+Legacy `.env` в CWD всё ещё поддерживается (см. `.env.example`), но не обязателен.
 
-```env
-# self-signed TLS
-NEXUS_VERIFY_SSL=false
+Частые опции для лаборатории (env или TOML):
 
-# docker connector, если теги не находятся автоматически
-NEXUS_DOCKER_REGISTRY=localhost:8082
+```toml
+nexus_url = "http://localhost:8081"
+nexus_verify_ssl = false
+# nexus_docker_registry = "localhost:8082"
 ```
 
-Остальные пути по умолчанию:
+Пути по умолчанию:
 
 | Назначение | Путь |
 |------------|------|
+| Config | `~/.config/nexus-control/config.toml` |
 | Downloads | `~/nexus-control/downloads` |
 | Reports | `~/nexus-control/reports` |
 | Verified | `~/nexus-control/<repo>-verified` |
@@ -71,23 +87,7 @@ NEXUS_DOCKER_REGISTRY=localhost:8082
 
 ---
 
-## 4. Запуск
-
-```bash
-python -m nexus_control
-```
-
-или:
-
-```bash
-python main.py
-```
-
-При ошибке конфигурации приложение сразу завершится с понятным сообщением — проверьте `.env`.
-
----
-
-## 5. Первый проход в TUI
+## 4. Первый проход в TUI
 
 ### Экран репозиториев
 
@@ -98,89 +98,38 @@ python main.py
 
 ### Экран ассетов
 
-1. Дерево строится из путей ассетов (для docker — список тегов).
-2. Выберите файл или директорию.
-3. Нажмите `v` — подтвердите операцию в модалке.
-4. Следите за прогрессом и панелью Logs.
-5. В итоге откроется таблица результатов: `PASS` / `FAIL` / `ERROR`.
-
-Чистые артефакты (`PASS`) окажутся в:
-
-```text
-~/nexus-control/<имя-репозитория>-verified/
-```
+1. Раскройте дерево (`Enter`).
+2. `Space` — отметить файлы/папки (● / ○).
+3. `s` — выбрать сканеры (grype / trivy / оба).
+4. `d` — только скачать; `v` — download → scan → copy PASS в verified.
+5. `D` / `V` — то же для **всего** репозитория.
+6. `o` — последний отчёт.
 
 ---
 
-## 6. Основные клавиши
-
-| Клавиша | Где | Действие |
-|---------|-----|----------|
-| `Enter` | репозитории | открыть ассеты |
-| `/` | оба экрана | фильтр |
-| `r` | оба экрана | обновить |
-| `Space` | ассеты | отметить / снять отметку (файл или папка) |
-| `u` | ассеты | снять все отметки |
-| `d` | ассеты | скачать отмеченное (или узел под курсором) |
-| `v` | ассеты | verify отмеченного (download + сканеры + copy PASS) |
-| `D` / `V` | ассеты | download / verify для **всего** репозитория |
-| `s` | ассеты | сканеры (grype / trivy / оба) |
-| `o` | ассеты | последний отчёт |
-| `Esc` / `q` | ассеты | назад |
-| `?` | оба экрана | справка |
-
----
-
-## 7. Проверка, что всё работает
-
-После `v` / `V` проверьте:
+## 5. Проверка
 
 ```bash
-# скачанные файлы
+ls ~/.config/nexus-control/config.toml
 ls ~/nexus-control/downloads/<repo>/
-
-# отчёты (grype_*.json / trivy_*.json)
 ls ~/nexus-control/reports/<repo>/
-
-# только чистые артефакты
 ls ~/nexus-control/<repo>-verified/
-
-# лог
-tail -n 50 ~/nexus-control/logs/nexus-control.log
 ```
 
 Критерий успеха:
 
-- TUI открывается
+- `nexus-control` запускается из `/tmp` или любого каталога
 - список репозиториев загружается
-- дерево ассетов видно
-- выбранный ассет скачивается и сканируется
 - `PASS` копируется в verified, `FAIL`/`ERROR` — нет
 
 ---
 
-## 8. Частые проблемы
+## 6. Частые проблемы
 
 | Проблема | Решение |
 |----------|---------|
-| `Failed to load configuration` | Заполните `NEXUS_URL`, `NEXUS_USERNAME`, `NEXUS_PASSWORD` в `.env` |
-| `Authentication failed` | Проверьте пароль и права пользователя |
-| Ошибка TLS / certificate | Для лаборатории: `NEXUS_VERIFY_SSL=false` |
-| `grype is not installed` | Установите grype или Docker (`GRYPE_USE_DOCKER=auto`) |
-| Пустые docker-теги | Задайте `NEXUS_DOCKER_REGISTRY=host:port` |
-| Нет skopeo/docker | Установите один из них для docker-репозиториев |
-
----
-
-## 9. Тесты (опционально)
-
-```bash
-pytest
-```
-
----
-
-## 10. Что дальше
-
-- Полные кейбинды, архитектура и security notes — [README.md](README.md)
-- Все переменные окружения — [.env.example](.env.example)
+| `nexus-control: command not found` | Добавьте `~/.local/bin` в PATH |
+| Нет конфига / NEXUS_URL | Запустите в TTY — сработает wizard; или `export NEXUS_URL=...` |
+| Grype/Trivy не найден | Установите бинарник или Docker (`*_USE_DOCKER=auto`) |
+| Self-signed TLS | `nexus_verify_ssl = false` в TOML или `NEXUS_VERIFY_SSL=false` |
+| Docker-теги не находятся | Задайте `nexus_docker_registry` / `NEXUS_DOCKER_REGISTRY` |

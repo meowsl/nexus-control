@@ -1,4 +1,4 @@
-"""Конфигурация приложения, загружаемая из окружения / ``.env``."""
+"""Конфигурация приложения: env, legacy ``.env``, XDG ``config.toml``."""
 
 from __future__ import annotations
 
@@ -10,14 +10,23 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
+from nexus_control.config_paths import resolve_config_path
 from nexus_control.utils.fs import ensure_dir, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
 ScannerDockerMode = Literal["auto", "true", "false"]
 GrypeDockerMode = ScannerDockerMode  # совместимость
+
+# Путь TOML для settings_customise_sources (задаётся в load_settings).
+_active_toml_path: Path | None = None
 
 
 def _expand_path(value: str | Path) -> Path:
@@ -27,8 +36,8 @@ def _expand_path(value: str | Path) -> Path:
 class Settings(BaseSettings):
     """Проверенные настройки выполнения для nexus-control.
 
-    Приоритет (сверху вниз): переменные окружения ОС, затем ``.env`` в CWD,
-    затем значения по умолчанию полей.
+    Приоритет (сверху вниз): init kwargs → OS env → CWD ``.env`` →
+    XDG ``config.toml`` → значения по умолчанию полей.
     """
 
     model_config = SettingsConfigDict(
@@ -38,7 +47,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Обязательный URL. Username/password опциональны в .env:
+    # Обязательный URL. Username/password опциональны:
     # при отсутствии запрашиваются при старте и хранятся зашифрованно
     # до истечения Nexus-сессии (см. nexus.credentials).
     nexus_url: str = Field(..., description="Базовый URL Nexus")
@@ -83,6 +92,28 @@ class Settings(BaseSettings):
     # Перезапись
     overwrite_downloads: bool = False
     overwrite_verified: bool = False
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        sources: list[PydanticBaseSettingsSource] = [
+            init_settings,
+            env_settings,
+            dotenv_settings,
+        ]
+        toml_path = _active_toml_path
+        if toml_path is not None and toml_path.is_file():
+            sources.append(
+                TomlConfigSettingsSource(settings_cls, toml_file=toml_path)
+            )
+        sources.append(file_secret_settings)
+        return tuple(sources)
 
     @field_validator(
         "nexus_cache_dir",
@@ -214,26 +245,47 @@ class ConfigError(Exception):
     """Выбрасывается, когда конфигурацию не удалось загрузить."""
 
 
-def load_settings(env_file: str | Path | None = ".env") -> Settings:
-    """Загрузить настройки из ``.env`` в CWD и окружения ОС.
+def load_settings(
+    env_file: str | Path | None = ".env",
+    *,
+    config_path: str | Path | None = None,
+    run_wizard: bool = True,
+) -> Settings:
+    """Загрузить настройки: wizard (при необходимости) → env / .env / TOML.
 
-    Переменные окружения ОС имеют приоритет над ``.env`` (python-dotenv
-    ``override=False`` + приоритет env в pydantic-settings).
+    Переменные окружения ОС имеют приоритет над ``.env`` и ``config.toml``.
     """
+    global _active_toml_path
+
+    from nexus_control.config_wizard import ensure_configured
+
+    resolved = resolve_config_path(config_path)
+    ensure_configured(
+        config_path=resolved,
+        env_file=env_file,
+        run_wizard=run_wizard,
+    )
+
     if env_file is not None:
         path = Path(env_file)
         if path.is_file():
             # Не переопределять уже заданные переменные окружения ОС.
             load_dotenv(path, override=False)
 
+    _active_toml_path = resolved if resolved.is_file() else None
     try:
-        return Settings()  # type: ignore[call-arg]
+        # _env_file=None: legacy .env уже в os.environ через load_dotenv выше;
+        # иначе pydantic снова прочитал бы CWD .env даже при env_file=None.
+        return Settings(_env_file=None)  # type: ignore[call-arg]
     except Exception as exc:
         raise ConfigError(
-            "Failed to load configuration. Ensure NEXUS_URL is set in .env or "
-            "the environment. Username/password may be omitted and will be "
-            f"prompted interactively.\nDetails: {exc}"
+            "Failed to load configuration. Ensure NEXUS_URL is set via first-run "
+            f"setup ({resolved}), the environment, or a legacy .env. "
+            "Username/password may be omitted and will be prompted interactively.\n"
+            f"Details: {exc}"
         ) from exc
+    finally:
+        _active_toml_path = None
 
 
 @lru_cache(maxsize=1)

@@ -16,6 +16,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from nexus_control import __version__
 from nexus_control.config import Settings
 from nexus_control.models import AuthType, DockerTag, NexusAsset, Repository
 from nexus_control.nexus.assets import parse_assets_page
@@ -71,7 +72,10 @@ class NexusClient:
             base_url=self.settings.nexus_url,
             timeout=self.settings.nexus_timeout,
             verify=self.settings.nexus_verify_ssl,
-            headers={"Accept": "application/json", "User-Agent": "nexus-control/1.0"},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": f"nexus-control/{__version__}",
+            },
             follow_redirects=True,
             auth=httpx.BasicAuth(
                 self.settings.nexus_username,
