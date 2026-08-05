@@ -329,3 +329,9 @@ nexus-control/
 ├── main.py
 └── README.md
 ```
+
+---
+
+## License
+
+[MIT](LICENSE) — © 2026 meowsl
