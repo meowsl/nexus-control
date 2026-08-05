@@ -535,7 +535,8 @@ class AssetsScreen(Screen[None]):
         if not tags:
             self._log(
                 "[yellow]No docker tags found. If the docker connector port is "
-                "not exposed, set NEXUS_DOCKER_REGISTRY=host:port in .env.[/yellow]"
+                "not exposed, set NEXUS_DOCKER_REGISTRY=host:port "
+                "in config.toml or env.[/yellow]"
             )
         else:
             self._log(f"Loaded {len(tags)} docker tags (adapter view)")

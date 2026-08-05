@@ -1,0 +1,22 @@
+# Пример XDG-конфига nexus-control
+# Обычно создаётся автоматически при первом запуске (first-run wizard).
+# Путь по умолчанию: ~/.config/nexus-control/config.toml
+# Переопределение: NEXUS_CONTROL_CONFIG=/path/to/config.toml
+#
+# Приоритет: OS env > CWD .env (legacy) > этот файл > defaults
+# Username/password сюда НЕ кладите — prompt + encrypted vault.
+
+nexus_url = "http://localhost:8081"
+nexus_verify_ssl = true
+# nexus_timeout = 30.0
+# nexus_session_ttl = 3600
+# nexus_docker_registry = "localhost:8082"
+
+# scanners = "grype"          # или "trivy", или "grype,trivy"
+# download_root = "~/nexus-control/downloads"
+# reports_root = "~/nexus-control/reports"
+# verified_root = "~/nexus-control"
+# log_file = "~/nexus-control/logs/nexus-control.log"
+
+# grype_use_docker = "auto"
+# trivy_use_docker = "auto"

@@ -12,7 +12,7 @@ python -m nexus_control
 
 ## Возможности
 
-- Загрузка конфигурации из `.env` / переменных окружения ОС (приоритет у ОС)
+- First-run wizard + XDG-конфиг (`~/.config/nexus-control/config.toml`) — запуск из любого каталога
 - Клиент Nexus REST API (`httpx`) с Basic Auth
 - Локальный кэш сессии (`~/.cache/nexus-control/session.json`) с TTL — без лишних проверок авторизации
 - Список репозиториев с фильтром и обновлением
@@ -31,7 +31,8 @@ python -m nexus_control
 
 ```
 nexus_control/
-  config.py          # pydantic-settings
+  config.py          # pydantic-settings + XDG TOML
+  config_wizard.py   # first-run setup
   models.py          # доменные dataclasses
   logging_setup.py
   nexus/             # REST-клиент, кэш сессии, парсеры
@@ -46,7 +47,7 @@ nexus_control/
 
 ## Требования
 
-- **Python 3.13+**
+- **Python 3.13+** (или `uv`, который подтянет нужный Python)
 - Целевая среда — **Linux** (TUI + POSIX-права). На Windows возможны unit-тесты и ограниченный UI
 - Доступный **Nexus Repository CE** с REST API (`/service/rest/v1`)
 - **grype** и/или **trivy** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy`)
@@ -54,30 +55,59 @@ nexus_control/
 
 ---
 
-## Установка
+## Установка (рекомендуется)
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-# опционально editable-установка:
+# Нужен uv: https://docs.astral.sh/uv/
+# ~/.local/bin должен быть в PATH
+uv tool install git+https://github.com/meowsl/nexus-control.git@dev
+
+nexus-control
+```
+
+При первом запуске wizard спросит Nexus URL и сохранит
+`~/.config/nexus-control/config.toml`. Затем — prompt логина/пароля
+(encrypted vault до TTL сессии).
+
+### Разработка из клона
+
+```bash
+git clone https://github.com/meowsl/nexus-control.git
+cd nexus-control
+uv sync --extra dev
+uv run nexus-control
+```
+
+Или классический venv:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -e .
+nexus-control
 ```
 
 ---
 
-## Настройка
+## Конфигурация
 
-```bash
-cp .env.example .env
-# заполнить NEXUS_URL; username/password лучше вводить при запуске
-```
+Приоритет (выше побеждает):
 
-### Обязательные переменные
+1. Переменные окружения ОС (`NEXUS_URL`, …)
+2. Legacy `.env` в **текущем** каталоге (опционально)
+3. `~/.config/nexus-control/config.toml` (или `$NEXUS_CONTROL_CONFIG`)
+4. Значения по умолчанию
 
-| Переменная | Описание |
-|------------|----------|
-| `NEXUS_URL` | Базовый URL Nexus, например `http://localhost:8081` |
+Переопределить путь к TOML: `export NEXUS_CONTROL_CONFIG=/path/to/config.toml`.
+
+Пример TOML — [config.toml.example](config.toml.example).
+
+### Обязательно
+
+| Ключ / переменная | Описание |
+|-------------------|----------|
+| `nexus_url` / `NEXUS_URL` | Базовый URL Nexus, например `http://localhost:8081` |
+
+При отсутствии URL и наличии TTY запускается first-run wizard.
 
 ### Учётные данные
 
@@ -95,6 +125,7 @@ cp .env.example .env
 | `NEXUS_SESSION_TTL` | `3600` | TTL кэша сессии (секунды) |
 | `NEXUS_CACHE_DIR` | `~/.cache/nexus-control` | Каталог кэша сессии (режим 700) |
 | `NEXUS_DOCKER_REGISTRY` | _(пусто)_ | Переопределение docker connector `host:port` |
+| `NEXUS_CONTROL_CONFIG` | `~/.config/nexus-control/config.toml` | Путь к TOML-конфигу |
 | `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
 | `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*`) |
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
@@ -109,8 +140,7 @@ cp .env.example .env
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
 
-Полные комментарии по каждой переменной — в `.env.example`.
-
+Legacy `.env` — см. [.env.example](.env.example). Для повседневного использования достаточно wizard / TOML.
 ---
 
 ## Запуск
@@ -154,12 +184,11 @@ python main.py
 | `r` | Обновить ассеты |
 | `/` | Фильтр дерева |
 | `Enter` | Раскрыть / свернуть |
-| `d` | Скачать выбранное |
-| `s` | Скачать + просканировать выбранное |
-| `v` | Скачать + просканировать + verify выбранное |
+| `d` | Скачать выбранное / отмеченное |
+| `v` | Verify выбранного / отмеченного |
 | `D` | Скачать **весь** репозиторий |
-| `S` | Просканировать **весь** репозиторий |
 | `V` | Verify **всего** репозитория |
+| `s` | Сканеры (grype / trivy / оба) |
 | `o` | Открыть последний отчёт |
 | `?` | Справка |
 

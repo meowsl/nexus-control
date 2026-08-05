@@ -185,7 +185,7 @@ def prompt_nexus_credentials(default_username: str = "") -> tuple[str, str]:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ConfigError(
             "NEXUS_USERNAME and NEXUS_PASSWORD are required in non-interactive "
-            "mode (no TTY). Set them in the environment or .env for CI."
+            "mode (no TTY). Set them in the environment, config.toml, or legacy .env."
         )
     print("Nexus authentication", file=sys.stderr)
     print(
@@ -251,7 +251,7 @@ def resolve_runtime_credentials(settings: Settings) -> Settings:
     env_user = (settings.nexus_username or "").strip()
     env_password = settings.nexus_password or ""
     if env_user and env_password:
-        logger.info("Using Nexus credentials from environment / .env")
+        logger.info("Using Nexus credentials from environment / config")
         return settings.model_copy(
             update={"nexus_username": env_user, "nexus_password": env_password}
         )
