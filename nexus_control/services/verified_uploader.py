@@ -46,14 +46,18 @@ class UploadSummary:
 
 
 def verified_repo_name(source_repository: str) -> str:
-    """Имя целевого репозитория: ``<source>-verified`` (safe для Nexus)."""
-    base = sanitize_repo_name(source_repository)
-    name = f"{base}-verified"
-    return name[:200]
+    """Имя целевого репозитория по умолчанию: ``<source>-verified``."""
+    return normalize_upload_repo_name(f"{sanitize_repo_name(source_repository)}-verified")
+
+
+def normalize_upload_repo_name(name: str) -> str:
+    """Санитизировать пользовательское имя hosted-репозитория для upload."""
+    cleaned = sanitize_repo_name(name)
+    return cleaned[:200]
 
 
 class VerifiedUploader:
-    """Создать hosted ``<repo>-verified`` того же format и залить PASS-ассеты."""
+    """Создать hosted-репозиторий того же format и залить PASS-ассеты."""
 
     def __init__(self, client: NexusClient) -> None:
         self.client = client
@@ -62,9 +66,13 @@ class VerifiedUploader:
         self,
         summary: PipelineSummary,
         *,
+        target_repository: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> UploadSummary:
-        target = verified_repo_name(summary.repository)
+        if target_repository and target_repository.strip():
+            target = normalize_upload_repo_name(target_repository)
+        else:
+            target = verified_repo_name(summary.repository)
         source = self.client.get_repository(summary.repository)
         if source is None:
             raise NexusAPIError(

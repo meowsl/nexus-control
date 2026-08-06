@@ -133,6 +133,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
         ),
         "Select at least one scanner.": "Выберите хотя бы один сканер.",
         "Upload verified": "Загрузить verified",
+        "Upload": "Загрузить",
+        "Upload target repository": "Целевой репозиторий для upload",
+        (
+            "Hosted repository name in Nexus. Default is <source>-verified. "
+            "Existing repo of the same format will be reused."
+        ): (
+            "Имя hosted-репозитория в Nexus. По умолчанию <source>-verified. "
+            "Существующий репозиторий того же format будет переиспользован."
+        ),
+        "Repository name": "Имя репозитория",
         "Asset": "Ассет",
         "Scan": "Скан",
         "Vulns": "Уязв.",

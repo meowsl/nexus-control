@@ -10,16 +10,18 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Label, RichLog, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, Label, RichLog, Static
 
 from nexus_control.i18n import _
 from nexus_control.models import AssetPipelineResult, PipelineSummary, Verdict
 from nexus_control.services.verified_uploader import (
     UploadSummary,
     VerifiedUploader,
+    normalize_upload_repo_name,
     verified_repo_name,
 )
 from nexus_control.ui.thread_ui import schedule_on_app
+from nexus_control.utils.safe_path import UnsafePathError
 from nexus_control.utils.text import human_size, truncate
 
 if TYPE_CHECKING:
@@ -238,6 +240,92 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
             self.dismiss(None)
 
 
+class UploadTargetModal(ModalScreen[str | None]):
+    """Запросить имя целевого Nexus-репозитория перед Upload verified."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    UploadTargetModal {
+        align: center middle;
+    }
+    UploadTargetModal > Vertical {
+        width: 72;
+        height: auto;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    UploadTargetModal .hint {
+        color: $text-muted;
+        margin: 1 0;
+    }
+    UploadTargetModal .error {
+        color: $error;
+        height: 1;
+    }
+    UploadTargetModal .buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, default_name: str) -> None:
+        super().__init__()
+        self._default_name = default_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(f"[b]{_('Upload target repository')}[/b]")
+            yield Static(
+                _(
+                    "Hosted repository name in Nexus. Default is <source>-verified. "
+                    "Existing repo of the same format will be reused."
+                ),
+                classes="hint",
+            )
+            yield Input(
+                value=self._default_name,
+                placeholder=_("Repository name"),
+                id="target-name",
+            )
+            yield Static("", id="target-error", classes="error")
+            with Horizontal(classes="buttons"):
+                yield Button(_("Upload"), variant="success", id="ok")
+                yield Button(_("Cancel"), variant="default", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#target-name", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "ok":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "target-name":
+            self._submit()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _submit(self) -> None:
+        raw = self.query_one("#target-name", Input).value.strip()
+        if not raw:
+            raw = self._default_name
+        try:
+            name = normalize_upload_repo_name(raw)
+        except UnsafePathError as exc:
+            self.query_one("#target-error", Static).update(str(exc))
+            return
+        self.dismiss(name)
+
+
 class ReportModal(ModalScreen[None]):
     """Показать сводную таблицу pipeline с опциональными деталями строк."""
 
@@ -287,6 +375,7 @@ class ReportModal(ModalScreen[None]):
         self._rows: list[AssetPipelineResult] = list(summary.results)
         self._ui_app: NexusControlApp | None = None
         self._uploading = False
+        self._upload_target: str | None = None
         self._uploadable = [
             r
             for r in self._rows
@@ -402,7 +491,7 @@ class ReportModal(ModalScreen[None]):
                 return
             self.dismiss(None)
         elif event.button.id == "upload":
-            self._start_upload()
+            self._prompt_upload_target()
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key in {"escape", "q"}:
@@ -410,24 +499,34 @@ class ReportModal(ModalScreen[None]):
                 return
             self.dismiss(None)
 
-    def _start_upload(self) -> None:
+    def _prompt_upload_target(self) -> None:
+        if self._uploading or not self._uploadable:
+            return
+        default = verified_repo_name(self.summary.repository)
+
+        def _after(name: str | None) -> None:
+            if not name:
+                return
+            self._start_upload(name)
+
+        self.app.push_screen(UploadTargetModal(default), _after)
+
+    def _start_upload(self, target: str) -> None:
         if self._uploading or not self._uploadable:
             return
         self._uploading = True
+        self._upload_target = target
         upload_btn = self.query_one("#upload", Button)
         close_btn = self.query_one("#ok", Button)
         upload_btn.disabled = True
         close_btn.disabled = True
-        target = verified_repo_name(self.summary.repository)
         log = self.query_one("#details", RichLog)
         log.clear()
         log.write(
             f"[b]Uploading {len(self._uploadable)} verified asset(s) "
             f"→ [cyan]{target}[/cyan][/b]"
         )
-        log.write(
-            _("Creating repository if missing…")
-        )
+        log.write(_("Creating repository if missing…"))
         self._run_upload()
 
     @work(thread=True, exclusive=True, group="upload-verified")
@@ -435,6 +534,7 @@ class ReportModal(ModalScreen[None]):
         app = self._ui_app
         if app is None:
             return
+        target = self._upload_target
 
         def on_progress(asset_path: str, progress: float, stage: str) -> None:
             schedule_on_app(app, self._on_upload_progress, asset_path, progress, stage)
@@ -442,7 +542,11 @@ class ReportModal(ModalScreen[None]):
         try:
             app.ensure_client()
             uploader = VerifiedUploader(app.client)
-            summary = uploader.upload(self.summary, on_progress=on_progress)
+            summary = uploader.upload(
+                self.summary,
+                target_repository=target,
+                on_progress=on_progress,
+            )
             schedule_on_app(app, self._on_upload_done, summary)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Verified upload failed")
