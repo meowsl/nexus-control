@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     nexus_session_ttl: int = 3600
     nexus_cache_dir: Path = Path("~/.cache/nexus-control")
     nexus_docker_registry: str = ""
+    # Кэш списка ассетов на диск (сек). 0 = выкл. Ускоряет повторное открытие
+    # тяжёлых удалённых репозиториев; ``r`` всегда тянет свежий список.
+    assets_cache_ttl: int = 300
 
     # UI language: en | ru (env: NEXUS_CONTROL_LOCALE or locale)
     locale: str = Field(

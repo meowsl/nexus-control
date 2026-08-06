@@ -72,6 +72,16 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Cancel requested…": "Отмена запрошена…",
         "Busy; wait for the current job.": "Занято; дождитесь текущей задачи.",
         "Loading assets for {name}…": "Загрузка ассетов для {name}…",
+        "Listing assets…": "Загрузка списка ассетов…",
+        "Listing assets… {count} (page {page})": (
+            "Загрузка ассетов… {count} (стр. {page})"
+        ),
+        "Building tree…": "Построение дерева…",
+        "Ready — {count} assets": "Готово — ассетов: {count}",
+        "Ready — {count} tags": "Готово — тегов: {count}",
+        "Loaded {count} assets from cache ({age}s old)": (
+            "Загружено ассетов из кэша: {count} (возраст {age} с)"
+        ),
         "Failed to load assets": "Не удалось загрузить ассеты",
         "Repository is empty (no assets).": "Репозиторий пуст (нет ассетов).",
         "Loaded {count} assets": "Загружено ассетов: {count}",
