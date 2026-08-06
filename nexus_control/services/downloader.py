@@ -57,22 +57,12 @@ class Downloader:
         if existing.is_file() and not self.settings.overwrite_downloads:
             skip = _should_skip_existing(existing, asset)
             if skip:
-                meta = self._write_metadata(
-                    existing,
-                    repository=asset.repository,
-                    asset_path=asset.path,
-                    download_url=asset.download_url,
-                    size=existing.stat().st_size,
-                    checksum=asset.checksum,
-                    source="nexus-rest",
-                    skipped=True,
-                    extra={"last_modified": asset.last_modified},
-                )
+                meta = self._ensure_skip_metadata(existing, asset)
                 logger.debug("Skip download: %s -> %s", asset.path, existing)
                 return DownloadResult(
                     status=DownloadStatus.SKIPPED_EXISTING,
                     local_path=existing,
-                    metadata_path=meta,
+                    metadata_path=meta if meta.is_file() else None,
                     bytes_written=existing.stat().st_size,
                     source="nexus-rest",
                 )
@@ -168,25 +158,11 @@ class Downloader:
 
         if dest.exists() and not self.settings.overwrite_downloads:
             if _docker_local_matches(dest, tag):
-                meta = self._write_metadata(
-                    dest,
-                    repository=tag.repository,
-                    asset_path=tag.path,
-                    download_url=tag.image_ref,
-                    size=dest.stat().st_size,
-                    checksum={},
-                    source="docker-archive",
-                    skipped=True,
-                    extra={
-                        "tag": tag.tag,
-                        "image_reference": tag.image_ref,
-                        "digest": tag.digest,
-                    },
-                )
+                meta = _sidecar_path(dest)
                 return DownloadResult(
                     status=DownloadStatus.SKIPPED_EXISTING,
                     local_path=dest,
-                    metadata_path=meta,
+                    metadata_path=meta if meta.is_file() else None,
                     bytes_written=dest.stat().st_size,
                     source="docker-archive",
                 )
@@ -251,9 +227,40 @@ class Downloader:
             "local_path": str(dest),
             "skipped_existing": skipped,
         }
+        try:
+            payload["local_mtime_ns"] = dest.stat().st_mtime_ns
+        except OSError:
+            pass
         if extra:
             payload.update(extra)
         write_json(meta_path, payload)
+        return meta_path
+
+    def _ensure_skip_metadata(self, dest: Path, asset: NexusAsset) -> Path:
+        """Однократно обновить legacy metadata для последующих fast-skip."""
+        meta_path = _sidecar_path(dest)
+        payload = _read_sidecar(dest) or {}
+        try:
+            stat = dest.stat()
+        except OSError:
+            return meta_path
+        updates = {
+            "repository": asset.repository,
+            "asset_path": asset.path,
+            "download_url": asset.download_url,
+            "size": stat.st_size,
+            "checksum": dict(asset.checksum),
+            "last_modified": asset.last_modified,
+            "source": str(payload.get("source") or "nexus-rest"),
+            "local_path": str(dest),
+            "local_mtime_ns": stat.st_mtime_ns,
+        }
+        updated = dict(payload)
+        updated.update(updates)
+        updated.setdefault("downloaded_at", utc_now_iso())
+        updated.setdefault("skipped_existing", True)
+        if updated != payload:
+            write_json(meta_path, updated)
         return meta_path
 
 
@@ -285,6 +292,13 @@ def _should_skip_existing(existing: Path, asset: NexusAsset) -> bool:
     authoritative = checksum_is_authoritative(asset)
     sidecar = _read_sidecar(existing)
 
+    # Быстрый безопасный путь: remote identity не изменилась, а размер и mtime
+    # локального файла совпадают с зафиксированными после прошлой загрузки.
+    # Старые metadata без local_mtime_ns автоматически идут в полный hash-check.
+    fast_match = _metadata_matches_remote_and_local(existing, asset, sidecar)
+    if fast_match is True:
+        return True
+
     if not authoritative:
         # npm metadata: API sha1 часто врёт → смотрим, менялся ли remote identity.
         identity = remote_identity_unchanged(
@@ -314,6 +328,36 @@ def _should_skip_existing(existing: Path, asset: NexusAsset) -> bool:
         return False
     # Нет checksum/size — оставляем локальный файл.
     return True
+
+
+def _metadata_matches_remote_and_local(
+    existing: Path,
+    asset: NexusAsset,
+    sidecar: dict | None,
+) -> bool | None:
+    """Проверить неизменность без повторного чтения всего файла.
+
+    ``True`` возвращается только когда одновременно совпали remote identity и
+    локальная stat-сигнатура. Иначе вызывающий использует прежнюю проверку
+    checksum, поэтому legacy metadata и сомнительные случаи не теряют качество.
+    """
+    if not sidecar:
+        return None
+    try:
+        expected_size = int(sidecar["size"])
+        expected_mtime_ns = int(sidecar["local_mtime_ns"])
+        stat = existing.stat()
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
+    if stat.st_size != expected_size or stat.st_mtime_ns != expected_mtime_ns:
+        return None
+
+    identity = remote_identity_unchanged(
+        asset.checksum,
+        remote_last_modified=asset.last_modified,
+        sidecar=sidecar,
+    )
+    return True if identity is True else None
 
 
 def _docker_local_matches(dest: Path, tag: DockerTag) -> bool:

@@ -35,6 +35,7 @@ nexus_control/
   config_wizard.py   # first-run setup
   models.py          # доменные dataclasses
   logging_setup.py
+  cli/               # nexus-control-cli (repos / verify / upload)
   nexus/             # REST-клиент, кэш сессии, парсеры
   services/          # downloader, grype, trivy, verifier, docker, pipeline
   ui/                # экраны / виджеты / кейбинды Textual
@@ -62,12 +63,42 @@ nexus_control/
 # ~/.local/bin должен быть в PATH
 uv tool install git+https://github.com/meowsl/nexus-control.git@dev
 
-nexus-control
+nexus-control       # Textual TUI
+nexus-control-cli   # headless verify/upload (cron / CI)
 ```
 
 При первом запуске wizard спросит Nexus URL и сохранит
 `~/.config/nexus-control/config.toml`. Затем — prompt логина/пароля
 (encrypted vault до TTL сессии).
+
+### CLI (автоматизация)
+
+После установки доступен `nexus-control-cli` — тот же pipeline, что в TUI, без UI:
+
+```bash
+# Список репозиториев
+nexus-control-cli repos
+
+# Verify + upload в <repo>-verified
+nexus-control-cli verify --repo maven-hosted --upload
+
+# Только upload локального *-verified
+nexus-control-cli upload --repo maven-hosted
+
+# Smoke / узкий прогон
+nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
+
+# Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
+nexus-control-cli verify --repo maven-hosted --workers 8
+```
+
+Для cron/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY). Пример:
+
+```cron
+0 3 * * * NEXUS_USERNAME=… NEXUS_PASSWORD=… nexus-control-cli verify --repo maven-hosted --upload >>/var/log/nexus-verify.log 2>&1
+```
+
+Docker-репозитории в CLI v1 не поддерживаются (используйте TUI).
 
 ### Разработка из клона
 
@@ -76,6 +107,7 @@ git clone https://github.com/meowsl/nexus-control.git
 cd nexus-control
 uv sync --extra dev
 uv run nexus-control
+uv run nexus-control-cli repos
 ```
 
 Или классический venv:
@@ -148,7 +180,8 @@ Legacy `.env` — см. [.env.example](.env.example). Для повседнев�
 ```bash
 python -m nexus_control
 # или
-nexus-control          # после pip install -e .
+nexus-control          # TUI после install
+nexus-control-cli      # headless CLI
 # или
 python main.py
 ```

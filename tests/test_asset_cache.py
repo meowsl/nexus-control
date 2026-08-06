@@ -59,6 +59,13 @@ def test_ttl_expired(tmp_path: Path) -> None:
     data["fetched_at"] = time.time() - 10_000
     path.write_text(json.dumps(data), encoding="utf-8")
     assert load_cached_assets(tmp_path, "http://nexus", "r", ttl_seconds=60) is None
+    stale = load_cached_assets(
+        tmp_path, "http://nexus", "r", ttl_seconds=60, allow_stale=True
+    )
+    assert stale is not None
+    got, age = stale
+    assert len(got) == 1
+    assert age > 60
 
 
 def test_wrong_url_or_repo_misses(tmp_path: Path) -> None:
