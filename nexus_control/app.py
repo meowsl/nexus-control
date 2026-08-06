@@ -12,6 +12,8 @@ from textual.app import App
 from textual.binding import Binding
 
 from nexus_control.config import ConfigError, Settings, load_settings
+from nexus_control.config_io import update_toml_key
+from nexus_control.config_paths import resolve_config_path
 from nexus_control.logging_setup import attach_tui_handler, setup_logging
 from nexus_control.nexus.client import NexusClient
 from nexus_control.nexus.credentials import resolve_runtime_credentials
@@ -66,6 +68,28 @@ class NexusControlApp(App[None]):
         """Открыть клиент Nexus при необходимости (безопасно вызывать из worker-потоков)."""
         self.client.open()
         return self.client
+
+    def disable_ssl_verification(self, *, persist: bool = True) -> None:
+        """Отключить проверку TLS в runtime и (опционально) записать в config.toml.
+
+        Пересоздаёт HTTP-клиент, чтобы следующий запрос шёл с ``verify=False``.
+        """
+        import os
+
+        self.settings.nexus_verify_ssl = False
+        os.environ["NEXUS_VERIFY_SSL"] = "false"
+        if persist:
+            path = resolve_config_path()
+            update_toml_key(path, "nexus_verify_ssl", False)
+            logger.warning(
+                "Wrote nexus_verify_ssl=false to %s after TLS certificate error",
+                path,
+            )
+        else:
+            logger.warning(
+                "NEXUS_VERIFY_SSL disabled for this session after TLS certificate error"
+            )
+        self.client.close()
 
     def _forward_log(self, message: str) -> None:
         def _write() -> None:

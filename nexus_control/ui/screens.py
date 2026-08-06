@@ -31,6 +31,7 @@ from nexus_control.models import (
     TreeNode,
 )
 from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
+from nexus_control.nexus.errors import is_ssl_certificate_error
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.ui.keybindings import HELP_TEXT
 from nexus_control.ui.thread_ui import schedule_on_app
@@ -218,12 +219,18 @@ class RepositoriesScreen(Screen[None]):
             schedule_on_app(app, self._on_error, "Authentication error", str(exc))
             return
         except NexusNetworkError as exc:
-            schedule_on_app(app, self._on_error, "Network error", str(exc))
+            if app.settings.nexus_verify_ssl and is_ssl_certificate_error(exc):
+                schedule_on_app(app, self._on_ssl_certificate_error, str(exc))
+            else:
+                schedule_on_app(app, self._on_error, "Network error", str(exc))
             return
         except NexusAPIError as exc:
             schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
             return
         except Exception as exc:  # noqa: BLE001
+            if app.settings.nexus_verify_ssl and is_ssl_certificate_error(exc):
+                schedule_on_app(app, self._on_ssl_certificate_error, str(exc))
+                return
             logger.exception("Unexpected error listing repositories")
             schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
             return
@@ -241,6 +248,39 @@ class RepositoriesScreen(Screen[None]):
         self.query_one("#status", Static).update(status)
         self._render_rows()
         self._log(f"Loaded {len(repos)} repositories")
+
+    def _on_ssl_certificate_error(self, message: str) -> None:
+        """Предложить отключить проверку TLS и повторить загрузку репозиториев."""
+        self.query_one("#status", Static).update("[red]SSL/TLS certificate error[/red]")
+        self._log(f"[red]SSL certificate error:[/red] {message}")
+        body = (
+            f"{truncate(message, 240)}\n\n"
+            "Хотите ли вы отключить валидацию SSL/TLS?"
+        )
+
+        def _after(confirmed: bool | None) -> None:
+            if confirmed is not True:
+                return
+            try:
+                self.app.disable_ssl_verification(persist=True)
+            except Exception as exc:  # noqa: BLE001
+                self._on_error("Не удалось обновить конфиг", str(exc))
+                return
+            self._log(
+                "[yellow]Проверка SSL/TLS отключена "
+                "(nexus_verify_ssl=false); повторный запрос…[/yellow]"
+            )
+            self.action_refresh()
+
+        self.app.push_screen(
+            ConfirmModal(
+                "Ошибка проверки сертификата",
+                body,
+                confirm_label="Да",
+                cancel_label="Нет",
+            ),
+            _after,
+        )
 
     def _render_rows(self) -> None:
         table = self.query_one("#repo-table", DataTable)
@@ -791,7 +831,7 @@ class AssetsScreen(Screen[None]):
         )
 
         def _after(confirmed: bool | None) -> None:
-            if confirmed:
+            if confirmed is True:
                 self._start_pipeline(items, download=download, scan=scan, verify=verify)
 
         self.app.push_screen(ConfirmModal(f"Confirm {action}", body), _after)

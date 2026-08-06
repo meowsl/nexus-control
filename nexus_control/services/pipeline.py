@@ -183,6 +183,10 @@ class PipelineService:
 
         summary.finished_at = datetime.now(timezone.utc)
         if verify:
+            try:
+                self.verifier.write_scanner_reports(summary)
+            except OSError as exc:
+                logger.error("Failed to write scanner reports into verified: %s", exc)
             if any(r.verdict == Verdict.PASS for r in summary.results):
                 try:
                     self.verifier.write_manifest(summary)

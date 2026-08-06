@@ -6,6 +6,7 @@ from nexus_control.nexus.uploads import (
     build_hosted_create_payload,
     format_api_slug,
     is_uploadable_asset,
+    is_verified_local_sidecar,
     parse_maven_coordinates,
 )
 
@@ -39,6 +40,24 @@ def test_is_uploadable_by_format() -> None:
     )
     assert is_uploadable_asset("raw", "docs/readme.txt")
     assert not is_uploadable_asset("docker", "library/alpine/latest")
+
+
+def test_verified_sidecars_not_uploadable() -> None:
+    assert is_verified_local_sidecar("verified-manifest.json")
+    assert is_verified_local_sidecar("unverified_assets.txt")
+    assert is_verified_local_sidecar("grype_report.json")
+    assert is_verified_local_sidecar("trivy_report.json")
+    assert not is_verified_local_sidecar("lodash/-/lodash-4.17.21.tgz")
+    assert not is_verified_local_sidecar(
+        "org/apache/commons/commons-text/1.9/commons-text-1.9.jar"
+    )
+
+    # Даже для raw (где обычно проходит почти всё) sidecar'ы блокируются.
+    assert not is_uploadable_asset("raw", "verified-manifest.json")
+    assert not is_uploadable_asset("raw", "unverified_assets.txt")
+    assert not is_uploadable_asset("raw", "grype_report.json")
+    assert not is_uploadable_asset("npm", "trivy_report.json")
+    assert not is_uploadable_asset("maven2", "grype_report.json")
 
 
 def test_parse_maven_coordinates() -> None:

@@ -68,6 +68,19 @@ def test_report_paths_scanner_prefix(tmp_path: Path) -> None:
     assert t_txt.name.endswith(".txt")
 
 
+def test_verified_scanner_report_path(tmp_path: Path) -> None:
+    from nexus_control.utils.safe_path import verified_scanner_report_path
+
+    dest = verified_scanner_report_path(tmp_path, "my-repo", "grype")
+    assert dest.name == "grype_report.json"
+    assert dest.parent.name == "my-repo-verified"
+    assert dest.is_relative_to(tmp_path.resolve())
+
+    trivy = verified_scanner_report_path(tmp_path, "my-repo", "trivy")
+    assert trivy.name == "trivy_report.json"
+    assert trivy.parent == dest.parent
+
+
 def test_resolve_storage_path_when_dir(tmp_path: Path) -> None:
     from nexus_control.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
 
