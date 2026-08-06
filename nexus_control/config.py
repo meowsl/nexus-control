@@ -61,9 +61,11 @@ class Settings(BaseSettings):
     nexus_session_ttl: int = 3600
     nexus_cache_dir: Path = Path("~/.cache/nexus-control")
     nexus_docker_registry: str = ""
-    # Кэш списка ассетов на диск (сек). 0 = выкл. Ускоряет повторное открытие
-    # тяжёлых удалённых репозиториев; ``r`` всегда тянет свежий список.
-    assets_cache_ttl: int = 300
+    # Кэш списка ассетов (сек). 0 = выкл.
+    # Свежий кэш (возраст ≤ ttl) — открытие без сети.
+    # Просроченный — всё равно показываем сразу, затем обновление в фоне.
+    # ``r`` всегда тянет свежий список с сервера.
+    assets_cache_ttl: int = 86400
 
     # UI language: en | ru (env: NEXUS_CONTROL_LOCALE or locale)
     locale: str = Field(
@@ -79,6 +81,9 @@ class Settings(BaseSettings):
 
     # Сканеры (через запятую: grype, trivy). Можно менять в TUI (клавиша s).
     scanners: str = "grype"
+    # Параллельная обработка ассетов в pipeline (download/scan/verify).
+    # 1 = строго последовательно; 4–8 обычно оптимально для сети + I/O.
+    pipeline_workers: int = Field(default=4, ge=1)
 
     # Grype
     grype_binary: str = "grype"
@@ -251,6 +256,7 @@ class Settings(BaseSettings):
             "reports_root": str(self.reports_root),
             "verified_root": str(self.verified_root),
             "scanners": self.scanners,
+            "pipeline_workers": self.pipeline_workers,
             "grype_binary": self.grype_binary,
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,

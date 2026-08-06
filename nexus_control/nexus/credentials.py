@@ -208,13 +208,17 @@ def prompt_nexus_credentials(default_username: str = "") -> tuple[str, str]:
     return username, password
 
 
-def resolve_runtime_credentials(settings: Settings) -> Settings:
+def resolve_runtime_credentials(
+    settings: Settings,
+    *,
+    allow_prompt: bool = True,
+) -> Settings:
     """Вернуть Settings с заполненными username/password.
 
     Порядок:
     1. Активная Nexus-сессия + неистёкший encrypted vault
     2. ``NEXUS_USERNAME`` + ``NEXUS_PASSWORD`` из env / .env (CI)
-    3. Интерактивный prompt (TTY)
+    3. Интерактивный prompt (TTY), если ``allow_prompt``
     """
     vault = CredentialVault(settings.nexus_cache_dir)
     store = SessionStore(settings.nexus_cache_dir)
@@ -259,6 +263,12 @@ def resolve_runtime_credentials(settings: Settings) -> Settings:
         logger.info("Using Nexus credentials from environment / config")
         return settings.model_copy(
             update={"nexus_username": env_user, "nexus_password": env_password}
+        )
+
+    if not allow_prompt:
+        raise ConfigError(
+            "Nexus username/password are required for non-interactive use. "
+            "Set NEXUS_USERNAME/NEXUS_PASSWORD or run once in a TTY to populate the vault."
         )
 
     username, password = prompt_nexus_credentials(default_username=env_user)

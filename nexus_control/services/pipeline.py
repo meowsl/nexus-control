@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ class PipelineService:
         scan: bool = True,
         verify: bool = True,
         scanners: Sequence[str] | None = None,
+        workers: int | None = None,
         on_progress: ProgressCallback | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> PipelineSummary:
@@ -76,6 +78,10 @@ class PipelineService:
         )
         summary = PipelineSummary(repository=repository, scanners=list(enabled))
         total = max(len(items), 1)
+        worker_count = max(
+            1,
+            int(workers if workers is not None else self.settings.pipeline_workers)
+        )
 
         if scan:
             for name in enabled:
@@ -84,139 +90,146 @@ class PipelineService:
                 except Exception:  # noqa: BLE001
                     summary.scanner_versions[name] = None
 
+        # Сначала основные артефакты (параллельно), потом sidecar'ы
+        # (им нужен PASS main в summary.results).
+        mains: list[tuple[int, NexusAsset | DockerTag]] = []
+        sidecars: list[tuple[int, NexusAsset | DockerTag]] = []
         for index, item in enumerate(items):
-            if should_cancel and should_cancel():
-                summary.cancelled = True
-                logger.warning("Pipeline cancelled by user")
-                break
-
-            asset_path = item.path if isinstance(item, NexusAsset) else item.path
-            kind = AssetKind.FILE if isinstance(item, NexusAsset) else AssetKind.IMAGE
-            base = index / total
-
-            def report(stage: str, frac: float) -> None:
-                if on_progress:
-                    on_progress(asset_path, min(base + frac / total, 1.0), stage)
-
-            report("starting", 0.0)
-            dl = DownloadResult(status=DownloadStatus.PENDING)
-            scans: dict[str, ScanResult] = {}
-
-            if download:
-                report("download", 0.1)
-                if isinstance(item, DockerTag):
-                    dl = self.downloader.download_docker_tag(item)
-                else:
-                    dl = self.downloader.download_asset(item)
+            path = item.path if isinstance(item, NexusAsset) else item.path
+            if isinstance(item, NexusAsset) and is_scan_ignored_path(path):
+                sidecars.append((index, item))
             else:
-                dl = DownloadResult(
-                    status=DownloadStatus.SKIPPED_EXISTING,
-                    error="download skipped",
-                )
+                mains.append((index, item))
 
-            if dl.status == DownloadStatus.ERROR:
-                if scan:
-                    for name in enabled:
-                        scans[name] = ScanResult(
-                            status=ScanStatus.ERROR,
-                            verdict=Verdict.ERROR,
-                            scanner=name,
-                            error=f"Download failed: {dl.error}",
-                        )
-                result = AssetPipelineResult(
-                    asset_path=asset_path,
-                    kind=kind,
-                    download=dl,
-                    scans=scans,
-                )
-                summary.results.append(result)
-                report("error", 1.0)
-                continue
+        results_lock = threading.Lock()
+        progress_lock = threading.Lock()
+        done_count = 0
+        cancel_flag = threading.Event()
 
-            if scan:
-                report(f"scan:{'+'.join(enabled)}", 0.5)
-                if is_scan_ignored_path(asset_path):
-                    # Sidecar: не сканируем. В verified попадёт только если
-                    # основной артефакт PASS (см. verify ниже / companion copy).
-                    logger.debug("Skipping vulnerability scan for sidecar: %s", asset_path)
-                    for name in enabled:
-                        scans[name] = ScanResult(
-                            status=ScanStatus.SKIPPED,
-                            verdict=Verdict.SKIPPED,
-                            scanner=name,
-                        )
-                elif not dl.local_path:
-                    for name in enabled:
-                        scans[name] = ScanResult(
-                            status=ScanStatus.ERROR,
-                            verdict=Verdict.ERROR,
-                            scanner=name,
-                            error="No local path after download",
-                        )
-                else:
-                    scheme = "docker-archive" if isinstance(item, DockerTag) else None
-                    scans = self._run_scanners(
-                        enabled,
-                        repository=repository,
-                        asset_path=asset_path,
-                        local_path=dl.local_path,
-                        target_scheme=scheme,
-                    )
-            else:
-                for name in enabled:
-                    scans[name] = ScanResult(
-                        status=ScanStatus.SKIPPED,
-                        verdict=Verdict.SKIPPED,
-                        scanner=name,
-                    )
+        def report_item(asset_path: str, stage: str) -> None:
+            if on_progress is None:
+                return
+            with progress_lock:
+                # progress ≈ completed / total (грубо, но стабильно при параллелизме)
+                frac = done_count / total
+                on_progress(asset_path, min(frac, 0.99), stage)
 
-            result = AssetPipelineResult(
-                asset_path=asset_path,
-                kind=kind,
-                download=dl,
-                scans=scans,
+        def mark_done(asset_path: str) -> None:
+            nonlocal done_count
+            with progress_lock:
+                done_count += 1
+                if on_progress is not None:
+                    on_progress(asset_path, min(done_count / total, 1.0), "done")
+
+        def process_one(index: int, item: NexusAsset | DockerTag) -> AssetPipelineResult | None:
+            if cancel_flag.is_set() or (should_cancel and should_cancel()):
+                cancel_flag.set()
+                return None
+            result = self._process_item(
+                repository=repository,
+                item=item,
+                download=download,
+                scan=scan,
+                verify=verify,
+                enabled=enabled,
+                summary_results=summary.results,
+                results_lock=results_lock,
+                report=report_item,
             )
+            mark_done(result.asset_path)
+            return result
 
-            if verify and result.verdict == Verdict.PASS:
-                report("verify", 0.85)
-                apply_verify_for_result(
-                    self.verifier,
-                    repository,
-                    result,
-                    is_docker=isinstance(item, DockerTag),
-                    tag=item.tag if isinstance(item, DockerTag) else None,
-                )
-            elif (
-                verify
-                and is_scan_ignored_path(asset_path)
-                and result.verdict == Verdict.SKIPPED
-                and dl.local_path is not None
-                and dl.status != DownloadStatus.ERROR
-            ):
-                # Sidecar после PASS-артефакта: копируем только если main уже verified.
-                main_path = main_asset_path_for_sidecar(asset_path)
-                if main_path and _main_artifact_verified(summary.results, main_path):
-                    report("verify", 0.85)
-                    result.verify = self.verifier.copy_if_pass(
-                        repository=repository,
-                        asset_path=asset_path,
-                        local_path=dl.local_path,
-                        is_docker=False,
-                    )
-                else:
-                    logger.debug(
-                        "Sidecar %s not copied yet (main artifact not PASS/verified)",
-                        asset_path,
-                    )
-            elif verify and result.verdict != Verdict.PASS:
-                logger.info(
-                    "Not copying %s to verified (verdict=%s)",
-                    asset_path,
-                    result.verdict.value,
-                )
+        def run_batch(batch: list[tuple[int, NexusAsset | DockerTag]]) -> None:
+            if not batch:
+                return
+            if worker_count == 1 or len(batch) == 1:
+                for index, item in batch:
+                    if cancel_flag.is_set():
+                        break
+                    result = process_one(index, item)
+                    if result is None:
+                        summary.cancelled = True
+                        break
+                    with results_lock:
+                        summary.results.append(result)
+                return
 
-            summary.results.append(result)
-            report("done", 1.0)
+            logger.info(
+                "Pipeline parallel workers=%d items=%d (batch)",
+                worker_count,
+                len(batch),
+            )
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {
+                    pool.submit(process_one, index, item): (index, item)
+                    for index, item in batch
+                }
+                # Сохраняем относительный порядок по исходному index
+                completed: dict[int, AssetPipelineResult] = {}
+                for fut in as_completed(futures):
+                    index, _item = futures[fut]
+                    try:
+                        result = fut.result()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Pipeline worker crashed for index=%s", index)
+                        item = _item
+                        path = item.path if isinstance(item, NexusAsset) else item.path
+                        result = AssetPipelineResult(
+                            asset_path=path,
+                            kind=(
+                                AssetKind.FILE
+                                if isinstance(item, NexusAsset)
+                                else AssetKind.IMAGE
+                            ),
+                            download=DownloadResult(
+                                status=DownloadStatus.ERROR,
+                                error=str(exc),
+                            ),
+                            scans={
+                                name: ScanResult(
+                                    status=ScanStatus.ERROR,
+                                    verdict=Verdict.ERROR,
+                                    scanner=name,
+                                    error=str(exc),
+                                )
+                                for name in enabled
+                            },
+                        )
+                        mark_done(path)
+                    if result is None:
+                        summary.cancelled = True
+                        cancel_flag.set()
+                        continue
+                    completed[index] = result
+                for index, _item in batch:
+                    if index in completed:
+                        with results_lock:
+                            summary.results.append(completed[index])
+
+        run_batch(mains)
+        if not summary.cancelled:
+            if verify:
+                # Sidecar имеет смысл загружать только после успешного main.
+                # Это не меняет содержимое verified: sidecar для FAIL/ERROR
+                # артефакта туда всё равно никогда не копировался.
+                eligible_sidecars: list[tuple[int, NexusAsset | DockerTag]] = []
+                for entry in sidecars:
+                    _index, item = entry
+                    main_path = main_asset_path_for_sidecar(item.path)
+                    if main_path and _main_artifact_verified(
+                        summary.results,
+                        main_path,
+                    ):
+                        eligible_sidecars.append(entry)
+                    else:
+                        mark_done(item.path)
+                run_batch(eligible_sidecars)
+            else:
+                run_batch(sidecars)
+
+        if cancel_flag.is_set() and should_cancel and should_cancel():
+            summary.cancelled = True
+            logger.warning("Pipeline cancelled by user")
 
         summary.finished_at = datetime.now(timezone.utc)
         if verify:
@@ -234,6 +247,135 @@ class PipelineService:
             except OSError as exc:
                 logger.error("Failed to write unverified assets list: %s", exc)
         return summary
+
+    def _process_item(
+        self,
+        *,
+        repository: str,
+        item: NexusAsset | DockerTag,
+        download: bool,
+        scan: bool,
+        verify: bool,
+        enabled: Sequence[str],
+        summary_results: list[AssetPipelineResult],
+        results_lock: threading.Lock,
+        report: Callable[[str, str], None],
+    ) -> AssetPipelineResult:
+        asset_path = item.path if isinstance(item, NexusAsset) else item.path
+        kind = AssetKind.FILE if isinstance(item, NexusAsset) else AssetKind.IMAGE
+        report(asset_path, "starting")
+        scans: dict[str, ScanResult] = {}
+
+        if download:
+            report(asset_path, "download")
+            if isinstance(item, DockerTag):
+                dl = self.downloader.download_docker_tag(item)
+            else:
+                dl = self.downloader.download_asset(item)
+        else:
+            dl = DownloadResult(
+                status=DownloadStatus.SKIPPED_EXISTING,
+                error="download skipped",
+            )
+
+        if dl.status == DownloadStatus.ERROR:
+            if scan:
+                for name in enabled:
+                    scans[name] = ScanResult(
+                        status=ScanStatus.ERROR,
+                        verdict=Verdict.ERROR,
+                        scanner=name,
+                        error=f"Download failed: {dl.error}",
+                    )
+            return AssetPipelineResult(
+                asset_path=asset_path,
+                kind=kind,
+                download=dl,
+                scans=scans,
+            )
+
+        if scan:
+            report(asset_path, f"scan:{'+'.join(enabled)}")
+            if is_scan_ignored_path(asset_path):
+                logger.debug("Skipping vulnerability scan for sidecar: %s", asset_path)
+                for name in enabled:
+                    scans[name] = ScanResult(
+                        status=ScanStatus.SKIPPED,
+                        verdict=Verdict.SKIPPED,
+                        scanner=name,
+                    )
+            elif not dl.local_path:
+                for name in enabled:
+                    scans[name] = ScanResult(
+                        status=ScanStatus.ERROR,
+                        verdict=Verdict.ERROR,
+                        scanner=name,
+                        error="No local path after download",
+                    )
+            else:
+                scheme = "docker-archive" if isinstance(item, DockerTag) else None
+                scans = self._run_scanners(
+                    enabled,
+                    repository=repository,
+                    asset_path=asset_path,
+                    local_path=dl.local_path,
+                    target_scheme=scheme,
+                )
+        else:
+            for name in enabled:
+                scans[name] = ScanResult(
+                    status=ScanStatus.SKIPPED,
+                    verdict=Verdict.SKIPPED,
+                    scanner=name,
+                )
+
+        result = AssetPipelineResult(
+            asset_path=asset_path,
+            kind=kind,
+            download=dl,
+            scans=scans,
+        )
+
+        if verify and result.verdict == Verdict.PASS:
+            report(asset_path, "verify")
+            apply_verify_for_result(
+                self.verifier,
+                repository,
+                result,
+                is_docker=isinstance(item, DockerTag),
+                tag=item.tag if isinstance(item, DockerTag) else None,
+            )
+        elif (
+            verify
+            and is_scan_ignored_path(asset_path)
+            and result.verdict == Verdict.SKIPPED
+            and dl.local_path is not None
+            and dl.status != DownloadStatus.ERROR
+        ):
+            main_path = main_asset_path_for_sidecar(asset_path)
+            with results_lock:
+                mains_snapshot = list(summary_results)
+            if main_path and _main_artifact_verified(mains_snapshot, main_path):
+                report(asset_path, "verify")
+                result.verify = self.verifier.copy_if_pass(
+                    repository=repository,
+                    asset_path=asset_path,
+                    local_path=dl.local_path,
+                    is_docker=False,
+                )
+            else:
+                logger.debug(
+                    "Sidecar %s not copied yet (main artifact not PASS/verified)",
+                    asset_path,
+                )
+        elif verify and result.verdict != Verdict.PASS:
+            logger.info(
+                "Not copying %s to verified (verdict=%s)",
+                asset_path,
+                result.verdict.value,
+            )
+
+        return result
 
     def _run_scanners(
         self,

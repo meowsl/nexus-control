@@ -634,6 +634,9 @@ class AssetsScreen(Screen[None]):
         def on_page(page: int, total: int) -> None:
             schedule_on_app(app, self._update_list_progress, page, total)
 
+        def on_revalidate_page(page: int, total: int) -> None:
+            schedule_on_app(app, self._update_revalidate_progress, page, total)
+
         try:
             app.ensure_client()
             settings = app.settings
@@ -646,15 +649,18 @@ class AssetsScreen(Screen[None]):
                 schedule_on_app(app, self._on_docker_loaded, gen, tags, tree)
                 return
 
-            if not force:
-                cached = load_cached_assets(
+            ttl = settings.assets_cache_ttl
+            revalidate = False
+            if not force and ttl > 0:
+                fresh = load_cached_assets(
                     settings.nexus_cache_dir,
                     settings.nexus_url,
                     self.repository.name,
-                    ttl_seconds=settings.assets_cache_ttl,
+                    ttl_seconds=ttl,
+                    allow_stale=False,
                 )
-                if cached is not None:
-                    assets, cache_age = cached
+                if fresh is not None:
+                    assets, cache_age = fresh
                     if gen != self._load_gen:
                         return
                     schedule_on_app(app, self._set_list_stage, _("Building tree…"))
@@ -670,9 +676,61 @@ class AssetsScreen(Screen[None]):
                     )
                     return
 
-            # Потоковая подгрузка: UI оживает с первой страницы, остальное в фоне.
+                stale = load_cached_assets(
+                    settings.nexus_cache_dir,
+                    settings.nexus_url,
+                    self.repository.name,
+                    ttl_seconds=ttl,
+                    allow_stale=True,
+                )
+                if stale is not None:
+                    assets, cache_age = stale
+                    if gen != self._load_gen:
+                        return
+                    schedule_on_app(app, self._set_list_stage, _("Building tree…"))
+                    tree = build_asset_tree(assets, root_name=self.repository.name)
+                    schedule_on_app(
+                        app,
+                        self._on_assets_loaded,
+                        gen,
+                        assets,
+                        tree,
+                        True,
+                        cache_age,
+                    )
+                    schedule_on_app(
+                        app,
+                        self._log,
+                        _(
+                            "Cache is {age}s old — refreshing from Nexus in background…",
+                            age=int(cache_age),
+                        ),
+                    )
+                    revalidate = True
+
+            if revalidate:
+                # Фон: не сбрасываем дерево; по готовности подменим целиком.
+                assets = app.client.list_assets(
+                    self.repository.name,
+                    on_page=on_revalidate_page,
+                )
+                if gen != self._load_gen:
+                    return
+                if ttl > 0:
+                    save_cached_assets(
+                        settings.nexus_cache_dir,
+                        settings.nexus_url,
+                        self.repository.name,
+                        assets,
+                    )
+                schedule_on_app(app, self._set_list_stage, _("Building tree…"))
+                tree = build_asset_tree(assets, root_name=self.repository.name)
+                schedule_on_app(app, self._on_assets_revalidated, gen, assets, tree)
+                return
+
+            # Первичная / принудительная загрузка: потоковый UI.
             schedule_on_app(app, self._on_listing_started, gen)
-            assets: list[NexusAsset] = []
+            assets = []
             pending: list[NexusAsset] = []
             last_sched = 0.0
             page_number = 0
@@ -706,7 +764,7 @@ class AssetsScreen(Screen[None]):
                     max(page_number, 1),
                     len(assets),
                 )
-            if settings.assets_cache_ttl > 0:
+            if ttl > 0:
                 save_cached_assets(
                     settings.nexus_cache_dir,
                     settings.nexus_url,
@@ -742,6 +800,21 @@ class AssetsScreen(Screen[None]):
         self.query_one("#job-label", Label).update(
             _("Listing assets… {count} (page {page})", count=total, page=page)
         )
+
+    def _update_revalidate_progress(self, page: int, total: int) -> None:
+        """Фоновое обновление кэша — не трогаем дерево, только прогресс."""
+        now = time.monotonic()
+        if now - self._list_progress_last_ui < 0.25 and page > 1:
+            return
+        self._list_progress_last_ui = now
+        self.query_one("#job-label", Label).update(
+            _(
+                "Background refresh… {count} (page {page})",
+                count=total,
+                page=page,
+            )
+        )
+        self.query_one("#job-progress", ProgressBar).update(total=None)
 
     def _end_list_progress(self, error: bool = False) -> None:
         self._loading = False
@@ -847,6 +920,31 @@ class AssetsScreen(Screen[None]):
         self._populate_tree(view)
         self._update_status_bar()
         self._end_list_progress()
+        self.query_one("#job-label", Label).update(
+            _("Ready — {count} assets", count=len(assets))
+        )
+
+    def _on_assets_revalidated(
+        self,
+        gen: int,
+        assets: list[NexusAsset],
+        tree: TreeNode,
+    ) -> None:
+        """Подменить дерево после фонового обновления кэша (метки по возможности сохранить)."""
+        if gen != self._load_gen:
+            return
+        old_marks = set(self._marked)
+        self._flat_assets = assets
+        self._docker_tags = []
+        self._root_tree = tree
+        self._marked = {
+            key for key in old_marks if self._find_node_by_mark_key(key) is not None
+        }
+        self._log(_("Background refresh done — {count} assets", count=len(assets)))
+        view = filter_tree(tree, self._filter) if self._filter else tree
+        self._populate_tree(view)
+        self._update_status_bar()
+        self.query_one("#job-progress", ProgressBar).update(total=100, progress=100)
         self.query_one("#job-label", Label).update(
             _("Ready — {count} assets", count=len(assets))
         )

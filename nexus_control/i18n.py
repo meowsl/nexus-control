@@ -88,6 +88,15 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Loaded {count} assets from cache ({age}s old)": (
             "Загружено ассетов из кэша: {count} (возраст {age} с)"
         ),
+        "Cache is {age}s old — refreshing from Nexus in background…": (
+            "Кэш устарел ({age} с) — обновление из Nexus в фоне…"
+        ),
+        "Background refresh… {count} (page {page})": (
+            "Фоновое обновление… {count} (стр. {page})"
+        ),
+        "Background refresh done — {count} assets": (
+            "Фоновое обновление готово — ассетов: {count}"
+        ),
         "Failed to load assets": "Не удалось загрузить ассеты",
         "Repository is empty (no assets).": "Репозиторий пуст (нет ассетов).",
         "Loaded {count} assets": "Загружено ассетов: {count}",

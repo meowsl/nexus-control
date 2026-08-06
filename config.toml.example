@@ -13,10 +13,15 @@ locale = "ru"
 # nexus_timeout = 60.0
 # nexus_session_ttl = 3600
 # nexus_docker_registry = "localhost:8082"
-# Кэш списка ассетов (сек); 0 = отключить. Refresh (r) всегда с сервера.
-# assets_cache_ttl = 300
+# Кэш списка ассетов (сек); 0 = выкл.
+# Свежий кэш → мгновенно без сети; просроченный → показать сразу + обновить в фоне.
+# Refresh (r) всегда с сервера. По умолчанию 86400 (сутки).
+# assets_cache_ttl = 86400
 
 # scanners = "grype"          # или "trivy", или "grype,trivy"
+# Параллельная обработка ассетов (download/scan/verify). 1 = последовательно.
+# CLI: --workers N. Для чистой сети обычно 4–8; сканеры CPU-bound — не раздувайте.
+# pipeline_workers = 4
 # download_root = "~/nexus-control/downloads"
 # reports_root = "~/nexus-control/reports"
 # verified_root = "~/nexus-control"
