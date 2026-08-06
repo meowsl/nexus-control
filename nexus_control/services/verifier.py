@@ -15,7 +15,13 @@ from nexus_control.models import (
     Verdict,
     VerifyResult,
 )
-from nexus_control.utils.fs import copy_file, ensure_dir, prepare_asset_destination, read_json, write_json
+from nexus_control.utils.fs import (
+    copy_file,
+    ensure_dir,
+    prepare_asset_destination,
+    read_json,
+    write_json
+)
 from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_verified_path,
