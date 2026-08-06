@@ -25,6 +25,36 @@ SEVERITY_MAP = {
 
 KNOWN_SCANNERS = ("grype", "trivy")
 
+# Checksum / signature sidecars — CVE-сканеры не запускаем; в verified копируем
+# только вместе с PASS-артефактом (см. pipeline / verifier).
+SCAN_IGNORE_SUFFIXES = (".md5", ".sha1", ".sha256", ".sha512", ".asc")
+
+
+def is_scan_ignored_path(asset_path: str) -> bool:
+    """True для checksum/signature sidecar'ов (``.md5``, ``.sha1``, …, ``.asc``)."""
+    name = Path(str(asset_path).replace("\\", "/")).name.lower()
+    return any(name.endswith(suffix) for suffix in SCAN_IGNORE_SUFFIXES)
+
+
+def main_asset_path_for_sidecar(asset_path: str) -> str | None:
+    """Если ``asset_path`` — sidecar, вернуть путь основного файла; иначе ``None``."""
+    text = str(asset_path).replace("\\", "/")
+    lower = text.lower()
+    for suffix in SCAN_IGNORE_SUFFIXES:
+        if lower.endswith(suffix):
+            return text[: -len(suffix)]
+    return None
+
+
+def iter_local_companion_sidecars(local_path: Path) -> list[Path]:
+    """Локальные ``{name}.md5`` / ``.sha1`` / … рядом с артефактом."""
+    found: list[Path] = []
+    for suffix in SCAN_IGNORE_SUFFIXES:
+        candidate = local_path.parent / f"{local_path.name}{suffix}"
+        if candidate.is_file():
+            found.append(candidate)
+    return found
+
 
 def normalize_severity(value: str | None) -> Severity:
     if not value:

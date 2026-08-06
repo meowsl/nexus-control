@@ -24,7 +24,12 @@ from nexus_control.models import (
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.grype_scanner import GrypeScanner
-from nexus_control.services.scan_common import KNOWN_SCANNERS, parse_scanner_names
+from nexus_control.services.scan_common import (
+    KNOWN_SCANNERS,
+    is_scan_ignored_path,
+    main_asset_path_for_sidecar,
+    parse_scanner_names,
+)
 from nexus_control.services.trivy_scanner import TrivyScanner
 from nexus_control.services.verifier import Verifier, apply_verify_for_result
 
@@ -130,7 +135,17 @@ class PipelineService:
 
             if scan:
                 report(f"scan:{'+'.join(enabled)}", 0.5)
-                if not dl.local_path:
+                if is_scan_ignored_path(asset_path):
+                    # Sidecar: не сканируем. В verified попадёт только если
+                    # основной артефакт PASS (см. verify ниже / companion copy).
+                    logger.debug("Skipping vulnerability scan for sidecar: %s", asset_path)
+                    for name in enabled:
+                        scans[name] = ScanResult(
+                            status=ScanStatus.SKIPPED,
+                            verdict=Verdict.SKIPPED,
+                            scanner=name,
+                        )
+                elif not dl.local_path:
                     for name in enabled:
                         scans[name] = ScanResult(
                             status=ScanStatus.ERROR,
@@ -171,6 +186,28 @@ class PipelineService:
                     is_docker=isinstance(item, DockerTag),
                     tag=item.tag if isinstance(item, DockerTag) else None,
                 )
+            elif (
+                verify
+                and is_scan_ignored_path(asset_path)
+                and result.verdict == Verdict.SKIPPED
+                and dl.local_path is not None
+                and dl.status != DownloadStatus.ERROR
+            ):
+                # Sidecar после PASS-артефакта: копируем только если main уже verified.
+                main_path = main_asset_path_for_sidecar(asset_path)
+                if main_path and _main_artifact_verified(summary.results, main_path):
+                    report("verify", 0.85)
+                    result.verify = self.verifier.copy_if_pass(
+                        repository=repository,
+                        asset_path=asset_path,
+                        local_path=dl.local_path,
+                        is_docker=False,
+                    )
+                else:
+                    logger.debug(
+                        "Sidecar %s not copied yet (main artifact not PASS/verified)",
+                        asset_path,
+                    )
             elif verify and result.verdict != Verdict.PASS:
                 logger.info(
                     "Not copying %s to verified (verdict=%s)",
@@ -246,3 +283,17 @@ class PipelineService:
                     )
         # Стабильный порядок ключей как в enabled
         return {name: results[name] for name in enabled if name in results}
+
+
+def _main_artifact_verified(
+    results: Sequence[AssetPipelineResult],
+    main_asset_path: str,
+) -> bool:
+    """True, если основной артефакт уже PASS и скопирован (или уже был) в verified."""
+    for result in results:
+        if result.asset_path != main_asset_path:
+            continue
+        if result.verdict != Verdict.PASS:
+            return False
+        return bool(result.verify.copied or result.verify.skipped_existing)
+    return False
