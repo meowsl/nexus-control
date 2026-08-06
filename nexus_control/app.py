@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import threading
 from typing import Any
@@ -14,10 +15,19 @@ from textual.binding import Binding
 from nexus_control.config import ConfigError, Settings, load_settings
 from nexus_control.config_io import update_toml_key
 from nexus_control.config_paths import resolve_config_path
+from nexus_control.i18n import _, set_locale, toggle_locale
 from nexus_control.logging_setup import attach_tui_handler, setup_logging
 from nexus_control.nexus.client import NexusClient
 from nexus_control.nexus.credentials import resolve_runtime_credentials
-from nexus_control.ui.screens import RepositoriesScreen
+from nexus_control.ui.keybindings import (
+    app_bindings,
+    apply_bindings,
+    asset_bindings,
+    asset_tree_extra_bindings,
+    refresh_class_bindings,
+    repo_bindings,
+)
+from nexus_control.ui.screens import AssetsScreen, AssetTree, RepositoriesScreen
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +46,7 @@ class NexusControlApp(App[None]):
     }
     """
 
-    BINDINGS = [
-        Binding("ctrl+c", "quit", "Выход", show=False),
-    ]
+    BINDINGS = app_bindings()
 
     def __init__(self, settings: Settings) -> None:
         super().__init__()
@@ -74,8 +82,6 @@ class NexusControlApp(App[None]):
 
         Пересоздаёт HTTP-клиент, чтобы следующий запрос шёл с ``verify=False``.
         """
-        import os
-
         self.settings.nexus_verify_ssl = False
         os.environ["NEXUS_VERIFY_SSL"] = "false"
         if persist:
@@ -90,6 +96,56 @@ class NexusControlApp(App[None]):
                 "NEXUS_VERIFY_SSL disabled for this session after TLS certificate error"
             )
         self.client.close()
+
+    def action_toggle_locale(self) -> None:
+        """Переключить en ↔ ru, сохранить в конфиг и обновить Footer."""
+        new_locale = toggle_locale()
+        self.settings.locale = new_locale
+        os.environ["NEXUS_CONTROL_LOCALE"] = new_locale
+        try:
+            update_toml_key(resolve_config_path(), "locale", new_locale)
+        except OSError as exc:
+            logger.warning("Could not persist locale=%s: %s", new_locale, exc)
+
+        refresh_class_bindings(NexusControlApp, app_bindings)
+        refresh_class_bindings(RepositoriesScreen, repo_bindings)
+        refresh_class_bindings(AssetsScreen, asset_bindings)
+
+        def _tree_factory() -> list[Binding]:
+            # Tree.BINDINGS + mark; полный список нельзя легко восстановить —
+            # AssetTree хранит только extra; пересоберём как при создании класса.
+            from textual.widgets import Tree
+
+            base = [b for b in Tree.BINDINGS if getattr(b, "key", None) != "space"]
+            return [*base, *asset_tree_extra_bindings()]
+
+        refresh_class_bindings(AssetTree, _tree_factory)
+
+        apply_bindings(self, app_bindings)
+        for screen in self.screen_stack:
+            factory = getattr(screen, "bindings_factory", None)
+            if callable(factory):
+                apply_bindings(screen, factory)
+            # AssetTree внутри AssetsScreen
+            try:
+                tree = screen.query_one("#asset-tree", AssetTree)
+                apply_bindings(tree, _tree_factory)
+            except Exception:  # noqa: BLE001
+                pass
+            refresh_ui = getattr(screen, "refresh_locale_ui", None)
+            if callable(refresh_ui):
+                try:
+                    refresh_ui()
+                except Exception:  # noqa: BLE001
+                    logger.debug("refresh_locale_ui failed on %s", type(screen).__name__)
+
+        msg = _("Language: {locale}", locale=new_locale)
+        try:
+            screen = self.screen
+            log = screen.query_one("#log")
+            log.write(f"[green]{msg}[/green]")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            self.notify(msg)
 
     def _forward_log(self, message: str) -> None:
         def _write() -> None:
@@ -126,6 +182,7 @@ def run_app(settings: Settings | None = None) -> None:
     """Загрузить конфигурацию, разрешить credentials и запустить TUI."""
     try:
         cfg = settings or load_settings()
+        set_locale(cfg.locale)
         # Prompt / vault / env — до старта Textual, пока есть TTY.
         if settings is None:
             cfg = resolve_runtime_credentials(cfg)
@@ -140,6 +197,13 @@ def run_app(settings: Settings | None = None) -> None:
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+    # Ещё раз после credentials (на случай если locale менялся).
+    set_locale(cfg.locale)
+    # Пересобрать class bindings до создания экранов (если import был с другим locale).
+    refresh_class_bindings(NexusControlApp, app_bindings)
+    refresh_class_bindings(RepositoriesScreen, repo_bindings)
+    refresh_class_bindings(AssetsScreen, asset_bindings)
 
     setup_logging(cfg.log_level, cfg.log_file, password=cfg.nexus_password)
     app = NexusControlApp(cfg)

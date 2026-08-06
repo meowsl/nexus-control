@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from textual import on, work
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
@@ -33,7 +32,13 @@ from nexus_control.models import (
 from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_control.nexus.errors import is_ssl_certificate_error
 from nexus_control.services.pipeline import PipelineService
-from nexus_control.ui.keybindings import HELP_TEXT
+from nexus_control.i18n import _
+from nexus_control.ui.keybindings import (
+    asset_bindings,
+    asset_tree_extra_bindings,
+    help_text,
+    repo_bindings,
+)
 from nexus_control.ui.thread_ui import schedule_on_app
 from nexus_control.ui.widgets import (
     ConfirmModal,
@@ -78,7 +83,7 @@ class AssetTree(Tree[TreeNode]):
 
     BINDINGS = [
         *[b for b in Tree.BINDINGS if getattr(b, "key", None) != "space"],
-        Binding("space", "toggle_mark", "Отметить", show=False),
+        *asset_tree_extra_bindings(),
     ]
 
     def action_toggle_mark(self) -> None:
@@ -90,15 +95,8 @@ class AssetTree(Tree[TreeNode]):
 class RepositoriesScreen(Screen[None]):
     """Первый экран: просмотр репозиториев Nexus."""
 
-    BINDINGS = [
-        Binding("q", "app.quit", "Выход"),
-        Binding("r", "refresh", "Обновить"),
-        Binding("slash", "search", "Фильтр", priority=True),
-        Binding("enter", "open_repo", "Открыть", show=True),
-        Binding("L", "logout", "Logout"),
-        Binding("question_mark", "help", "Справка"),
-        Binding("escape", "close_search", "Закрыть фильтр", show=False, priority=True),
-    ]
+    BINDINGS = repo_bindings()
+    bindings_factory = staticmethod(repo_bindings)
 
     CSS = """
     RepositoriesScreen #status {
@@ -128,14 +126,15 @@ class RepositoriesScreen(Screen[None]):
     def __init__(self) -> None:
         super().__init__()
         self._repos: list[Repository] = []
+        self._repos_loaded = False
         self._filter = ""
         self._ui_app: NexusControlApp | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("Connecting…", id="status")
+        yield Static(_("Connecting…"), id="status")
         with Vertical(id="filter-row"):
-            yield Input(placeholder="Filter repositories…", id="repo-filter")
+            yield Input(placeholder=_("Filter repositories…"), id="repo-filter")
         yield DataTable(id="repo-table", zebra_stripes=True)
         yield RichLog(id="log", highlight=True, markup=True, max_lines=500)
         yield Footer()
@@ -144,7 +143,14 @@ class RepositoriesScreen(Screen[None]):
         self._ui_app = self.app
         table = self.query_one("#repo-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("Name", "Format", "Type", "Support", "URL", "Attributes")
+        table.add_columns(
+            _("Name"),
+            _("Format"),
+            _("Type"),
+            _("Support"),
+            _("URL"),
+            _("Attributes"),
+        )
         # Скрытый Input иначе перехватывает фокус и «съедает» клавиши экрана.
         self.query_one("#repo-filter", Input).can_focus = False
         self.query_one("#log", RichLog).can_focus = False
@@ -156,7 +162,7 @@ class RepositoriesScreen(Screen[None]):
         return super().app  # type: ignore[return-value]
 
     def action_help(self) -> None:
-        self.app.push_screen(HelpModal(HELP_TEXT))
+        self.app.push_screen(HelpModal(help_text()))
 
     def action_logout(self) -> None:
         """Сбросить Nexus-сессию и encrypted credentials, затем выйти."""
@@ -204,7 +210,7 @@ class RepositoriesScreen(Screen[None]):
 
     def action_refresh(self) -> None:
         self._ui_app = self.app
-        self.query_one("#status", Static).update("Loading repositories…")
+        self.query_one("#status", Static).update(_("Loading repositories…"))
         self._load_repos()
 
     @work(thread=True, exclusive=True)
@@ -216,46 +222,74 @@ class RepositoriesScreen(Screen[None]):
             app.ensure_client()
             repos = app.client.list_repositories()
         except NexusAuthError as exc:
-            schedule_on_app(app, self._on_error, "Authentication error", str(exc))
+            schedule_on_app(app, self._on_error, _("Authentication error"), str(exc))
             return
         except NexusNetworkError as exc:
             if app.settings.nexus_verify_ssl and is_ssl_certificate_error(exc):
                 schedule_on_app(app, self._on_ssl_certificate_error, str(exc))
             else:
-                schedule_on_app(app, self._on_error, "Network error", str(exc))
+                schedule_on_app(app, self._on_error, _("Network error"), str(exc))
             return
         except NexusAPIError as exc:
-            schedule_on_app(app, self._on_error, "Nexus API error", str(exc))
+            schedule_on_app(app, self._on_error, _("Nexus API error"), str(exc))
             return
         except Exception as exc:  # noqa: BLE001
             if app.settings.nexus_verify_ssl and is_ssl_certificate_error(exc):
                 schedule_on_app(app, self._on_ssl_certificate_error, str(exc))
                 return
             logger.exception("Unexpected error listing repositories")
-            schedule_on_app(app, self._on_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._on_error, _("Unexpected error"), str(exc))
             return
         schedule_on_app(app, self._on_repos_loaded, repos)
 
     def _on_repos_loaded(self, repos: list[Repository]) -> None:
         self._repos = repos
-        session = self.app.client.session
-        status = (
-            f"Connected to {self.app.settings.nexus_url} as "
-            f"{self.app.settings.nexus_username} — {len(repos)} repositories"
+        self._repos_loaded = True
+        self._update_connection_status()
+        self._render_rows()
+        self._log(_("Loaded {count} repositories", count=len(repos)))
+
+    def _update_connection_status(self) -> None:
+        """Обновить верхнюю статус-строку (с учётом текущей локали)."""
+        if not self._repos_loaded:
+            self.query_one("#status", Static).update(_("Connecting…"))
+            return
+        status = _(
+            "Connected to {url} as {user} — {count} repositories",
+            url=self.app.settings.nexus_url,
+            user=self.app.settings.nexus_username,
+            count=len(self._repos),
         )
+        session = self.app.client.session
         if session:
             status += f" | session until {session.expires_at}"
         self.query_one("#status", Static).update(status)
+
+    def refresh_locale_ui(self) -> None:
+        """Перерисовать локализуемые виджеты после смены языка."""
+        self.query_one("#repo-filter", Input).placeholder = _("Filter repositories…")
+        table = self.query_one("#repo-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns(
+            _("Name"),
+            _("Format"),
+            _("Type"),
+            _("Support"),
+            _("URL"),
+            _("Attributes"),
+        )
         self._render_rows()
-        self._log(f"Loaded {len(repos)} repositories")
+        self._update_connection_status()
 
     def _on_ssl_certificate_error(self, message: str) -> None:
         """Предложить отключить проверку TLS и повторить загрузку репозиториев."""
-        self.query_one("#status", Static).update("[red]SSL/TLS certificate error[/red]")
-        self._log(f"[red]SSL certificate error:[/red] {message}")
+        self.query_one("#status", Static).update(
+            f"[red]{_('SSL/TLS certificate error')}[/red]"
+        )
+        self._log(f"[red]{_('SSL certificate error:')}[/red] {message}")
         body = (
             f"{truncate(message, 240)}\n\n"
-            "Хотите ли вы отключить валидацию SSL/TLS?"
+            f"{_('Do you want to disable SSL/TLS validation?')}"
         )
 
         def _after(confirmed: bool | None) -> None:
@@ -264,20 +298,23 @@ class RepositoriesScreen(Screen[None]):
             try:
                 self.app.disable_ssl_verification(persist=True)
             except Exception as exc:  # noqa: BLE001
-                self._on_error("Не удалось обновить конфиг", str(exc))
+                self._on_error(_("Failed to update config"), str(exc))
                 return
             self._log(
-                "[yellow]Проверка SSL/TLS отключена "
-                "(nexus_verify_ssl=false); повторный запрос…[/yellow]"
+                "[yellow]"
+                + _(
+                    "SSL/TLS verification disabled (nexus_verify_ssl=false); retrying…"
+                )
+                + "[/yellow]"
             )
             self.action_refresh()
 
         self.app.push_screen(
             ConfirmModal(
-                "Ошибка проверки сертификата",
+                _("Certificate verification error"),
                 body,
-                confirm_label="Да",
-                cancel_label="Нет",
+                confirm_label=_("Yes"),
+                cancel_label=_("No"),
             ),
             _after,
         )
@@ -337,23 +374,8 @@ class RepositoriesScreen(Screen[None]):
 class AssetsScreen(Screen[None]):
     """Просмотр артефактов репозитория в виде дерева; download / verify."""
 
-    BINDINGS = [
-        Binding("escape", "escape", "Назад", priority=True),
-        Binding("q", "back", "Назад"),
-        Binding("r", "refresh", "Обновить"),
-        Binding("slash", "search", "Фильтр", priority=True),
-        Binding("enter", "toggle_node", "Раскрыть"),
-        Binding("space", "toggle_mark", "Отметить", show=False),
-        Binding("u", "clear_marks", "Снять отметки"),
-        Binding("d", "download_selected", "Скачать"),
-        Binding("v", "verify_selected", "Verify"),
-        Binding("D", "download_all", "Скачать всё"),
-        Binding("V", "verify_all", "Verify всё"),
-        Binding("o", "open_report", "Отчёт"),
-        Binding("s", "scanner_settings", "Сканеры"),
-        Binding("question_mark", "help", "Справка"),
-        Binding("c", "cancel_job", "Отмена", show=False),
-    ]
+    BINDINGS = asset_bindings()
+    bindings_factory = staticmethod(asset_bindings)
 
     CSS = """
     AssetsScreen #status {
@@ -413,12 +435,12 @@ class AssetsScreen(Screen[None]):
         yield Header(show_clock=True)
         yield Static(id="status")
         with Vertical(id="filter-row"):
-            yield Input(placeholder="Filter assets…", id="asset-filter")
+            yield Input(placeholder=_("Filter assets…"), id="asset-filter")
         with Horizontal(id="main"):
             yield AssetTree(self.repository.name, id="asset-tree")
             with Vertical(id="side"):
                 with Vertical(id="progress"):
-                    yield Label("Idle", id="job-label")
+                    yield Label(_("Idle"), id="job-label")
                     yield ProgressBar(total=100, id="job-progress", show_eta=False)
                 yield RichLog(id="log", highlight=True, markup=True, max_lines=1000)
         yield Footer()
@@ -452,7 +474,7 @@ class AssetsScreen(Screen[None]):
         self.action_back()
 
     def action_help(self) -> None:
-        self.app.push_screen(HelpModal(HELP_TEXT))
+        self.app.push_screen(HelpModal(help_text()))
 
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
@@ -513,19 +535,19 @@ class AssetsScreen(Screen[None]):
         self._marked.clear()
         self._refresh_tree_labels()
         self._update_status_bar()
-        self._log("[dim]Selection cleared[/dim]")
+        self._log(f"[dim]{_('Selection cleared')}[/dim]")
 
     def action_cancel_job(self) -> None:
         if self._busy:
             self._cancel = True
-            self._log("[yellow]Cancel requested…[/yellow]")
+            self._log(f"[yellow]{_('Cancel requested…')}[/yellow]")
 
     def action_refresh(self) -> None:
         if self._busy:
-            self._log("[yellow]Busy; wait for the current job.[/yellow]")
+            self._log(f"[yellow]{_('Busy; wait for the current job.')}[/yellow]")
             return
         self._ui_app = self.app
-        self._log(f"Loading assets for {self.repository.name}…")
+        self._log(_("Loading assets for {name}…", name=self.repository.name))
         self._load_assets()
 
     @work(thread=True, exclusive=True)
@@ -544,10 +566,10 @@ class AssetsScreen(Screen[None]):
                 tree = build_asset_tree(assets, root_name=self.repository.name)
                 schedule_on_app(app, self._on_assets_loaded, assets, tree)
         except NexusAPIError as exc:
-            schedule_on_app(app, self._show_error, "Failed to load assets", str(exc))
+            schedule_on_app(app, self._show_error, _("Failed to load assets"), str(exc))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Asset load failed")
-            schedule_on_app(app, self._show_error, "Unexpected error", str(exc))
+            schedule_on_app(app, self._show_error, _("Unexpected error"), str(exc))
 
     def _on_assets_loaded(self, assets: list[NexusAsset], tree: TreeNode) -> None:
         self._flat_assets = assets
@@ -555,13 +577,16 @@ class AssetsScreen(Screen[None]):
         self._root_tree = tree
         self._marked.clear()
         if not assets:
-            self._log("[yellow]Repository is empty (no assets).[/yellow]")
+            self._log(f"[yellow]{_('Repository is empty (no assets).')}[/yellow]")
         else:
-            self._log(f"Loaded {len(assets)} assets")
+            self._log(_("Loaded {count} assets", count=len(assets)))
         if self.repository.support_level == "partially_supported":
             self._log(
-                "[yellow]Repository format is only partially supported; "
-                "tree is built from asset paths best-effort.[/yellow]"
+                "[yellow]"
+                + _(
+                    "Unsupported repository: asset tree is built from paths best-effort."
+                )
+                + "[/yellow]"
             )
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
@@ -574,12 +599,17 @@ class AssetsScreen(Screen[None]):
         self._marked.clear()
         if not tags:
             self._log(
-                "[yellow]No docker tags found. If the docker connector port is "
-                "not exposed, set NEXUS_DOCKER_REGISTRY=host:port "
-                "in config.toml or env.[/yellow]"
+                "[yellow]"
+                + _(
+                    "Docker registry not exposed; set NEXUS_DOCKER_REGISTRY=host:port "
+                    "in config.toml or env."
+                )
+                + "[/yellow]"
             )
         else:
-            self._log(f"Loaded {len(tags)} docker tags (adapter view)")
+            self._log(
+                _("Loaded {count} docker tags (adapter view)", count=len(tags))
+            )
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
         self._update_status_bar()
@@ -670,6 +700,21 @@ class AssetsScreen(Screen[None]):
             f"scanners={scanners}{sel}"
         )
 
+    def refresh_locale_ui(self) -> None:
+        """Перерисовать локализуемые виджеты после смены языка."""
+        try:
+            self.query_one("#asset-filter", Input).placeholder = _("Filter assets…")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            label = self.query_one("#job-label", Label)
+            # Не затирать активный прогресс pipeline.
+            if not self._busy:
+                label.update(_("Idle"))
+        except Exception:  # noqa: BLE001
+            pass
+        self._update_status_bar()
+
     # ---- вспомогательные функции выбора -------------------------------------------------
     def _selected_domain_node(self) -> TreeNode | None:
         tree = self.query_one("#asset-tree", AssetTree)
@@ -738,7 +783,7 @@ class AssetsScreen(Screen[None]):
     # ---- действия -----------------------------------------------------------
     def action_download_selected(self) -> None:
         items = self._items_for_action()
-        label = "download marked" if self._marked else "download"
+        label = _("download marked") if self._marked else _("download")
         self._confirm_and_run(
             label,
             items,
@@ -749,7 +794,7 @@ class AssetsScreen(Screen[None]):
 
     def action_verify_selected(self) -> None:
         items = self._items_for_action()
-        label = "verify marked" if self._marked else "verify"
+        label = _("verify marked") if self._marked else _("verify")
         self._confirm_and_run(
             label,
             items,
@@ -760,7 +805,7 @@ class AssetsScreen(Screen[None]):
 
     def action_download_all(self) -> None:
         self._confirm_and_run(
-            "download ALL",
+            _("download ALL"),
             self._all_items(),
             download=True,
             scan=False,
@@ -769,7 +814,7 @@ class AssetsScreen(Screen[None]):
 
     def action_verify_all(self) -> None:
         self._confirm_and_run(
-            "verify ALL",
+            _("verify ALL"),
             self._all_items(),
             download=True,
             scan=True,
@@ -779,7 +824,7 @@ class AssetsScreen(Screen[None]):
     def action_open_report(self) -> None:
         if self._last_summary is None:
             self.app.push_screen(
-                MessageModal("Report", "No report yet. Run verify first.")
+                MessageModal(_("Report"), _("No report yet. Run verify first."))
             )
             return
         self.app.push_screen(ReportModal(self._last_summary))
@@ -789,7 +834,7 @@ class AssetsScreen(Screen[None]):
             if chosen:
                 self._enabled_scanners = chosen
                 self._update_status_bar()
-                self._log(f"Scanners: {'+'.join(chosen)}")
+                self._log(_("Scanners: {names}", names="+".join(chosen)))
 
         self.app.push_screen(
             ScannerSettingsModal(self._enabled_scanners),
@@ -806,21 +851,23 @@ class AssetsScreen(Screen[None]):
         verify: bool,
     ) -> None:
         if self._busy:
-            self._log("[yellow]Another job is running.[/yellow]")
+            self._log(f"[yellow]{_('Another job is running.')}[/yellow]")
             return
         if not items:
             self.app.push_screen(
                 MessageModal(
-                    "Nothing to do",
-                    "No assets marked/selected or repository is empty.",
+                    _("Nothing to do"),
+                    _("No assets marked/selected or repository is empty."),
                 )
             )
             return
 
         settings = self.app.settings
-        marked_note = (
-            f"Marked nodes: [b]{len(self._marked)}[/b]\n" if self._marked else ""
-        )
+        marked_note = ""
+        if self._marked:
+            marked_note = (
+                f"{_('Marked nodes: {count}', count=f'[b]{len(self._marked)}[/b]')}\n"
+            )
         body = marked_note + format_confirm_body(
             action=action,
             count=len(items),
@@ -834,7 +881,10 @@ class AssetsScreen(Screen[None]):
             if confirmed is True:
                 self._start_pipeline(items, download=download, scan=scan, verify=verify)
 
-        self.app.push_screen(ConfirmModal(f"Confirm {action}", body), _after)
+        self.app.push_screen(
+            ConfirmModal(_("Confirm {action}", action=action), body),
+            _after,
+        )
 
     def _start_pipeline(
         self,
@@ -847,7 +897,7 @@ class AssetsScreen(Screen[None]):
         self._ui_app = self.app
         self._busy = True
         self._cancel = False
-        self.query_one("#job-label", Label).update("Starting…")
+        self.query_one("#job-label", Label).update(_("Starting…"))
         self.query_one("#job-progress", ProgressBar).update(progress=0)
         self._run_pipeline(items, download, scan, verify)
 
@@ -895,21 +945,34 @@ class AssetsScreen(Screen[None]):
         self._busy = False
         self._last_summary = summary
         self.query_one("#job-label", Label).update(
-            f"Done — PASS={summary.total_passed} FAIL={summary.total_failed} "
-            f"ERROR={summary.total_errors} copied={summary.total_copied}"
+            _(
+                "Done — PASS={passed} FAIL={failed} ERROR={errors} copied={copied}",
+                passed=summary.total_passed,
+                failed=summary.total_failed,
+                errors=summary.total_errors,
+                copied=summary.total_copied,
+            )
         )
         self.query_one("#job-progress", ProgressBar).update(progress=100)
         self._log(
-            f"[green]Finished[/green] scanned={summary.total_scanned} "
-            f"PASS={summary.total_passed} FAIL={summary.total_failed} "
-            f"ERROR={summary.total_errors} copied={summary.total_copied}"
+            "[green]"
+            + _(
+                "Finished scanned={scanned} PASS={passed} FAIL={failed} "
+                "ERROR={errors} copied={copied}",
+                scanned=summary.total_scanned,
+                passed=summary.total_passed,
+                failed=summary.total_failed,
+                errors=summary.total_errors,
+                copied=summary.total_copied,
+            )
+            + "[/green]"
         )
         self.app.push_screen(ReportModal(summary))
 
     def _on_pipeline_failed(self, message: str) -> None:
         self._busy = False
-        self.query_one("#job-label", Label).update("Failed")
-        self._show_error("Pipeline failed", message)
+        self.query_one("#job-label", Label).update(_("Failed"))
+        self._show_error(_("Pipeline failed"), message)
 
     def _show_error(self, title: str, message: str) -> None:
         self._log(f"[red]{title}:[/red] {message}")

@@ -8,6 +8,7 @@
 
 nexus_url = "http://localhost:8081"
 nexus_verify_ssl = true
+locale = "ru"
 # nexus_timeout = 30.0
 # nexus_session_ttl = 3600
 # nexus_docker_registry = "localhost:8082"

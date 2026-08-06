@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from nexus_control.models import PipelineSummary, Verdict
+from nexus_control.models import NexusAsset, PipelineSummary, Verdict
 from nexus_control.nexus.client import NexusAPIError, NexusClient
 from nexus_control.nexus.uploads import is_uploadable_asset
+from nexus_control.utils.hashing import local_matches_remote
 from nexus_control.utils.safe_path import sanitize_repo_name
 
 logger = logging.getLogger(__name__)
@@ -46,14 +48,44 @@ class UploadSummary:
 
 
 def verified_repo_name(source_repository: str) -> str:
-    """Имя целевого репозитория: ``<source>-verified`` (safe для Nexus)."""
-    base = sanitize_repo_name(source_repository)
-    name = f"{base}-verified"
-    return name[:200]
+    """Имя целевого репозитория по умолчанию: ``<source>-verified``."""
+    return normalize_upload_repo_name(f"{sanitize_repo_name(source_repository)}-verified")
+
+
+def normalize_upload_repo_name(name: str) -> str:
+    """Санитизировать пользовательское имя hosted-репозитория для upload."""
+    cleaned = sanitize_repo_name(name)
+    return cleaned[:200]
+
+
+def _normalize_asset_path_key(asset_path: str) -> str:
+    return str(asset_path).replace("\\", "/").lstrip("/")
+
+
+def index_remote_assets(assets: list[NexusAsset]) -> dict[str, NexusAsset]:
+    """Индекс remote-ассетов по нормализованному path (последний wins)."""
+    out: dict[str, NexusAsset] = {}
+    for asset in assets:
+        key = _normalize_asset_path_key(asset.path)
+        if key:
+            out[key] = asset
+    return out
+
+
+def should_skip_unchanged_upload(local_path: Path, remote: NexusAsset | None) -> bool:
+    """True, если remote уже есть и локальный файл совпадает (checksum/size)."""
+    if remote is None:
+        return False
+    match = local_matches_remote(
+        local_path,
+        remote.checksum,
+        file_size=remote.file_size,
+    )
+    return match is True
 
 
 class VerifiedUploader:
-    """Создать hosted ``<repo>-verified`` того же format и залить PASS-ассеты."""
+    """Создать hosted-репозиторий того же format и залить PASS-ассеты."""
 
     def __init__(self, client: NexusClient) -> None:
         self.client = client
@@ -62,9 +94,13 @@ class VerifiedUploader:
         self,
         summary: PipelineSummary,
         *,
+        target_repository: str | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> UploadSummary:
-        target = verified_repo_name(summary.repository)
+        if target_repository and target_repository.strip():
+            target = normalize_upload_repo_name(target_repository)
+        else:
+            target = verified_repo_name(summary.repository)
         source = self.client.get_repository(summary.repository)
         if source is None:
             raise NexusAPIError(
@@ -92,6 +128,22 @@ class VerifiedUploader:
         self.client.ensure_hosted(target, fmt)
         out.created_repository = not existed
 
+        remote_by_path: dict[str, NexusAsset] = {}
+        if existed:
+            try:
+                remote_by_path = index_remote_assets(self.client.list_assets(target))
+                logger.info(
+                    "Indexed %d existing asset(s) in %s for upload skip",
+                    len(remote_by_path),
+                    target,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Cannot list assets in %s for skip check (%s); uploading all",
+                    target,
+                    exc,
+                )
+
         total = max(len(candidates), 1)
         for index, result in enumerate(candidates):
             path = result.asset_path
@@ -116,6 +168,19 @@ class VerifiedUploader:
                     )
                 elif not local.is_file():
                     raise NexusAPIError(f"Verified file missing: {local}")
+                elif should_skip_unchanged_upload(
+                    local,
+                    remote_by_path.get(_normalize_asset_path_key(path)),
+                ):
+                    logger.info("Skip unchanged remote asset: %s → %s", path, target)
+                    out.results.append(
+                        UploadItemResult(
+                            asset_path=path,
+                            ok=True,
+                            skipped=True,
+                            error="already present and unchanged",
+                        )
+                    )
                 else:
                     self.client.upload_asset(target, fmt, path, local)
                     out.results.append(UploadItemResult(asset_path=path, ok=True))

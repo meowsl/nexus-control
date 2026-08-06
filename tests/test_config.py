@@ -161,6 +161,7 @@ def test_wizard_writes_config(
     path = resolve_config_path()
     answers = iter(
         [
+            "en",
             "http://wizard:8081",
             "n",
             "trivy",
@@ -173,6 +174,7 @@ def test_wizard_writes_config(
     written = run_first_run_wizard(config_path=path)
     assert written == path
     data = read_toml(path)
+    assert data["locale"] == "en"
     assert data["nexus_url"] == "http://wizard:8081"
     assert data["nexus_verify_ssl"] is False
     assert data["scanners"] == "trivy"
