@@ -59,6 +59,20 @@ def test_write_toml_permissions(xdg_home: Path) -> None:
     assert "nexus_password" not in data
 
 
+def test_update_toml_key_preserves_other_keys(xdg_home: Path) -> None:
+    from nexus_control.config_io import update_toml_key
+
+    path = resolve_config_path()
+    write_toml_atomic(
+        path,
+        {"nexus_url": "https://nexus.lab:8443", "nexus_verify_ssl": True},
+    )
+    update_toml_key(path, "nexus_verify_ssl", False)
+    data = read_toml(path)
+    assert data["nexus_url"] == "https://nexus.lab:8443"
+    assert data["nexus_verify_ssl"] is False
+
+
 def test_write_toml_strips_secrets(xdg_home: Path) -> None:
     path = resolve_config_path()
     write_toml_atomic(

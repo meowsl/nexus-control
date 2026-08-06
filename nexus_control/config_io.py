@@ -90,3 +90,11 @@ def write_toml_atomic(path: Path, data: dict[str, Any], *, mode: int = 0o600) ->
         raise
 
     logger.info("Wrote config %s", path)
+
+
+def update_toml_key(path: Path, key: str, value: Any, *, mode: int = 0o600) -> dict[str, Any]:
+    """Прочитать TOML, выставить ``key=value`` и атомарно записать. Вернуть итоговый dict."""
+    data = read_toml(path)
+    data[key] = value
+    write_toml_atomic(path, data, mode=mode)
+    return data

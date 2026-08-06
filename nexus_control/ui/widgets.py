@@ -59,11 +59,13 @@ class ConfirmModal(ModalScreen[bool]):
         body: str,
         *,
         confirm_label: str = "Confirm",
+        cancel_label: str = "Cancel",
     ) -> None:
         super().__init__()
         self._title = title
         self._body = body
         self._confirm_label = confirm_label
+        self._cancel_label = cancel_label
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -71,7 +73,7 @@ class ConfirmModal(ModalScreen[bool]):
             yield Static(self._body, id="confirm-body")
             with Horizontal(classes="buttons"):
                 yield Button(self._confirm_label, variant="primary", id="ok")
-                yield Button("Cancel", variant="default", id="cancel")
+                yield Button(self._cancel_label, variant="default", id="cancel")
 
     def on_mount(self) -> None:
         # По умолчанию фокус на Confirm; Enter активирует только focused-кнопку
