@@ -52,11 +52,13 @@ from nexus_control.ui.widgets import (
 )
 from nexus_control.utils.text import format_attrs, human_size, truncate
 from nexus_control.utils.tree_builder import (
+    annotate_counts,
     build_asset_tree,
     build_docker_tag_tree,
     collect_leaf_assets,
     empty_tree,
     filter_tree,
+    insert_asset,
 )
 
 if TYPE_CHECKING:
@@ -480,6 +482,8 @@ class AssetsScreen(Screen[None]):
         # Включённые сканеры для verify (инициализируются в on_mount из settings)
         self._enabled_scanners: list[str] = ["grype"]
         self._list_progress_last_ui = 0.0
+        self._list_annotate_last = 0.0
+        self._load_gen = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -625,6 +629,7 @@ class AssetsScreen(Screen[None]):
         app = self._ui_app
         if app is None:
             return
+        gen = self._load_gen
 
         def on_page(page: int, total: int) -> None:
             schedule_on_app(app, self._update_list_progress, page, total)
@@ -634,14 +639,13 @@ class AssetsScreen(Screen[None]):
             settings = app.settings
             if self.repository.is_docker:
                 tags = app.client.list_docker_tags(self.repository, on_page=on_page)
+                if gen != self._load_gen:
+                    return
                 schedule_on_app(app, self._set_list_stage, _("Building tree…"))
                 tree = build_docker_tag_tree(tags, root_name=self.repository.name)
-                schedule_on_app(app, self._on_docker_loaded, tags, tree)
+                schedule_on_app(app, self._on_docker_loaded, gen, tags, tree)
                 return
 
-            assets: list[NexusAsset] | None = None
-            from_cache = False
-            cache_age = 0.0
             if not force:
                 cached = load_cached_assets(
                     settings.nexus_cache_dir,
@@ -651,28 +655,65 @@ class AssetsScreen(Screen[None]):
                 )
                 if cached is not None:
                     assets, cache_age = cached
-                    from_cache = True
-
-            if assets is None:
-                assets = app.client.list_assets(self.repository.name, on_page=on_page)
-                if settings.assets_cache_ttl > 0:
-                    save_cached_assets(
-                        settings.nexus_cache_dir,
-                        settings.nexus_url,
-                        self.repository.name,
+                    if gen != self._load_gen:
+                        return
+                    schedule_on_app(app, self._set_list_stage, _("Building tree…"))
+                    tree = build_asset_tree(assets, root_name=self.repository.name)
+                    schedule_on_app(
+                        app,
+                        self._on_assets_loaded,
+                        gen,
                         assets,
+                        tree,
+                        True,
+                        cache_age,
                     )
+                    return
 
-            schedule_on_app(app, self._set_list_stage, _("Building tree…"))
-            tree = build_asset_tree(assets, root_name=self.repository.name)
-            schedule_on_app(
-                app,
-                self._on_assets_loaded,
-                assets,
-                tree,
-                from_cache,
-                cache_age,
-            )
+            # Потоковая подгрузка: UI оживает с первой страницы, остальное в фоне.
+            schedule_on_app(app, self._on_listing_started, gen)
+            assets: list[NexusAsset] = []
+            pending: list[NexusAsset] = []
+            last_sched = 0.0
+            page_number = 0
+            for page in app.client.iter_asset_pages(self.repository.name):
+                if gen != self._load_gen:
+                    return
+                page_number += 1
+                assets.extend(page)
+                pending.extend(page)
+                now = time.monotonic()
+                if page_number == 1 or now - last_sched >= 0.25:
+                    last_sched = now
+                    batch = pending
+                    pending = []
+                    schedule_on_app(
+                        app,
+                        self._on_assets_page,
+                        gen,
+                        batch,
+                        page_number,
+                        len(assets),
+                    )
+            if gen != self._load_gen:
+                return
+            if pending:
+                schedule_on_app(
+                    app,
+                    self._on_assets_page,
+                    gen,
+                    pending,
+                    max(page_number, 1),
+                    len(assets),
+                )
+            if settings.assets_cache_ttl > 0:
+                save_cached_assets(
+                    settings.nexus_cache_dir,
+                    settings.nexus_url,
+                    self.repository.name,
+                    assets,
+                )
+            schedule_on_app(app, self._on_listing_complete, gen, len(assets))
         except NexusAPIError as exc:
             schedule_on_app(app, self._show_error, _("Failed to load assets"), str(exc))
             schedule_on_app(app, self._end_list_progress, True)
@@ -682,8 +723,10 @@ class AssetsScreen(Screen[None]):
             schedule_on_app(app, self._end_list_progress, True)
 
     def _begin_list_progress(self) -> None:
+        self._load_gen += 1
         self._loading = True
         self._list_progress_last_ui = 0.0
+        self._list_annotate_last = 0.0
         self.query_one("#job-label", Label).update(_("Listing assets…"))
         self.query_one("#job-progress", ProgressBar).update(total=None, progress=0)
 
@@ -691,8 +734,8 @@ class AssetsScreen(Screen[None]):
         self.query_one("#job-label", Label).update(label)
 
     def _update_list_progress(self, page: int, total: int) -> None:
+        """Прогресс для docker / кэш-пути (без потокового дерева)."""
         now = time.monotonic()
-        # Не чаще ~6 раз/с — на localhost страницы приходят быстро.
         if now - self._list_progress_last_ui < 0.15 and page > 1:
             return
         self._list_progress_last_ui = now
@@ -709,13 +752,73 @@ class AssetsScreen(Screen[None]):
         else:
             bar.update(total=100, progress=100)
 
+    def _on_listing_started(self, gen: int) -> None:
+        if gen != self._load_gen:
+            return
+        self._flat_assets = []
+        self._docker_tags = []
+        self._root_tree = empty_tree(self.repository.name)
+        self._marked.clear()
+        self._populate_tree(self._root_tree)
+        self._update_status_bar()
+        self._log(_("Listing in background — browse as folders appear…"))
+
+    def _on_assets_page(
+        self,
+        gen: int,
+        page: list[NexusAsset],
+        page_number: int,
+        total: int,
+    ) -> None:
+        if gen != self._load_gen:
+            return
+        for asset in page:
+            insert_asset(self._root_tree, asset)
+            self._flat_assets.append(asset)
+
+        now = time.monotonic()
+        annotate_counts(self._root_tree)
+        self._list_annotate_last = now
+        self._list_progress_last_ui = now
+        self.query_one("#job-label", Label).update(
+            _("Listing assets… {count} (page {page})", count=total, page=page_number)
+        )
+        self._sync_tree_from_domain()
+        self._update_status_bar()
+
+    def _on_listing_complete(self, gen: int, count: int) -> None:
+        if gen != self._load_gen:
+            return
+        annotate_counts(self._root_tree)
+        self._sync_tree_from_domain()
+        self._update_status_bar()
+        if count == 0:
+            self._log(f"[yellow]{_('Repository is empty (no assets).')}[/yellow]")
+        else:
+            self._log(_("Loaded {count} assets", count=count))
+        if self.repository.support_level == "partially_supported":
+            self._log(
+                "[yellow]"
+                + _(
+                    "Unsupported repository: asset tree is built from paths best-effort."
+                )
+                + "[/yellow]"
+            )
+        self._end_list_progress()
+        self.query_one("#job-label", Label).update(
+            _("Ready — {count} assets", count=count)
+        )
+
     def _on_assets_loaded(
         self,
+        gen: int,
         assets: list[NexusAsset],
         tree: TreeNode,
         from_cache: bool = False,
         cache_age: float = 0.0,
     ) -> None:
+        if gen != self._load_gen:
+            return
         self._flat_assets = assets
         self._docker_tags = []
         self._root_tree = tree
@@ -748,7 +851,11 @@ class AssetsScreen(Screen[None]):
             _("Ready — {count} assets", count=len(assets))
         )
 
-    def _on_docker_loaded(self, tags: list[DockerTag], tree: TreeNode) -> None:
+    def _on_docker_loaded(
+        self, gen: int, tags: list[DockerTag], tree: TreeNode
+    ) -> None:
+        if gen != self._load_gen:
+            return
         self._docker_tags = tags
         self._flat_assets = []
         self._root_tree = tree
@@ -796,16 +903,58 @@ class AssetsScreen(Screen[None]):
         if node.is_dir:
             tui_node = parent.add(label, data=node, expand=False)
             self._node_map[id(tui_node)] = node
-            if not node.children:
-                tui_node.allow_expand = False
+            # Пока идёт листинг — пустая папка ещё может наполниться.
+            tui_node.allow_expand = bool(node.children) or self._loading
         else:
             tui_node = parent.add_leaf(label, data=node)
             self._node_map[id(tui_node)] = node
+
+    def _sync_tree_from_domain(self) -> None:
+        """Подтянуть новые узлы в TUI без сброса раскрытых веток."""
+        if self._filter:
+            view = filter_tree(self._root_tree, self._filter)
+            self._populate_tree(view)
+            return
+        tree = self.query_one("#asset-tree", AssetTree)
+        self._sync_subtree(tree.root, self._root_tree)
+
+    def _sync_subtree(self, tui_parent: TuiTreeNode[Any], domain_parent: TreeNode) -> None:
+        existing: dict[str, TuiTreeNode[Any]] = {}
+        for child in tui_parent.children:
+            data = child.data
+            if isinstance(data, TreeNode):
+                existing[data.name] = child
+
+        for domain_child in sorted(
+            domain_parent.children.values(),
+            key=lambda n: (not n.is_dir, n.name.lower()),
+        ):
+            tui_child = existing.get(domain_child.name)
+            if tui_child is None:
+                self._add_child_node(tui_parent, domain_child)
+                continue
+            # data мог устареть по identity — всегда указываем актуальный domain node
+            tui_child.data = domain_child
+            self._node_map[id(tui_child)] = domain_child
+            tui_child.set_label(self._label_for(domain_child))
+            if domain_child.is_dir:
+                tui_child.allow_expand = bool(domain_child.children) or self._loading
+                if id(tui_child) in self._tui_populated:
+                    self._sync_subtree(tui_child, domain_child)
 
     @on(Tree.NodeExpanded)
     def _on_tree_node_expanded(self, event: Tree.NodeExpanded[TreeNode]) -> None:
         tui_node = event.node
         if id(tui_node) in self._tui_populated:
+            # Повторное раскрытие во время листинга — дотянуть новых детей.
+            data = tui_node.data
+            if (
+                self._loading
+                and isinstance(data, TreeNode)
+                and data.is_dir
+                and not self._filter
+            ):
+                self._sync_subtree(tui_node, data)
             return
         data = tui_node.data
         if not isinstance(data, TreeNode) or not data.is_dir:
@@ -869,10 +1018,13 @@ class AssetsScreen(Screen[None]):
             else "  marked=0 (Space to select)"
         )
         scanners = "+".join(self._enabled_scanners) or "-"
+        listing = ""
+        if self._loading and not self.repository.is_docker:
+            listing = f"  listing={len(self._flat_assets)}…"
         self.query_one("#status", Static).update(
             f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
             f"type={self.repository.type}  support={support}  "
-            f"scanners={scanners}{sel}"
+            f"scanners={scanners}{sel}{listing}"
         )
 
     def refresh_locale_ui(self) -> None:

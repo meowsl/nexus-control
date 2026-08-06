@@ -8,6 +8,7 @@ from nexus_control.utils.tree_builder import (
     collect_leaf_assets,
     empty_tree,
     filter_tree,
+    insert_asset,
 )
 
 
@@ -83,6 +84,24 @@ def test_skips_traversal_paths() -> None:
     assert "ok" in root.children
     assert ".." not in root.children
     assert root.child_count == 1
+
+
+def test_insert_asset_matches_build_tree() -> None:
+    assets = [
+        _asset("com/example/a.jar"),
+        _asset("com/example/b.jar"),
+        _asset("org/x/c.jar"),
+    ]
+    built = build_asset_tree(assets)
+    root = empty_tree("/")
+    for asset in assets:
+        assert insert_asset(root, asset) is True
+    from nexus_control.utils.tree_builder import annotate_counts
+
+    annotate_counts(root)
+    assert set(root.children) == set(built.children)
+    assert root.child_count == built.child_count
+    assert len(collect_leaf_assets(root)) == 3
 
 
 def test_npm_package_file_and_nested_tarball() -> None:
