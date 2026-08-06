@@ -10,6 +10,45 @@ from nexus_control.utils.safe_path import (
 )
 
 
+def insert_asset(root: TreeNode, asset: NexusAsset) -> bool:
+    """Вставить один артефакт в существующее дерево.
+
+    Возвращает ``False``, если путь небезопасен / пропущен.
+    Дубликаты путей сохраняют последний артефакт.
+    Счётчики ``child_count`` не обновляет — вызывайте ``annotate_counts``.
+    """
+    try:
+        posix = normalize_asset_path(asset.path)
+    except UnsafePathError:
+        return False
+    node = root
+    parts = list(posix.parts)
+    for i, part in enumerate(parts):
+        is_last = i == len(parts) - 1
+        rel = "/".join(parts[: i + 1])
+        if part not in node.children:
+            node.children[part] = TreeNode(
+                name=part,
+                path=rel,
+                is_dir=not is_last,
+                asset=asset if is_last else None,
+            )
+        else:
+            child = node.children[part]
+            if is_last:
+                if child.is_dir and child.children:
+                    # npm и др.: есть и файл `pkg`, и вложенность `pkg/-/…`.
+                    _attach_file_into_dir(child, asset, rel)
+                else:
+                    child.is_dir = False
+                    child.asset = asset
+                    child.children.clear()
+            elif not child.is_dir:
+                _promote_file_to_dir(child)
+        node = node.children[part]
+    return True
+
+
 def build_asset_tree(
     assets: list[NexusAsset],
     *,
@@ -22,38 +61,8 @@ def build_asset_tree(
     """
     root = TreeNode(name=root_name, path="", is_dir=True)
     for asset in assets:
-        try:
-            posix = normalize_asset_path(asset.path)
-        except UnsafePathError:
-            continue
-        node = root
-        parts = list(posix.parts)
-        for i, part in enumerate(parts):
-            is_last = i == len(parts) - 1
-            rel = "/".join(parts[: i + 1])
-            if part not in node.children:
-                node.children[part] = TreeNode(
-                    name=part,
-                    path=rel,
-                    is_dir=not is_last,
-                    asset=asset if is_last else None,
-                )
-            else:
-                child = node.children[part]
-                if is_last:
-                    if child.is_dir and child.children:
-                        # npm и др.: есть и файл `pkg`, и вложенность `pkg/-/…`.
-                        # Каталог не затираем — кладём метаданные листом внутрь.
-                        _attach_file_into_dir(child, asset, rel)
-                    else:
-                        child.is_dir = False
-                        child.asset = asset
-                        child.children.clear()
-                elif not child.is_dir:
-                    # Уже есть файл на префиксе пути — повышаем до каталога.
-                    _promote_file_to_dir(child)
-            node = node.children[part]
-    _annotate_counts(root)
+        insert_asset(root, asset)
+    annotate_counts(root)
     return root
 
 
@@ -110,7 +119,7 @@ def build_docker_tag_tree(
             is_dir=False,
             docker_tag=tag,
         )
-    _annotate_counts(root)
+    annotate_counts(root)
     return root
 
 
@@ -143,7 +152,7 @@ def filter_tree(root: TreeNode, query: str) -> TreeNode:
                 asset=node.asset,
                 docker_tag=node.docker_tag,
             )
-            _annotate_counts(clone)
+            annotate_counts(clone)
             return clone
         return None
 
@@ -165,12 +174,13 @@ def collect_leaf_assets(node: TreeNode) -> list[NexusAsset | DockerTag]:
     return items
 
 
-def _annotate_counts(node: TreeNode) -> int:
+def annotate_counts(node: TreeNode) -> int:
+    """Пересчитать ``child_count`` (число листьев) для узла и потомков."""
     if not node.is_dir:
         node.child_count = 0
         return 1
     total = 0
     for child in node.children.values():
-        total += _annotate_counts(child)
+        total += annotate_counts(child)
     node.child_count = total
     return total

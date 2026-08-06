@@ -79,6 +79,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Listing assets… {count} (page {page})": (
             "Загрузка ассетов… {count} (стр. {page})"
         ),
+        "Listing in background — browse as folders appear…": (
+            "Фоновая загрузка — можно листать дерево по мере появления папок…"
+        ),
         "Building tree…": "Построение дерева…",
         "Ready — {count} assets": "Готово — ассетов: {count}",
         "Ready — {count} tags": "Готово — тегов: {count}",

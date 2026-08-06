@@ -78,6 +78,9 @@ class Verifier:
             logger.error("Failed to copy to verified: %s", exc)
             return VerifyResult(error=f"Copy failed: {exc}")
 
+        if not is_docker:
+            self._copy_companion_sidecars(local_path, dest)
+
         if skipped:
             return VerifyResult(
                 copied=False,
@@ -86,6 +89,38 @@ class Verifier:
             )
         logger.info("Verified copy: %s -> %s", local_path, dest)
         return VerifyResult(copied=True, verified_path=dest)
+
+    def _copy_companion_sidecars(self, local_path: Path, dest: Path) -> None:
+        """Скопировать ``.md5``/``.sha1``/… рядом с PASS-артефактом, если они уже скачаны."""
+        from nexus_control.services.scan_common import (
+            is_scan_ignored_path,
+            iter_local_companion_sidecars,
+        )
+
+        # Не цеплять sidecar'ы к самому sidecar-файлу.
+        if is_scan_ignored_path(local_path.name):
+            return
+
+        for side_src in iter_local_companion_sidecars(local_path):
+            side_dest = prepare_asset_destination(dest.parent / side_src.name)
+            try:
+                copied, skipped = copy_file(
+                    side_src,
+                    side_dest,
+                    overwrite=self.settings.overwrite_verified,
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Failed to copy sidecar %s -> %s: %s",
+                    side_src,
+                    side_dest,
+                    exc,
+                )
+                continue
+            if copied:
+                logger.info("Verified sidecar copy: %s -> %s", side_src, side_dest)
+            elif skipped:
+                logger.debug("Verified sidecar already present: %s", side_dest)
 
     def write_scanner_reports(self, summary: PipelineSummary) -> dict[str, Path]:
         """Записать сводные ``{scanner}_report.json`` в ``<repo>-verified/``.
