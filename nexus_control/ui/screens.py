@@ -181,6 +181,8 @@ class RepositoriesScreen(Screen[None]):
         filt = self.query_one("#repo-filter", Input)
         if row.has_class("visible"):
             filt.can_focus = True
+            if self._filter and not filt.value:
+                filt.value = self._filter
             filt.focus()
         else:
             self._close_filter(filt)
@@ -192,6 +194,16 @@ class RepositoriesScreen(Screen[None]):
         row.remove_class("visible")
         self._close_filter(self.query_one("#repo-filter", Input))
 
+    def action_focus_results(self) -> None:
+        """Tab/↓ из поля фильтра — в таблицу, фильтр остаётся."""
+        row = self.query_one("#filter-row")
+        if not row.has_class("visible"):
+            return
+        focused = self.focused
+        if focused is None or focused.id != "repo-filter":
+            return
+        self._hide_filter_keep_query()
+
     def _close_filter(self, filt: Input) -> None:
         filt.value = ""
         filt.can_focus = False
@@ -199,11 +211,21 @@ class RepositoriesScreen(Screen[None]):
         self._render_rows()
         self.query_one("#repo-table", DataTable).focus()
 
+    def _hide_filter_keep_query(self) -> None:
+        """Спрятать поле фильтра, оставив применённый запрос и фокус на таблице."""
+        row = self.query_one("#filter-row")
+        row.remove_class("visible")
+        filt = self.query_one("#repo-filter", Input)
+        self._filter = filt.value.strip().lower()
+        filt.can_focus = False
+        self._render_rows()
+        self.query_one("#repo-table", DataTable).focus()
+
     @on(Input.Submitted, "#repo-filter")
     def _on_filter_submitted(self, event: Input.Submitted) -> None:
         self._filter = event.value.strip().lower()
         self._render_rows()
-        self.action_close_search()
+        self._hide_filter_keep_query()
 
     @on(Input.Changed, "#repo-filter")
     def _on_filter(self, event: Input.Changed) -> None:
@@ -271,6 +293,7 @@ class RepositoriesScreen(Screen[None]):
         """Перерисовать локализуемые виджеты после смены языка."""
         self.query_one("#repo-filter", Input).placeholder = _("Filter repositories…")
         table = self.query_one("#repo-table", DataTable)
+        selected_key = self._selected_row_key(table)
         table.clear(columns=True)
         table.add_columns(
             _("Name"),
@@ -280,7 +303,7 @@ class RepositoriesScreen(Screen[None]):
             _("URL"),
             _("Attributes"),
         )
-        self._render_rows()
+        self._render_rows(restore_key=selected_key)
         self._update_connection_status()
 
     def _on_ssl_certificate_error(self, message: str) -> None:
@@ -321,8 +344,28 @@ class RepositoriesScreen(Screen[None]):
             _after,
         )
 
-    def _render_rows(self) -> None:
+    def _selected_row_key(self, table: DataTable) -> object | None:
+        if table.row_count <= 0:
+            return None
+        try:
+            return table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _restore_row_key(self, table: DataTable, row_key: object | None) -> None:
+        if row_key is None or table.row_count == 0:
+            return
+        try:
+            row_index = table.get_row_index(row_key)
+        except Exception:  # noqa: BLE001
+            return
+        table.move_cursor(row=row_index, animate=False, scroll=True)
+
+    def _render_rows(self, *, restore_key: object | None = None) -> None:
         table = self.query_one("#repo-table", DataTable)
+        selected_key = (
+            restore_key if restore_key is not None else self._selected_row_key(table)
+        )
         table.clear()
         query = self._filter
         for repo in self._repos:
@@ -337,6 +380,7 @@ class RepositoriesScreen(Screen[None]):
                 truncate(format_attrs(repo.attributes), 40),
                 key=repo.name,
             )
+        self._restore_row_key(table, selected_key)
 
     def action_open_repo(self) -> None:
         table = self.query_one("#repo-table", DataTable)
@@ -491,15 +535,37 @@ class AssetsScreen(Screen[None]):
         filt = self.query_one("#asset-filter", Input)
         if row.has_class("visible"):
             filt.can_focus = True
+            if self._filter and not filt.value:
+                filt.value = self._filter
             filt.focus()
         else:
             self._close_asset_filter(filt)
+
+    def action_focus_results(self) -> None:
+        """↓ из поля фильтра — в дерево, фильтр остаётся."""
+        row = self.query_one("#filter-row")
+        if not row.has_class("visible"):
+            return
+        focused = self.focused
+        if focused is None or focused.id != "asset-filter":
+            return
+        self._hide_asset_filter_keep_query()
 
     def _close_asset_filter(self, filt: Input) -> None:
         filt.value = ""
         filt.can_focus = False
         self._filter = ""
         self._populate_tree(self._root_tree)
+        self.query_one("#asset-tree", AssetTree).focus()
+
+    def _hide_asset_filter_keep_query(self) -> None:
+        row = self.query_one("#filter-row")
+        row.remove_class("visible")
+        filt = self.query_one("#asset-filter", Input)
+        self._filter = filt.value.strip()
+        filt.can_focus = False
+        view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
+        self._populate_tree(view)
         self.query_one("#asset-tree", AssetTree).focus()
 
     @on(Input.Changed, "#asset-filter")
@@ -511,13 +577,7 @@ class AssetsScreen(Screen[None]):
     @on(Input.Submitted, "#asset-filter")
     def _on_filter_submitted(self, event: Input.Submitted) -> None:
         self._filter = event.value.strip()
-        view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
-        self._populate_tree(view)
-        row = self.query_one("#filter-row")
-        row.remove_class("visible")
-        filt = self.query_one("#asset-filter", Input)
-        filt.can_focus = False
-        self.query_one("#asset-tree", AssetTree).focus()
+        self._hide_asset_filter_keep_query()
 
     def action_toggle_node(self) -> None:
         """Раскрыть/свернуть узел под курсором."""

@@ -17,6 +17,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Language": "Язык",
         "Refresh": "Обновить",
         "Filter": "Фильтр",
+        "Next": "Далее",
+        "Previous": "Назад",
+        "To list": "К списку",
         "Open": "Открыть",
         "Logout": "Выйти",
         "Help": "Справка",
@@ -177,6 +180,8 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Quit the application": "Выход из приложения",
         "Refresh repository list": "Обновить список репозиториев",
         "Filter by name": "Фильтр по имени",
+        "From filter to repository list": "Из фильтра к списку репозиториев",
+        "From filter to asset tree": "Из фильтра к дереву ассетов",
         "Open assets": "Открыть ассеты",
         "Logout (clear Nexus session and encrypted credentials)": (
             "Выйти (сброс Nexus-сессии и encrypted credentials)"
