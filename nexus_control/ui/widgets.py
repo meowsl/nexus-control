@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Label, RichLog, Static
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 class ConfirmModal(ModalScreen[bool]):
     """Запросить у пользователя подтверждение массовой операции."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
 
     DEFAULT_CSS = """
     ConfirmModal {
@@ -68,14 +73,17 @@ class ConfirmModal(ModalScreen[bool]):
                 yield Button(self._confirm_label, variant="primary", id="ok")
                 yield Button("Cancel", variant="default", id="cancel")
 
+    def on_mount(self) -> None:
+        # По умолчанию фокус на Confirm; Enter активирует только focused-кнопку
+        # (не форсирует Confirm при фокусе на Cancel — см. отсутствие on_key Enter).
+        self.query_one("#ok", Button).focus()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
         self.dismiss(event.button.id == "ok")
 
-    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
-        if event.key == "escape":
-            self.dismiss(False)
-        elif event.key == "enter":
-            self.dismiss(True)
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class MessageModal(ModalScreen[None]):

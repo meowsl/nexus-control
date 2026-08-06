@@ -43,14 +43,40 @@ _MAVEN_PUT_SUFFIXES = (
 )
 _MAVEN_SIDE_SUFFIXES = (".md5", ".sha1", ".sha256", ".sha512", ".asc")
 
+# Локальные sidecar-файлы в ``*-verified`` — не загружать в Nexus.
+_VERIFIED_SIDECAR_NAMES = frozenset(
+    {
+        "verified-manifest.json",
+        "unverified_assets.txt",
+    }
+)
+
 
 def format_api_slug(fmt: str) -> str | None:
     """Вернуть API-slug для ``POST /repositories/{slug}/hosted`` или ``None``."""
     return _FORMAT_API_SLUG.get(fmt.lower().strip())
 
 
+def is_verified_local_sidecar(asset_path: str) -> bool:
+    """Локальный sidecar в ``*-verified`` (отчёты, манифест) — не для Nexus."""
+    path = asset_path.replace("\\", "/").lstrip("/")
+    if not path:
+        return False
+    posix = PurePosixPath(path)
+    name = posix.name.lower()
+    if name in _VERIFIED_SIDECAR_NAMES:
+        return True
+    # Сводные отчёты сканеров: grype_report.json, trivy_report.json, …
+    if name.endswith("_report.json"):
+        return True
+    return False
+
+
 def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
     """Подходит ли локальный PASS-ассет для загрузки в hosted ``fmt``."""
+    if is_verified_local_sidecar(asset_path):
+        return False
+
     path = asset_path.replace("\\", "/").lstrip("/").lower()
     name = PurePosixPath(path).name
     fmt_l = fmt.lower().strip()

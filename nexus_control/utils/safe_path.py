@@ -143,11 +143,24 @@ def report_paths(
     repo = sanitize_repo_name(repository)
     norm = normalize_asset_path(asset_path)
     # Свести путь с __, чтобы избежать глубоких деревьев отчётов, сохраняя уникальность.
-    flat = "__".join(norm.parts)
-    flat = sanitize_filename(flat)
+    flat = sanitize_filename("__".join(norm.parts))
     prefix = sanitize_filename(scanner.strip().lower() or "scanner")
     base = safe_join(reports_root, repo, f"{prefix}_{flat}")
     return Path(str(base) + ".json"), Path(str(base) + ".txt")
+
+
+def verified_scanner_report_path(
+    verified_root: Path,
+    repository: str,
+    scanner: str,
+) -> Path:
+    """Путь сводного отчёта: ``VERIFIED_ROOT/<repo>-verified/{scanner}_report.json``.
+
+    Один файл на сканер со всеми артефактами и вердиктами; при upload игнорируется.
+    """
+    repo_dir = f"{sanitize_repo_name(repository)}-verified"
+    prefix = sanitize_filename(scanner.strip().lower() or "scanner")
+    return safe_join(verified_root, repo_dir, f"{prefix}_report.json")
 
 
 def docker_archive_path(download_root: Path, repository: str, tag: str) -> Path:

@@ -5,16 +5,22 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from nexus_control.config import Settings
 from nexus_control.models import (
     AssetPipelineResult,
     PipelineSummary,
+    ScanResult,
     Verdict,
     VerifyResult,
 )
-from nexus_control.utils.fs import copy_file, ensure_dir, prepare_asset_destination, write_json
-from nexus_control.utils.safe_path import UnsafePathError, asset_verified_path
+from nexus_control.utils.fs import copy_file, ensure_dir, prepare_asset_destination, read_json, write_json
+from nexus_control.utils.safe_path import (
+    UnsafePathError,
+    asset_verified_path,
+    verified_scanner_report_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +80,67 @@ class Verifier:
             )
         logger.info("Verified copy: %s -> %s", local_path, dest)
         return VerifyResult(copied=True, verified_path=dest)
+
+    def write_scanner_reports(self, summary: PipelineSummary) -> dict[str, Path]:
+        """Записать сводные ``{scanner}_report.json`` в ``<repo>-verified/``.
+
+        Один файл на сканер: список всех артефактов с вердиктом, counts,
+        уязвимостями и полным native JSON-отчётом сканера (если есть).
+        """
+        scanner_names = _scanner_names_for_summary(summary)
+        written: dict[str, Path] = {}
+        scanned_at = (summary.finished_at or datetime.now(timezone.utc)).isoformat()
+
+        for scanner in scanner_names:
+            assets: list[dict[str, Any]] = []
+            version: str | None = summary.scanner_versions.get(scanner)
+            for result in summary.results:
+                scan = result.scans.get(scanner)
+                if scan is None:
+                    continue
+                if version is None:
+                    version = scan.scanner_version or scan.grype_version
+                assets.append(_scanner_asset_entry(result, scan))
+
+            if not assets:
+                continue
+
+            try:
+                path = verified_scanner_report_path(
+                    self.settings.verified_root,
+                    summary.repository,
+                    scanner,
+                )
+            except UnsafePathError as exc:
+                logger.warning(
+                    "Skip scanner report %s for %s: unsafe path (%s)",
+                    scanner,
+                    summary.repository,
+                    exc,
+                )
+                continue
+
+            payload = {
+                "repository": summary.repository,
+                "scanner": scanner,
+                "scanner_version": version,
+                "scanned_at": scanned_at,
+                "totals": _verdict_totals(assets),
+                "assets": assets,
+            }
+            try:
+                ensure_dir(path.parent)
+                write_json(path, payload)
+            except OSError as exc:
+                logger.error("Failed to write scanner report %s: %s", path, exc)
+                continue
+            written[scanner] = path
+            logger.info(
+                "Wrote scanner report %s (%d assets)",
+                path,
+                len(assets),
+            )
+        return written
 
     def write_manifest(self, summary: PipelineSummary) -> Path:
         repo_dir = self.verified_dir(summary.repository)
@@ -149,6 +216,80 @@ class Verifier:
             len(lines),
         )
         return path
+
+
+def _scanner_names_for_summary(summary: PipelineSummary) -> list[str]:
+    if summary.scanners:
+        return list(summary.scanners)
+    names: list[str] = []
+    seen: set[str] = set()
+    for result in summary.results:
+        for name in result.scans:
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
+
+
+def _verdict_totals(assets: list[dict[str, Any]]) -> dict[str, int]:
+    totals = {"assets": len(assets), "pass": 0, "fail": 0, "error": 0, "skipped": 0}
+    for asset in assets:
+        key = str(asset.get("verdict", "")).lower()
+        if key in totals:
+            totals[key] += 1
+    return totals
+
+
+def _scanner_asset_entry(
+    result: AssetPipelineResult,
+    scan: ScanResult,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "asset_path": result.asset_path,
+        "verdict": scan.verdict.value,
+        "status": scan.status.value,
+        "vulnerability_count": scan.vulnerability_count,
+        "counts": {
+            "critical": scan.counts.critical,
+            "high": scan.counts.high,
+            "medium": scan.counts.medium,
+            "low": scan.counts.low,
+            "negligible": scan.counts.negligible,
+            "unknown": scan.counts.unknown,
+        },
+        "vulnerabilities": [
+            {
+                "id": vuln.id,
+                "severity": vuln.severity.value,
+                "package_name": vuln.package_name,
+                "package_version": vuln.package_version,
+                "fix_version": vuln.fix_version,
+                "description": vuln.description,
+            }
+            for vuln in scan.vulnerabilities
+        ],
+        "error": scan.error,
+        "json_report_path": (
+            str(scan.json_report_path) if scan.json_report_path is not None else None
+        ),
+    }
+    raw = _load_native_report(scan)
+    if raw is not None:
+        entry["report"] = raw
+    return entry
+
+
+def _load_native_report(scan: ScanResult) -> Any | None:
+    if scan.raw is not None:
+        return scan.raw
+    path = scan.json_report_path
+    if path is None or not path.is_file():
+        return None
+    try:
+        return read_json(path)
+    except (OSError, ValueError) as exc:
+        logger.debug("Cannot embed native report from %s: %s", path, exc)
+        return None
 
 
 def apply_verify_for_result(

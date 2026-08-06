@@ -791,7 +791,7 @@ class AssetsScreen(Screen[None]):
         )
 
         def _after(confirmed: bool | None) -> None:
-            if confirmed:
+            if confirmed is True:
                 self._start_pipeline(items, download=download, scan=scan, verify=verify)
 
         self.app.push_screen(ConfirmModal(f"Confirm {action}", body), _after)
