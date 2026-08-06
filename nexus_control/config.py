@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     # Обязательный URL. Username/password опциональны:
@@ -60,6 +61,13 @@ class Settings(BaseSettings):
     nexus_session_ttl: int = 3600
     nexus_cache_dir: Path = Path("~/.cache/nexus-control")
     nexus_docker_registry: str = ""
+
+    # UI language: en | ru (env: NEXUS_CONTROL_LOCALE or locale)
+    locale: str = Field(
+        default="ru",
+        description="UI language en|ru",
+        validation_alias=AliasChoices("locale", "NEXUS_CONTROL_LOCALE"),
+    )
 
     # Пути
     download_root: Path = Path("~/nexus-control/downloads")
@@ -163,6 +171,13 @@ class Settings(BaseSettings):
         names = parse_scanner_names(str(value if value is not None else "grype"))
         return ",".join(names)
 
+    @field_validator("locale", mode="before")
+    @classmethod
+    def _normalize_locale(cls, value: object) -> str:
+        from nexus_control.i18n import normalize_locale
+
+        return normalize_locale(str(value if value is not None else "ru"))
+
     @field_validator("log_level", mode="before")
     @classmethod
     def _normalize_log_level(cls, value: object) -> str:
@@ -225,6 +240,7 @@ class Settings(BaseSettings):
             "nexus_username": self.nexus_username,
             "nexus_password": "***",
             "nexus_verify_ssl": self.nexus_verify_ssl,
+            "locale": self.locale,
             "nexus_timeout": self.nexus_timeout,
             "nexus_session_ttl": self.nexus_session_ttl,
             "nexus_cache_dir": str(self.nexus_cache_dir),

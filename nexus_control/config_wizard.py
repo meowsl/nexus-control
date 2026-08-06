@@ -1,4 +1,4 @@
-"""First-run wizard: запрос Nexus URL и запись XDG config.toml."""
+"""First-run wizard: запрос языка, Nexus URL и запись XDG config.toml."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from nexus_control.config_io import (
     write_toml_atomic,
 )
 from nexus_control.config_paths import resolve_config_path
+from nexus_control.i18n import _, normalize_locale, set_locale
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def run_first_run_wizard(
     *,
     config_path: Path | None = None,
 ) -> Path:
-    """Интерактивно запросить URL (+ опции) и записать ``config.toml``.
+    """Интерактивно запросить язык, URL (+ опции) и записать ``config.toml``.
 
     Returns:
         Путь записанного файла.
@@ -90,16 +91,23 @@ def run_first_run_wizard(
             "Example: export NEXUS_URL=http://localhost:8081"
         )
 
-    print("nexus-control — first-run setup", file=sys.stderr)
-    print(f"Config will be saved to: {path}", file=sys.stderr)
+    # Язык — до остальных вопросов, чтобы подсказки уже были локализованы.
+    lang_raw = input("Language / Язык [ru/en]: ").strip()
+    locale = normalize_locale(lang_raw or "ru")
+    set_locale(locale)
+
+    print(_("nexus-control — first-run setup"), file=sys.stderr)
+    print(_("Config will be saved to: {path}", path=path), file=sys.stderr)
     print(
-        "Username/password are not stored here — you will be prompted next "
-        "(encrypted vault until session TTL).",
+        _(
+            "Username/password are not stored here — you will be prompted next "
+            "(encrypted vault until session TTL)."
+        ),
         file=sys.stderr,
     )
 
     while True:
-        raw = input("Nexus URL [http://localhost:8081]: ").strip()
+        raw = input(_("Nexus URL [{default}]", default="http://localhost:8081") + ": ").strip()
         if not raw:
             raw = "http://localhost:8081"
         try:
@@ -108,19 +116,20 @@ def run_first_run_wizard(
         except Exception as exc:  # ConfigError
             print(f"  {exc}", file=sys.stderr)
 
-    verify_raw = input("Verify TLS certificates? [Y/n]: ").strip().lower()
-    verify_ssl = verify_raw not in {"n", "no", "0", "false", "off"}
+    verify_raw = input(_("Verify TLS certificates? [Y/n]") + ": ").strip().lower()
+    verify_ssl = verify_raw not in {"n", "no", "0", "false", "off", "н", "нет"}
 
-    scanners_raw = input("Scanners (grype, trivy, or both) [grype]: ").strip()
+    scanners_raw = input(_("Scanners (grype, trivy, or both) [grype]") + ": ").strip()
     scanners = scanners_raw or "grype"
 
     data: dict[str, object] = {
+        "locale": locale,
         "nexus_url": url,
         "nexus_verify_ssl": verify_ssl,
         "scanners": scanners,
     }
     write_toml_atomic(path, data)
-    print(f"Wrote {path}", file=sys.stderr)
+    print(_("Wrote {path}", path=path), file=sys.stderr)
     return path
 
 

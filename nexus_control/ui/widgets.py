@@ -12,6 +12,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Label, RichLog, Static
 
+from nexus_control.i18n import _
 from nexus_control.models import AssetPipelineResult, PipelineSummary, Verdict
 from nexus_control.services.verified_uploader import (
     UploadSummary,
@@ -58,14 +59,14 @@ class ConfirmModal(ModalScreen[bool]):
         title: str,
         body: str,
         *,
-        confirm_label: str = "Confirm",
-        cancel_label: str = "Cancel",
+        confirm_label: str | None = None,
+        cancel_label: str | None = None,
     ) -> None:
         super().__init__()
         self._title = title
         self._body = body
-        self._confirm_label = confirm_label
-        self._cancel_label = cancel_label
+        self._confirm_label = confirm_label if confirm_label is not None else _("Confirm")
+        self._cancel_label = cancel_label if cancel_label is not None else _("Cancel")
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -112,7 +113,7 @@ class MessageModal(ModalScreen[None]):
         with Vertical():
             yield Label(f"[b]{self._title}[/b]")
             yield Static(self._message)
-            yield Button("OK", variant="primary", id="ok")
+            yield Button(_("OK"), variant="primary", id="ok")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "ok":
@@ -144,10 +145,10 @@ class HelpModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("[b]Keyboard shortcuts[/b]")
+            yield Label(f"[b]{_('Keyboard shortcuts')}[/b]")
             with VerticalScroll():
                 yield Static(self._text)
-            yield Button("Close", id="ok")
+            yield Button(_("Close"), id="ok")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(None)
@@ -192,10 +193,12 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("[b]Сканеры уязвимостей[/b]")
+            yield Label(f"[b]{_('Vulnerability scanners')}[/b]")
             yield Static(
-                "Включите один или оба. Verify копирует в *-verified только если "
-                "все включённые сканеры дали PASS.",
+                _(
+                    "Enable one or both. Verify copies to *-verified only if all "
+                    "enabled scanners PASS."
+                ),
                 classes="hint",
             )
             yield Checkbox(
@@ -210,8 +213,8 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
             )
             yield Static("", id="scan-error", classes="error")
             with Horizontal(classes="buttons"):
-                yield Button("Сохранить", variant="primary", id="ok")
-                yield Button("Отмена", variant="default", id="cancel")
+                yield Button(_("Save"), variant="primary", id="ok")
+                yield Button(_("Cancel"), variant="default", id="cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
@@ -225,7 +228,7 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
                 chosen.append("trivy")
             if not chosen:
                 self.query_one("#scan-error", Static).update(
-                    "Выберите хотя бы один сканер."
+                    _("Select at least one scanner.")
                 )
                 return
             self.dismiss(chosen)
@@ -311,28 +314,28 @@ class ReportModal(ModalScreen[None]):
                 yield RichLog(id="details", highlight=True, markup=True)
                 with Horizontal(classes="buttons"):
                     yield Button(
-                        "Upload verified",
+                        _("Upload verified"),
                         variant="success",
                         id="upload",
                         disabled=not self._uploadable,
                     )
-                    yield Button("Close", variant="primary", id="ok")
+                    yield Button(_("Close"), variant="primary", id="ok")
 
     def on_mount(self) -> None:
         self._ui_app = self.app  # type: ignore[assignment]
         table = self.query_one("#report-table", DataTable)
         table.add_columns(
-            "Asset",
-            "Type",
-            "Download",
-            "Scan",
-            "Vulns",
-            "Crit",
-            "High",
-            "Med",
-            "Low",
-            "Verdict",
-            "Verified",
+            _("Asset"),
+            _("Type"),
+            _("Download"),
+            _("Scan"),
+            _("Vulns"),
+            _("Crit"),
+            _("High"),
+            _("Med"),
+            _("Low"),
+            _("Verdict"),
+            _("Verified"),
         )
         table.cursor_type = "row"
         for result in self._rows:
@@ -423,8 +426,7 @@ class ReportModal(ModalScreen[None]):
             f"→ [cyan]{target}[/cyan][/b]"
         )
         log.write(
-            "Creating repository if missing "
-            "(same format as source, hosted)..."
+            _("Creating repository if missing…")
         )
         self._run_upload()
 
@@ -460,14 +462,18 @@ class ReportModal(ModalScreen[None]):
         upload_btn.disabled = summary.failed == 0 or not self._uploadable
 
         log = self.query_one("#details", RichLog)
-        created = "created" if summary.created_repository else "existing"
-        fmt = summary.source_format or "?"
+        created = _("created") if summary.created_repository else _("existing")
         log.write(
-            f"[green]Upload finished[/green] → "
-            f"[cyan]{summary.target_repository}[/cyan] "
-            f"format={fmt} ({created}): "
-            f"uploaded={summary.uploaded} skipped={summary.skipped} "
-            f"failed={summary.failed}"
+            "[green]"
+            + _(
+                "Upload finished ({created}): uploaded={uploaded} "
+                "skipped={skipped} failed={failed}",
+                created=created,
+                uploaded=summary.uploaded,
+                skipped=summary.skipped,
+                failed=summary.failed,
+            )
+            + f"[/green] → [cyan]{summary.target_repository}[/cyan]"
         )
         for item in summary.results:
             if item.skipped:
@@ -488,7 +494,7 @@ class ReportModal(ModalScreen[None]):
         self.query_one("#ok", Button).disabled = False
         self.query_one("#upload", Button).disabled = not self._uploadable
         log = self.query_one("#details", RichLog)
-        log.write(f"[red]Upload failed:[/red] {message}")
+        log.write(f"[red]{_('Upload failed:')}[/red] {message}")
 
 
 def _verdict_style(verdict: Verdict) -> str:
@@ -510,14 +516,14 @@ def format_confirm_body(
     verified_root: str,
     scanners: list[str] | None = None,
 ) -> str:
-    size_txt = human_size(total_size) if total_size is not None else "unknown"
-    scanners_txt = "+".join(scanners) if scanners else "-"
+    size_txt = human_size(total_size) if total_size is not None else _("unknown")
+    scanners_txt = "+".join(scanners) if scanners else _("none")
     return (
-        f"Action: [b]{action}[/b]\n"
-        f"Items: [b]{count}[/b]\n"
-        f"Scanners: [b]{scanners_txt}[/b]\n"
-        f"Approx. size: {size_txt}\n"
-        f"Download path: {download_root}\n"
-        f"Verified path: {verified_root}\n\n"
-        "Proceed?"
+        f"{_('Action: {action}', action=f'[b]{action}[/b]')}\n"
+        f"{_('Items: {count}', count=f'[b]{count}[/b]')}\n"
+        f"{_('Scanners: {scanners}', scanners=f'[b]{scanners_txt}[/b]')}\n"
+        f"{_('Approx. size: {size}', size=size_txt)}\n"
+        f"{_('Download path: {path}', path=download_root)}\n"
+        f"{_('Verified path: {path}', path=verified_root)}\n\n"
+        f"{_('Proceed?')}"
     )

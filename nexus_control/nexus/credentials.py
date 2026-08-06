@@ -182,24 +182,29 @@ class CredentialVault:
 
 def prompt_nexus_credentials(default_username: str = "") -> tuple[str, str]:
     """Запросить username/password в терминале (до старта Textual)."""
+    from nexus_control.i18n import _
+
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ConfigError(
             "NEXUS_USERNAME and NEXUS_PASSWORD are required in non-interactive "
             "mode (no TTY). Set them in the environment, config.toml, or legacy .env."
         )
-    print("Nexus authentication", file=sys.stderr)
+    print(_("Nexus authentication"), file=sys.stderr)
     print(
-        "Credentials are stored encrypted until the Nexus session expires "
-        f"(see NEXUS_SESSION_TTL / {VAULT_FILENAME}).",
+        _(
+            "Credentials are stored encrypted until the Nexus session expires "
+            "(see NEXUS_SESSION_TTL / {vault}).",
+            vault=VAULT_FILENAME,
+        ),
         file=sys.stderr,
     )
     hint = f" [{default_username}]" if default_username else ""
-    username = input(f"Username{hint}: ").strip() or default_username.strip()
+    username = input(f"{_('Username')}{hint}: ").strip() or default_username.strip()
     if not username:
-        raise ConfigError("Username is required")
-    password = getpass.getpass("Password: ")
+        raise ConfigError(_("Username is required"))
+    password = getpass.getpass(_("Password: "))
     if not password:
-        raise ConfigError("Password is required")
+        raise ConfigError(_("Password is required"))
     return username, password
 
 
