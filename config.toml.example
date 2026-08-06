@@ -9,9 +9,12 @@
 nexus_url = "http://localhost:8081"
 nexus_verify_ssl = true
 locale = "ru"
-# nexus_timeout = 30.0
+# Для удалённого Nexus с большой латентностью увеличьте timeout (сек на запрос).
+# nexus_timeout = 60.0
 # nexus_session_ttl = 3600
 # nexus_docker_registry = "localhost:8082"
+# Кэш списка ассетов (сек); 0 = отключить. Refresh (r) всегда с сервера.
+# assets_cache_ttl = 300
 
 # scanners = "grype"          # или "trivy", или "grype,trivy"
 # download_root = "~/nexus-control/downloads"

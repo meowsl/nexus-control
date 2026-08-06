@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Iterator
 from urllib.parse import urljoin
 
@@ -68,9 +69,15 @@ class NexusClient:
         """Создать HTTP-клиент и установить / восстановить сессию."""
         if self._client is not None:
             return
+        # Keep-alive + несколько соединений: на удалённом Nexus листинг всё равно
+        # последовательный (continuationToken), но повторные запросы дешевле.
+        timeout = httpx.Timeout(
+            self.settings.nexus_timeout,
+            connect=min(15.0, float(self.settings.nexus_timeout)),
+        )
         self._client = httpx.Client(
             base_url=self.settings.nexus_url,
-            timeout=self.settings.nexus_timeout,
+            timeout=timeout,
             verify=self.settings.nexus_verify_ssl,
             headers={
                 "Accept": "application/json",
@@ -81,6 +88,7 @@ class NexusClient:
                 self.settings.nexus_username,
                 self.settings.nexus_password,
             ),
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
         )
         self._establish_session()
 
@@ -321,8 +329,8 @@ class NexusClient:
             local_path=local_path,
         )
 
-    def iter_assets(self, repository: str) -> Iterator[NexusAsset]:
-        """Перебирать все артефакты, следуя пагинации ``continuationToken``."""
+    def iter_asset_pages(self, repository: str) -> Iterator[list[NexusAsset]]:
+        """Страницы артефактов по ``continuationToken`` (page size задаёт Nexus)."""
         token: str | None = None
         while True:
             params: dict[str, Any] = {"repository": repository}
@@ -330,13 +338,32 @@ class NexusClient:
                 params["continuationToken"] = token
             data = self._request_json("GET", "/service/rest/v1/assets", params=params)
             items, token = parse_assets_page(data)
-            for item in items:
-                yield item
+            yield items
             if not token:
                 break
 
-    def list_assets(self, repository: str) -> list[NexusAsset]:
-        return list(self.iter_assets(repository))
+    def iter_assets(self, repository: str) -> Iterator[NexusAsset]:
+        """Перебирать все артефакты, следуя пагинации ``continuationToken``."""
+        for page in self.iter_asset_pages(repository):
+            yield from page
+
+    def list_assets(
+        self,
+        repository: str,
+        *,
+        on_page: Callable[[int, int], None] | None = None,
+    ) -> list[NexusAsset]:
+        """Загрузить все артефакты репозитория.
+
+        ``on_page(page_number, total_assets)`` вызывается после каждой страницы
+        (удобно для прогресса в UI). Размер страницы задаёт Nexus (не конфигурируется).
+        """
+        assets: list[NexusAsset] = []
+        for page_number, page in enumerate(self.iter_asset_pages(repository), start=1):
+            assets.extend(page)
+            if on_page is not None:
+                on_page(page_number, len(assets))
+        return assets
 
     @contextmanager
     def stream_download(self, url: str) -> Iterator[httpx.Response]:
@@ -409,7 +436,12 @@ class NexusClient:
         return urljoin(self.settings.nexus_url + "/", f"repository/{asset.repository}/{path}")
 
     # ------------------------------------------------------- docker-теги
-    def list_docker_tags(self, repository: Repository) -> list[DockerTag]:
+    def list_docker_tags(
+        self,
+        repository: Repository,
+        *,
+        on_page: Callable[[int, int], None] | None = None,
+    ) -> list[DockerTag]:
         """Список docker-тегов через Registry v2 API с запасным вариантом через assets API."""
         registry = self._docker_registry_host(repository)
         if registry:
@@ -420,7 +452,7 @@ class NexusClient:
                     "Docker Registry v2 tag listing failed (%s); falling back to assets API",
                     exc,
                 )
-        return self._list_tags_from_assets(repository.name, registry)
+        return self._list_tags_from_assets(repository.name, registry, on_page=on_page)
 
     def _docker_registry_host(self, repository: Repository) -> str | None:
         if self.settings.nexus_docker_registry.strip():
@@ -487,25 +519,30 @@ class NexusClient:
         self,
         repository: str,
         registry: str | None,
+        *,
+        on_page: Callable[[int, int], None] | None = None,
     ) -> list[DockerTag]:
         """Запасной вариант: теги из путей артефактов ``v2/<repo>/manifests/<tag>``."""
         tags: dict[str, DockerTag] = {}
         host = (registry or "unknown-registry").removeprefix("http://").removeprefix("https://")
-        for asset in self.iter_assets(repository):
-            path = asset.path.strip("/")
-            parts = path.split("/")
-            # Типичная структура docker-артефактов Nexus: v2/<name>/manifests/<tag>
-            if "manifests" in parts:
-                idx = parts.index("manifests")
-                if idx + 1 < len(parts):
-                    tag = parts[idx + 1]
-                    if tag.startswith("sha256:"):
-                        continue
-                    tags[tag] = DockerTag(
-                        repository=repository,
-                        tag=tag,
-                        image_ref=f"{host}/{repository}:{tag}",
-                    )
+        for page_number, page in enumerate(self.iter_asset_pages(repository), start=1):
+            for asset in page:
+                path = asset.path.strip("/")
+                parts = path.split("/")
+                # Типичная структура docker-артефактов Nexus: v2/<name>/manifests/<tag>
+                if "manifests" in parts:
+                    idx = parts.index("manifests")
+                    if idx + 1 < len(parts):
+                        tag = parts[idx + 1]
+                        if tag.startswith("sha256:"):
+                            continue
+                        tags[tag] = DockerTag(
+                            repository=repository,
+                            tag=tag,
+                            image_ref=f"{host}/{repository}:{tag}",
+                        )
+            if on_page is not None:
+                on_page(page_number, len(tags))
         return sorted(tags.values(), key=lambda t: t.tag.lower())
 
 

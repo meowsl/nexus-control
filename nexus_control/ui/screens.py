@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -29,6 +30,7 @@ from nexus_control.models import (
     Repository,
     TreeNode,
 )
+from nexus_control.nexus.asset_cache import load_cached_assets, save_cached_assets
 from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_control.nexus.errors import is_ssl_certificate_error
 from nexus_control.services.pipeline import PipelineService
@@ -179,6 +181,8 @@ class RepositoriesScreen(Screen[None]):
         filt = self.query_one("#repo-filter", Input)
         if row.has_class("visible"):
             filt.can_focus = True
+            if self._filter and not filt.value:
+                filt.value = self._filter
             filt.focus()
         else:
             self._close_filter(filt)
@@ -190,6 +194,16 @@ class RepositoriesScreen(Screen[None]):
         row.remove_class("visible")
         self._close_filter(self.query_one("#repo-filter", Input))
 
+    def action_focus_results(self) -> None:
+        """Tab/↓ из поля фильтра — в таблицу, фильтр остаётся."""
+        row = self.query_one("#filter-row")
+        if not row.has_class("visible"):
+            return
+        focused = self.focused
+        if focused is None or focused.id != "repo-filter":
+            return
+        self._hide_filter_keep_query()
+
     def _close_filter(self, filt: Input) -> None:
         filt.value = ""
         filt.can_focus = False
@@ -197,11 +211,21 @@ class RepositoriesScreen(Screen[None]):
         self._render_rows()
         self.query_one("#repo-table", DataTable).focus()
 
+    def _hide_filter_keep_query(self) -> None:
+        """Спрятать поле фильтра, оставив применённый запрос и фокус на таблице."""
+        row = self.query_one("#filter-row")
+        row.remove_class("visible")
+        filt = self.query_one("#repo-filter", Input)
+        self._filter = filt.value.strip().lower()
+        filt.can_focus = False
+        self._render_rows()
+        self.query_one("#repo-table", DataTable).focus()
+
     @on(Input.Submitted, "#repo-filter")
     def _on_filter_submitted(self, event: Input.Submitted) -> None:
         self._filter = event.value.strip().lower()
         self._render_rows()
-        self.action_close_search()
+        self._hide_filter_keep_query()
 
     @on(Input.Changed, "#repo-filter")
     def _on_filter(self, event: Input.Changed) -> None:
@@ -269,6 +293,7 @@ class RepositoriesScreen(Screen[None]):
         """Перерисовать локализуемые виджеты после смены языка."""
         self.query_one("#repo-filter", Input).placeholder = _("Filter repositories…")
         table = self.query_one("#repo-table", DataTable)
+        selected_key = self._selected_row_key(table)
         table.clear(columns=True)
         table.add_columns(
             _("Name"),
@@ -278,7 +303,7 @@ class RepositoriesScreen(Screen[None]):
             _("URL"),
             _("Attributes"),
         )
-        self._render_rows()
+        self._render_rows(restore_key=selected_key)
         self._update_connection_status()
 
     def _on_ssl_certificate_error(self, message: str) -> None:
@@ -319,8 +344,28 @@ class RepositoriesScreen(Screen[None]):
             _after,
         )
 
-    def _render_rows(self) -> None:
+    def _selected_row_key(self, table: DataTable) -> object | None:
+        if table.row_count <= 0:
+            return None
+        try:
+            return table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _restore_row_key(self, table: DataTable, row_key: object | None) -> None:
+        if row_key is None or table.row_count == 0:
+            return
+        try:
+            row_index = table.get_row_index(row_key)
+        except Exception:  # noqa: BLE001
+            return
+        table.move_cursor(row=row_index, animate=False, scroll=True)
+
+    def _render_rows(self, *, restore_key: object | None = None) -> None:
         table = self.query_one("#repo-table", DataTable)
+        selected_key = (
+            restore_key if restore_key is not None else self._selected_row_key(table)
+        )
         table.clear()
         query = self._filter
         for repo in self._repos:
@@ -335,6 +380,7 @@ class RepositoriesScreen(Screen[None]):
                 truncate(format_attrs(repo.attributes), 40),
                 key=repo.name,
             )
+        self._restore_row_key(table, selected_key)
 
     def action_open_repo(self) -> None:
         table = self.query_one("#repo-table", DataTable)
@@ -423,13 +469,17 @@ class AssetsScreen(Screen[None]):
         self._last_summary: PipelineSummary | None = None
         self._cancel = False
         self._busy = False
+        self._loading = False
         self._ui_app: NexusControlApp | None = None
         # Соответствие id узла textual tree -> доменный TreeNode
         self._node_map: dict[int, TreeNode] = {}
+        # Узлы TUI, чьи дети уже вставлены (ленивое дерево)
+        self._tui_populated: set[int] = set()
         # Мультивыбор: ключи `_node_mark_key`
         self._marked: set[str] = set()
         # Включённые сканеры для verify (инициализируются в on_mount из settings)
         self._enabled_scanners: list[str] = ["grype"]
+        self._list_progress_last_ui = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -455,7 +505,10 @@ class AssetsScreen(Screen[None]):
         self.query_one("#asset-filter", Input).can_focus = False
         self.query_one("#log", RichLog).can_focus = False
         self.query_one("#asset-tree", AssetTree).focus()
-        self.action_refresh()
+        self._ui_app = self.app
+        self._log(_("Loading assets for {name}…", name=self.repository.name))
+        self._begin_list_progress()
+        self._load_assets(force=False)
 
     @property
     def app(self) -> NexusControlApp:  # type: ignore[override]
@@ -482,15 +535,37 @@ class AssetsScreen(Screen[None]):
         filt = self.query_one("#asset-filter", Input)
         if row.has_class("visible"):
             filt.can_focus = True
+            if self._filter and not filt.value:
+                filt.value = self._filter
             filt.focus()
         else:
             self._close_asset_filter(filt)
+
+    def action_focus_results(self) -> None:
+        """↓ из поля фильтра — в дерево, фильтр остаётся."""
+        row = self.query_one("#filter-row")
+        if not row.has_class("visible"):
+            return
+        focused = self.focused
+        if focused is None or focused.id != "asset-filter":
+            return
+        self._hide_asset_filter_keep_query()
 
     def _close_asset_filter(self, filt: Input) -> None:
         filt.value = ""
         filt.can_focus = False
         self._filter = ""
         self._populate_tree(self._root_tree)
+        self.query_one("#asset-tree", AssetTree).focus()
+
+    def _hide_asset_filter_keep_query(self) -> None:
+        row = self.query_one("#filter-row")
+        row.remove_class("visible")
+        filt = self.query_one("#asset-filter", Input)
+        self._filter = filt.value.strip()
+        filt.can_focus = False
+        view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
+        self._populate_tree(view)
         self.query_one("#asset-tree", AssetTree).focus()
 
     @on(Input.Changed, "#asset-filter")
@@ -502,13 +577,7 @@ class AssetsScreen(Screen[None]):
     @on(Input.Submitted, "#asset-filter")
     def _on_filter_submitted(self, event: Input.Submitted) -> None:
         self._filter = event.value.strip()
-        view = filter_tree(self._root_tree, self._filter) if self._filter else self._root_tree
-        self._populate_tree(view)
-        row = self.query_one("#filter-row")
-        row.remove_class("visible")
-        filt = self.query_one("#asset-filter", Input)
-        filt.can_focus = False
-        self.query_one("#asset-tree", AssetTree).focus()
+        self._hide_asset_filter_keep_query()
 
     def action_toggle_node(self) -> None:
         """Раскрыть/свернуть узел под курсором."""
@@ -543,41 +612,124 @@ class AssetsScreen(Screen[None]):
             self._log(f"[yellow]{_('Cancel requested…')}[/yellow]")
 
     def action_refresh(self) -> None:
-        if self._busy:
+        if self._busy or self._loading:
             self._log(f"[yellow]{_('Busy; wait for the current job.')}[/yellow]")
             return
         self._ui_app = self.app
         self._log(_("Loading assets for {name}…", name=self.repository.name))
-        self._load_assets()
+        self._begin_list_progress()
+        self._load_assets(force=True)
 
     @work(thread=True, exclusive=True)
-    def _load_assets(self) -> None:
+    def _load_assets(self, force: bool = True) -> None:
         app = self._ui_app
         if app is None:
             return
+
+        def on_page(page: int, total: int) -> None:
+            schedule_on_app(app, self._update_list_progress, page, total)
+
         try:
             app.ensure_client()
+            settings = app.settings
             if self.repository.is_docker:
-                tags = app.client.list_docker_tags(self.repository)
+                tags = app.client.list_docker_tags(self.repository, on_page=on_page)
+                schedule_on_app(app, self._set_list_stage, _("Building tree…"))
                 tree = build_docker_tag_tree(tags, root_name=self.repository.name)
                 schedule_on_app(app, self._on_docker_loaded, tags, tree)
-            else:
-                assets = app.client.list_assets(self.repository.name)
-                tree = build_asset_tree(assets, root_name=self.repository.name)
-                schedule_on_app(app, self._on_assets_loaded, assets, tree)
+                return
+
+            assets: list[NexusAsset] | None = None
+            from_cache = False
+            cache_age = 0.0
+            if not force:
+                cached = load_cached_assets(
+                    settings.nexus_cache_dir,
+                    settings.nexus_url,
+                    self.repository.name,
+                    ttl_seconds=settings.assets_cache_ttl,
+                )
+                if cached is not None:
+                    assets, cache_age = cached
+                    from_cache = True
+
+            if assets is None:
+                assets = app.client.list_assets(self.repository.name, on_page=on_page)
+                if settings.assets_cache_ttl > 0:
+                    save_cached_assets(
+                        settings.nexus_cache_dir,
+                        settings.nexus_url,
+                        self.repository.name,
+                        assets,
+                    )
+
+            schedule_on_app(app, self._set_list_stage, _("Building tree…"))
+            tree = build_asset_tree(assets, root_name=self.repository.name)
+            schedule_on_app(
+                app,
+                self._on_assets_loaded,
+                assets,
+                tree,
+                from_cache,
+                cache_age,
+            )
         except NexusAPIError as exc:
             schedule_on_app(app, self._show_error, _("Failed to load assets"), str(exc))
+            schedule_on_app(app, self._end_list_progress, True)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Asset load failed")
             schedule_on_app(app, self._show_error, _("Unexpected error"), str(exc))
+            schedule_on_app(app, self._end_list_progress, True)
 
-    def _on_assets_loaded(self, assets: list[NexusAsset], tree: TreeNode) -> None:
+    def _begin_list_progress(self) -> None:
+        self._loading = True
+        self._list_progress_last_ui = 0.0
+        self.query_one("#job-label", Label).update(_("Listing assets…"))
+        self.query_one("#job-progress", ProgressBar).update(total=None, progress=0)
+
+    def _set_list_stage(self, label: str) -> None:
+        self.query_one("#job-label", Label).update(label)
+
+    def _update_list_progress(self, page: int, total: int) -> None:
+        now = time.monotonic()
+        # Не чаще ~6 раз/с — на localhost страницы приходят быстро.
+        if now - self._list_progress_last_ui < 0.15 and page > 1:
+            return
+        self._list_progress_last_ui = now
+        self.query_one("#job-label", Label).update(
+            _("Listing assets… {count} (page {page})", count=total, page=page)
+        )
+
+    def _end_list_progress(self, error: bool = False) -> None:
+        self._loading = False
+        bar = self.query_one("#job-progress", ProgressBar)
+        if error:
+            self.query_one("#job-label", Label).update(_("Failed"))
+            bar.update(total=100, progress=0)
+        else:
+            bar.update(total=100, progress=100)
+
+    def _on_assets_loaded(
+        self,
+        assets: list[NexusAsset],
+        tree: TreeNode,
+        from_cache: bool = False,
+        cache_age: float = 0.0,
+    ) -> None:
         self._flat_assets = assets
         self._docker_tags = []
         self._root_tree = tree
         self._marked.clear()
         if not assets:
             self._log(f"[yellow]{_('Repository is empty (no assets).')}[/yellow]")
+        elif from_cache:
+            self._log(
+                _(
+                    "Loaded {count} assets from cache ({age}s old)",
+                    count=len(assets),
+                    age=int(cache_age),
+                )
+            )
         else:
             self._log(_("Loaded {count} assets", count=len(assets)))
         if self.repository.support_level == "partially_supported":
@@ -591,6 +743,10 @@ class AssetsScreen(Screen[None]):
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
         self._update_status_bar()
+        self._end_list_progress()
+        self.query_one("#job-label", Label).update(
+            _("Ready — {count} assets", count=len(assets))
+        )
 
     def _on_docker_loaded(self, tags: list[DockerTag], tree: TreeNode) -> None:
         self._docker_tags = tags
@@ -613,6 +769,10 @@ class AssetsScreen(Screen[None]):
         view = filter_tree(tree, self._filter) if self._filter else tree
         self._populate_tree(view)
         self._update_status_bar()
+        self._end_list_progress()
+        self.query_one("#job-label", Label).update(
+            _("Ready — {count} tags", count=len(tags))
+        )
 
     def _populate_tree(self, root: TreeNode) -> None:
         tree = self.query_one("#asset-tree", AssetTree)
@@ -620,27 +780,42 @@ class AssetsScreen(Screen[None]):
         # Enter раскрывает через auto_expand; Space — отметки (AssetTree).
         tree.auto_expand = True
         self._node_map.clear()
+        self._tui_populated.clear()
         tree.root.expand()
         self._node_map[id(tree.root)] = root
+        self._tui_populated.add(id(tree.root))
         for child in sorted(
             root.children.values(),
             key=lambda n: (not n.is_dir, n.name.lower()),
         ):
-            self._add_node(tree.root, child)
+            self._add_child_node(tree.root, child)
 
-    def _add_node(self, parent: TuiTreeNode[Any], node: TreeNode) -> None:
+    def _add_child_node(self, parent: TuiTreeNode[Any], node: TreeNode) -> None:
+        """Вставить один уровень: каталоги без рекурсии (раскрытие по NodeExpanded)."""
         label = self._label_for(node)
         if node.is_dir:
             tui_node = parent.add(label, data=node, expand=False)
             self._node_map[id(tui_node)] = node
-            for child in sorted(
-                node.children.values(),
-                key=lambda n: (not n.is_dir, n.name.lower()),
-            ):
-                self._add_node(tui_node, child)
+            if not node.children:
+                tui_node.allow_expand = False
         else:
             tui_node = parent.add_leaf(label, data=node)
             self._node_map[id(tui_node)] = node
+
+    @on(Tree.NodeExpanded)
+    def _on_tree_node_expanded(self, event: Tree.NodeExpanded[TreeNode]) -> None:
+        tui_node = event.node
+        if id(tui_node) in self._tui_populated:
+            return
+        data = tui_node.data
+        if not isinstance(data, TreeNode) or not data.is_dir:
+            return
+        self._tui_populated.add(id(tui_node))
+        for child in sorted(
+            data.children.values(),
+            key=lambda n: (not n.is_dir, n.name.lower()),
+        ):
+            self._add_child_node(tui_node, child)
 
     def _label_for(self, node: TreeNode) -> str:
         # Не использовать `[x]` / `[dir]` — Rich/Textual съедает это как markup.
@@ -708,8 +883,8 @@ class AssetsScreen(Screen[None]):
             pass
         try:
             label = self.query_one("#job-label", Label)
-            # Не затирать активный прогресс pipeline.
-            if not self._busy:
+            # Не затирать активный прогресс pipeline / листинга.
+            if not self._busy and not self._loading:
                 label.update(_("Idle"))
         except Exception:  # noqa: BLE001
             pass
@@ -850,7 +1025,7 @@ class AssetsScreen(Screen[None]):
         scan: bool,
         verify: bool,
     ) -> None:
-        if self._busy:
+        if self._busy or self._loading:
             self._log(f"[yellow]{_('Another job is running.')}[/yellow]")
             return
         if not items:

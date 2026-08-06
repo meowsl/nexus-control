@@ -17,11 +17,22 @@ def app_bindings() -> list[Binding]:
     ]
 
 
+def _focus_nav_bindings() -> list[Binding]:
+    """Tab / Shift+Tab — иначе Screen.BINDINGS теряются при своей BINDINGS-фабрике."""
+    return [
+        Binding("tab", "app.focus_next", _("Next"), show=False),
+        Binding("shift+tab", "app.focus_previous", _("Previous"), show=False),
+    ]
+
+
 def repo_bindings() -> list[Binding]:
     return [
+        *_focus_nav_bindings(),
         Binding("q", "app.quit", _("Quit")),
         Binding("r", "refresh", _("Refresh")),
-        Binding("slash", "search", _("Filter"), priority=True),
+        Binding("slash", "search", _("Filter"), priority=True, show=False),
+        Binding("w", "search", _("Filter")),
+        Binding("down", "focus_results", _("To list"), show=False),
         Binding("enter", "open_repo", _("Open"), show=True),
         Binding("L", "logout", _("Logout")),
         Binding("f", "app.toggle_locale", _("Language")),
@@ -32,10 +43,12 @@ def repo_bindings() -> list[Binding]:
 
 def asset_bindings() -> list[Binding]:
     return [
+        *_focus_nav_bindings(),
         Binding("escape", "escape", _("Back"), priority=True),
         Binding("q", "back", _("Back")),
         Binding("r", "refresh", _("Refresh")),
         Binding("slash", "search", _("Filter"), priority=True),
+        Binding("down", "focus_results", _("To list"), show=False),
         Binding("enter", "toggle_node", _("Expand")),
         Binding("space", "toggle_mark", _("Mark"), show=False),
         Binding("u", "clear_marks", _("Unmark")),
@@ -64,7 +77,8 @@ def help_text() -> str:
             f"[b]{_('Repositories')}[/b]",
             f"  q           {_('Quit the application')}",
             f"  r           {_('Refresh repository list')}",
-            f"  /           {_('Filter by name')}",
+            f"  / , w       {_('Filter by name')}",
+            f"  Tab / ↓     {_('From filter to repository list')}",
             f"  Enter       {_('Open assets')}",
             f"  L           {_('Logout (clear Nexus session and encrypted credentials)')}",
             f"  f           {_('Toggle UI language (en/ru)')}",
@@ -74,6 +88,7 @@ def help_text() -> str:
             f"  Esc / q     {_('Back to repositories')}",
             f"  r           {_('Refresh assets')}",
             f"  /           {_('Filter tree')}",
+            f"  Tab / ↓     {_('From filter to asset tree')}",
             f"  Enter       {_('Expand / collapse')}",
             f"  Space       {_('Mark / unmark (● marked, ○ not)')}",
             f"  u           {_('Clear all marks')}",
