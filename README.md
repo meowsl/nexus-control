@@ -29,20 +29,13 @@ python -m nexus_control
 
 ## Архитектура
 
-```
-nexus_control/
-  config.py          # pydantic-settings + XDG TOML
-  config_wizard.py   # first-run setup
-  models.py          # доменные dataclasses
-  logging_setup.py
-  cli/               # nexus-control-cli (repos / verify / upload)
-  nexus/             # REST-клиент, кэш сессии, парсеры
-  services/          # downloader, grype, trivy, verifier, docker, pipeline
-  ui/                # экраны / виджеты / кейбинды Textual
-  utils/             # safe_path, fs, subprocess, tree_builder
-```
+Слои разделены: UI/CLI вызывают сервисы; сервисы используют Nexus-клиент; безопасность путей — в `utils/safe_path.py`.
 
-Слои разделены: UI вызывает сервисы; сервисы используют Nexus-клиент; безопасность путей — в `utils/safe_path.py`.
+```
+UI (Textual) / CLI  →  services (pipeline, scanners, verifier)
+                    →  nexus (REST client, cache, credentials)
+                    →  utils (safe_path, fs, hashing, …)
+```
 
 ---
 
@@ -368,14 +361,46 @@ pytest
 
 ```
 nexus-control/
-├── nexus_control/           # пакет приложения
-├── tests/
-├── .env.example
-├── QUICKSTART.md
-├── requirements.txt
+├── main.py                      # тонкая обёртка: python main.py
 ├── pyproject.toml
-├── main.py
-└── README.md
+├── requirements.txt
+├── uv.lock
+├── config.toml.example
+├── .env.example                 # legacy env
+├── QUICKSTART.md
+├── README.md
+├── scripts/                     # вспомогательные скрипты
+├── tests/                       # pytest
+└── nexus_control/               # пакет приложения
+    ├── app.py / __main__.py     # Textual TUI entry
+    ├── config.py                # pydantic-settings + XDG TOML
+    ├── config_wizard.py         # first-run setup
+    ├── config_io.py / config_paths.py
+    ├── models.py
+    ├── logging_setup.py
+    ├── i18n.py
+    ├── cli/                     # nexus-control-cli
+    │   ├── __main__.py          # argparse: repos / verify / upload
+    │   ├── cmd_repos.py
+    │   ├── cmd_verify.py        # download + scan + verified [+ upload]
+    │   ├── cmd_upload.py        # upload локального *-verified без сканера
+    │   ├── assets.py            # listing / cache / inspect / checkpoints
+    │   ├── progress.py
+    │   └── bootstrap.py
+    ├── nexus/                   # REST-клиент Nexus
+    │   ├── client.py
+    │   ├── repositories.py / assets.py / uploads.py
+    │   ├── session.py / credentials.py
+    │   └── asset_cache.py
+    ├── services/
+    │   ├── pipeline.py          # download → scan → verified copy
+    │   ├── downloader.py
+    │   ├── grype_scanner.py / trivy_scanner.py
+    │   ├── scan_common.py / scan_checkpoint.py
+    │   ├── verifier.py / verified_uploader.py
+    │   └── docker_assets.py
+    ├── ui/                      # экраны / виджеты / кейбинды Textual
+    └── utils/                   # safe_path, fs, hashing, subprocess, tree_builder
 ```
 
 ---
