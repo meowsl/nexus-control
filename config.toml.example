@@ -22,6 +22,10 @@ locale = "ru"
 # Параллельная обработка ассетов (download/scan/verify). 1 = последовательно.
 # CLI: --workers N. Для чистой сети обычно 4–8; сканеры CPU-bound — не раздувайте.
 # pipeline_workers = 4
+# Неизменённый PASS-ассет повторно не сканируется в пределах TTL.
+# После TTL checkpoint протухает, чтобы учитывать обновления vulnerability DB.
+# 0 = всегда сканировать. По умолчанию 86400 (сутки).
+# scan_checkpoint_ttl = 86400
 # download_root = "~/nexus-control/downloads"
 # reports_root = "~/nexus-control/reports"
 # verified_root = "~/nexus-control"

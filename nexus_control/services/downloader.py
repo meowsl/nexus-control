@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from nexus_control.config import Settings
@@ -33,10 +34,39 @@ from nexus_control.utils.safe_path import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class DownloadInspection:
+    needs_download: bool
+    local_path: Path | None
+
+
 class Downloader:
     def __init__(self, settings: Settings, client: NexusClient) -> None:
         self.settings = settings
         self.client = client
+
+    def inspect_asset(self, asset: NexusAsset) -> DownloadInspection:
+        """Определить download/re-download без сетевого запроса.
+
+        Использует ту же checksum/metadata-логику, что и ``download_asset``.
+        Unchanged legacy metadata при необходимости один раз хэшируется и
+        дополняется stat-сигнатурой.
+        """
+        try:
+            dest = asset_download_path(
+                self.settings.download_root,
+                asset.repository,
+                asset.path,
+            )
+        except UnsafePathError:
+            return DownloadInspection(needs_download=True, local_path=None)
+        existing = resolve_storage_path(dest)
+        if self.settings.overwrite_downloads or not existing.is_file():
+            return DownloadInspection(needs_download=True, local_path=existing)
+        if not _should_skip_existing(existing, asset):
+            return DownloadInspection(needs_download=True, local_path=existing)
+        self._ensure_skip_metadata(existing, asset)
+        return DownloadInspection(needs_download=False, local_path=existing)
 
     def download_asset(self, asset: NexusAsset) -> DownloadResult:
         try:

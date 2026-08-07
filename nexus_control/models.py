@@ -275,7 +275,13 @@ class PipelineSummary:
 
     @property
     def total_scanned(self) -> int:
-        return len(self.results)
+        # Checksum/signature sidecar'ы присутствуют в pipeline results, но
+        # получают только SKIPPED и не запускают Grype/Trivy.
+        return sum(
+            1
+            for result in self.results
+            if any(scan.status != ScanStatus.SKIPPED for scan in result.scans.values())
+        )
 
     @property
     def total_passed(self) -> int:

@@ -113,7 +113,7 @@ def test_streaming_select_and_cache_preserve_selected_sidecars(
     client = MagicMock()
     client.iter_asset_pages.return_value = iter(pages)
 
-    selected, total = select_assets_for_cli(
+    selected, total, stats = select_assets_for_cli(
         client,
         settings,
         "repo",
@@ -126,12 +126,13 @@ def test_streaming_select_and_cache_preserve_selected_sidecars(
         "com/a.jar",
         "com/a.jar.sha1",
     ]
+    assert stats.download_needed == 1
 
     cached_client = MagicMock()
     cached_client.iter_asset_pages.side_effect = AssertionError(
         "fresh streaming cache must avoid Nexus"
     )
-    cached, cached_total = select_assets_for_cli(
+    cached, cached_total, cached_stats = select_assets_for_cli(
         cached_client,
         settings,
         "repo",
@@ -143,3 +144,4 @@ def test_streaming_select_and_cache_preserve_selected_sidecars(
         "com/a.jar",
         "com/a.jar.sha1",
     ]
+    assert cached_stats.download_needed == 1
