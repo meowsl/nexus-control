@@ -92,6 +92,17 @@ nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 2
 nexus-control-cli verify --repo maven-hosted --workers 8
 ```
 
+`--limit N` ограничивает только основные ассеты, которым действительно нужна
+загрузка или перезагрузка из-за изменившегося checksum. Уже существующие
+неизменённые файлы и checksum/signature sidecar'ы лимит не расходуют.
+
+После полного PASS + verified copy рядом с локальным файлом сохраняется
+`*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки
+сканеров не изменились и checkpoint моложе `scan_checkpoint_ttl` (по умолчанию
+сутки), повторный CLI verify пропускает этот ассет. После TTL он сканируется
+повторно для учёта обновлений vulnerability DB; `scan_checkpoint_ttl = 0`
+полностью отключает такой skip.
+
 Для cron/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY). Пример:
 
 ```cron

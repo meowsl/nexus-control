@@ -39,16 +39,47 @@ def run_verify(args: Namespace) -> int:
             return 2
         require_non_docker_repo(repo)
 
-        items, listed_total = select_assets_for_cli(
+        enabled_scanners = scanners or list(ctx.settings.scanners_list)
+        pipeline = PipelineService(ctx.settings, ctx.client)
+        scanner_versions = pipeline.scanner_versions(enabled_scanners)
+        items, listed_total, selection = select_assets_for_cli(
             ctx.client,
             ctx.settings,
             repo_name,
             path_prefix=args.path_prefix,
             limit=args.limit,
             refresh=bool(args.refresh),
+            scanners=enabled_scanners,
+            scanner_versions=scanner_versions,
+            # Upload строится из текущего summary; checkpoint-only assets в него
+            # не входят, поэтому для --upload выполняем scan-only pipeline.
+            use_checkpoints=not bool(args.upload),
         )
         if not items:
-            console.print("[yellow]No assets matched filters.[/yellow]")
+            if args.json:
+                json.dump(
+                    {
+                        "repository": repo_name,
+                        "listed": listed_total,
+                        "selected": 0,
+                        "selection": {
+                            "download_needed": selection.download_needed,
+                            "scan_only": selection.scan_only,
+                            "checkpoint_skipped": selection.checkpoint_skipped,
+                        },
+                    },
+                    sys.stdout,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                sys.stdout.write("\n")
+            if selection.checkpoint_skipped:
+                console.print(
+                    "[green]All matching assets are unchanged and already "
+                    f"verified ({selection.checkpoint_skipped} skipped).[/green]"
+                )
+            else:
+                console.print("[yellow]No assets matched filters.[/yellow]")
             return 0
 
         workers = args.workers
@@ -59,12 +90,17 @@ def run_verify(args: Namespace) -> int:
         effective_workers = (
             workers if workers is not None else ctx.settings.pipeline_workers
         )
+        selected_mains = selection.download_needed + selection.scan_only
+        selected_sidecars = max(0, len(items) - selected_mains)
         console.print(
-            f"Verifying [bold]{repo_name}[/bold]: {len(items)} asset(s) "
-            f"(of {listed_total} listed), workers={effective_workers}"
+            f"Verifying [bold]{repo_name}[/bold]: mains={selected_mains} "
+            f"sidecars={selected_sidecars} (of {listed_total} listed), "
+            f"download={selection.download_needed} "
+            f"scan-only={selection.scan_only} "
+            f"checkpoint-skip={selection.checkpoint_skipped}, "
+            f"workers={effective_workers}"
         )
         progress = ProgressPrinter()
-        pipeline = PipelineService(ctx.settings, ctx.client)
         summary = pipeline.run(
             repository=repo_name,
             items=items,
@@ -108,6 +144,11 @@ def run_verify(args: Namespace) -> int:
             "failed": summary.total_failed,
             "errors": summary.total_errors,
             "copied": summary.total_copied,
+            "selection": {
+                "download_needed": selection.download_needed,
+                "scan_only": selection.scan_only,
+                "checkpoint_skipped": selection.checkpoint_skipped,
+            },
             "upload": upload_info,
         }
 

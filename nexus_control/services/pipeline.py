@@ -25,6 +25,7 @@ from nexus_control.models import (
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.grype_scanner import GrypeScanner
+from nexus_control.services.scan_checkpoint import write_pass_checkpoint
 from nexus_control.services.scan_common import (
     KNOWN_SCANNERS,
     is_scan_ignored_path,
@@ -58,6 +59,18 @@ class PipelineService:
             return self.trivy
         raise ValueError(f"Unknown scanner: {name}")
 
+    def scanner_versions(
+        self,
+        scanners: Sequence[str],
+    ) -> dict[str, str | None]:
+        versions: dict[str, str | None] = {}
+        for name in scanners:
+            try:
+                versions[name] = self._scanner_for(name).get_version()
+            except Exception:  # noqa: BLE001
+                versions[name] = None
+        return versions
+
     def run(
         self,
         *,
@@ -84,11 +97,7 @@ class PipelineService:
         )
 
         if scan:
-            for name in enabled:
-                try:
-                    summary.scanner_versions[name] = self._scanner_for(name).get_version()
-                except Exception:  # noqa: BLE001
-                    summary.scanner_versions[name] = None
+            summary.scanner_versions = self.scanner_versions(enabled)
 
         # Сначала основные артефакты (параллельно), потом sidecar'ы
         # (им нужен PASS main в summary.results).
@@ -132,6 +141,7 @@ class PipelineService:
                 scan=scan,
                 verify=verify,
                 enabled=enabled,
+                scanner_versions=summary.scanner_versions,
                 summary_results=summary.results,
                 results_lock=results_lock,
                 report=report_item,
@@ -257,6 +267,7 @@ class PipelineService:
         scan: bool,
         verify: bool,
         enabled: Sequence[str],
+        scanner_versions: dict[str, str | None],
         summary_results: list[AssetPipelineResult],
         results_lock: threading.Lock,
         report: Callable[[str, str], None],
@@ -373,6 +384,15 @@ class PipelineService:
                 "Not copying %s to verified (verdict=%s)",
                 asset_path,
                 result.verdict.value,
+            )
+
+        if verify and isinstance(item, NexusAsset):
+            write_pass_checkpoint(
+                settings=self.settings,
+                asset=item,
+                result=result,
+                scanners=enabled,
+                scanner_versions=scanner_versions,
             )
 
         return result

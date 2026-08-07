@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # Параллельная обработка ассетов в pipeline (download/scan/verify).
     # 1 = строго последовательно; 4–8 обычно оптимально для сети + I/O.
     pipeline_workers: int = Field(default=4, ge=1)
+    # PASS checkpoint для неизменённых локальных ассетов. После TTL скан
+    # выполняется заново, чтобы учитывать обновления vulnerability DB.
+    scan_checkpoint_ttl: int = Field(default=86400, ge=0)
 
     # Grype
     grype_binary: str = "grype"
@@ -257,6 +260,7 @@ class Settings(BaseSettings):
             "verified_root": str(self.verified_root),
             "scanners": self.scanners,
             "pipeline_workers": self.pipeline_workers,
+            "scan_checkpoint_ttl": self.scan_checkpoint_ttl,
             "grype_binary": self.grype_binary,
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,

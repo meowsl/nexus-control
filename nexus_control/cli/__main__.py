@@ -60,7 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=None,
-        help="Max number of non-sidecar assets to process",
+        help=(
+            "Max main assets requiring download/re-download; unchanged local "
+            "assets and sidecars do not consume the limit"
+        ),
     )
     p_verify.add_argument(
         "--workers",

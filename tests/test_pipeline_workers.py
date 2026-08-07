@@ -194,7 +194,8 @@ def test_verify_downloads_sidecars_only_for_passed_main(tmp_path: Path) -> None:
         _asset("pkg/bad.jar"),
         _asset("pkg/bad.jar.sha1"),
     ]
-    pipeline.run(repository="repo", items=items, workers=2)
+    summary = pipeline.run(repository="repo", items=items, workers=2)
 
     assert "pkg/good.jar.sha1" in downloaded
     assert "pkg/bad.jar.sha1" not in downloaded
+    assert summary.total_scanned == 2
