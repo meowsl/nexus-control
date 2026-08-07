@@ -113,6 +113,11 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
     client = MagicMock()
     client.iter_asset_pages.return_value = iter(pages)
 
+    progress_calls: list[tuple[int, str]] = []
+
+    def on_progress(listed: int, stats, source: str) -> None:
+        progress_calls.append((listed, source))
+
     selected, total, stats = select_assets_for_cli(
         client,
         settings,
@@ -120,6 +125,7 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
         path_prefix="com",
         limit=1,
         refresh=True,
+        on_progress=on_progress,
     )
     assert total == 2
     assert sorted(a.path for a in selected) == [
@@ -127,3 +133,5 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
         "com/a.jar.sha1",
     ]
     assert stats.download_needed == 1
+    assert progress_calls
+    assert progress_calls[-1] == (2, "nexus")
