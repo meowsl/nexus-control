@@ -9,7 +9,7 @@ from pathlib import Path
 
 from nexus_control.config import Settings
 from nexus_control.models import DownloadResult, DownloadStatus, DockerTag, NexusAsset
-from nexus_control.nexus.client import NexusClient, NexusAPIError
+from nexus_control.nexus.client import NexusClient, NexusAPIError, NexusNotFoundError
 from nexus_control.utils.fs import (
     disable_execute_bit_best_effort,
     prepare_asset_destination,
@@ -68,7 +68,12 @@ class Downloader:
         self._ensure_skip_metadata(existing, asset)
         return DownloadInspection(needs_download=False, local_path=existing)
 
-    def download_asset(self, asset: NexusAsset) -> DownloadResult:
+    def download_asset(
+        self,
+        asset: NexusAsset,
+        *,
+        optional: bool = False,
+    ) -> DownloadResult:
         try:
             dest = asset_download_path(
                 self.settings.download_root,
@@ -118,6 +123,16 @@ class Downloader:
                         written += len(chunk)
             tmp.replace(dest)
             disable_execute_bit_best_effort(dest)
+        except NexusNotFoundError as exc:
+            _cleanup(tmp)
+            if optional:
+                logger.debug("Optional sidecar not found: %s", asset.path)
+                return DownloadResult(
+                    status=DownloadStatus.NOT_FOUND,
+                    error=str(exc),
+                )
+            logger.error("Download failed for %s: %s", asset.path, exc)
+            return DownloadResult(status=DownloadStatus.ERROR, error=str(exc))
         except NexusAPIError as exc:
             _cleanup(tmp)
             logger.error("Download failed for %s: %s", asset.path, exc)

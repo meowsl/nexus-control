@@ -26,6 +26,9 @@ console = Console(stderr=True)
 
 def run_verify(args: Namespace) -> int:
     repo_name = args.repo.strip()
+    if args.limit is not None and args.limit < 1:
+        console.print("[red]--limit must be >= 1[/red]")
+        return 2
     scanners = (
         parse_scanner_names(args.scanners)
         if args.scanners
@@ -109,6 +112,7 @@ def run_verify(args: Namespace) -> int:
             verify=True,
             scanners=scanners,
             workers=workers,
+            discover_sidecars=args.limit is not None,
             on_progress=progress,
         )
 

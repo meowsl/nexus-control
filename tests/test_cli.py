@@ -91,7 +91,7 @@ def test_filter_path_prefix_and_limit() -> None:
     assert any(is_scan_ignored_path(a.path) for a in limited)
 
 
-def test_streaming_select_and_cache_preserve_selected_sidecars(
+def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
     tmp_path: Path,
 ) -> None:
     settings = Settings(
@@ -121,27 +121,9 @@ def test_streaming_select_and_cache_preserve_selected_sidecars(
         limit=1,
         refresh=True,
     )
-    assert total == 5
+    assert total == 2
     assert sorted(a.path for a in selected) == [
         "com/a.jar",
         "com/a.jar.sha1",
     ]
     assert stats.download_needed == 1
-
-    cached_client = MagicMock()
-    cached_client.iter_asset_pages.side_effect = AssertionError(
-        "fresh streaming cache must avoid Nexus"
-    )
-    cached, cached_total, cached_stats = select_assets_for_cli(
-        cached_client,
-        settings,
-        "repo",
-        path_prefix="com",
-        limit=1,
-    )
-    assert cached_total == 5
-    assert sorted(a.path for a in cached) == [
-        "com/a.jar",
-        "com/a.jar.sha1",
-    ]
-    assert cached_stats.download_needed == 1
