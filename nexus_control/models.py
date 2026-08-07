@@ -28,6 +28,7 @@ class DownloadStatus(str, Enum):
     DOWNLOADING = "downloading"
     SUCCESS = "success"
     SKIPPED_EXISTING = "skipped_existing"
+    NOT_FOUND = "not_found"
     ERROR = "error"
 
 

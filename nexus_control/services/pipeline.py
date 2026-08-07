@@ -28,6 +28,7 @@ from nexus_control.services.grype_scanner import GrypeScanner
 from nexus_control.services.scan_checkpoint import write_pass_checkpoint
 from nexus_control.services.scan_common import (
     KNOWN_SCANNERS,
+    SCAN_IGNORE_SUFFIXES,
     is_scan_ignored_path,
     main_asset_path_for_sidecar,
     parse_scanner_names,
@@ -81,6 +82,7 @@ class PipelineService:
         verify: bool = True,
         scanners: Sequence[str] | None = None,
         workers: int | None = None,
+        discover_sidecars: bool = False,
         on_progress: ProgressCallback | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> PipelineSummary:
@@ -114,6 +116,7 @@ class PipelineService:
         progress_lock = threading.Lock()
         done_count = 0
         cancel_flag = threading.Event()
+        optional_sidecar_paths: set[str] = set()
 
         def report_item(asset_path: str, stage: str) -> None:
             if on_progress is None:
@@ -142,6 +145,10 @@ class PipelineService:
                 verify=verify,
                 enabled=enabled,
                 scanner_versions=summary.scanner_versions,
+                optional_download=(
+                    isinstance(item, NexusAsset)
+                    and item.path in optional_sidecar_paths
+                ),
                 summary_results=summary.results,
                 results_lock=results_lock,
                 report=report_item,
@@ -219,6 +226,48 @@ class PipelineService:
         run_batch(mains)
         if not summary.cancelled:
             if verify:
+                # При ограниченном листинге sidecar может находиться на ещё не
+                # прочитанной странице. Для PASS main пробуем стандартные
+                # companion-paths напрямую; 404 для них является нормой.
+                if discover_sidecars:
+                    known_sidecars = {
+                        item.path
+                        for _index, item in sidecars
+                        if isinstance(item, NexusAsset)
+                    }
+                    next_index = len(items)
+                    generated = 0
+                    for _index, item in mains:
+                        if not isinstance(item, NexusAsset):
+                            continue
+                        if not _main_artifact_verified(summary.results, item.path):
+                            continue
+                        for suffix in SCAN_IGNORE_SUFFIXES:
+                            sidecar_path = item.path + suffix
+                            if sidecar_path in known_sidecars:
+                                continue
+                            sidecars.append(
+                                (
+                                    next_index,
+                                    NexusAsset(
+                                        id=f"{item.id}:{suffix}",
+                                        path=sidecar_path,
+                                        download_url=(
+                                            f"{item.download_url}{suffix}"
+                                            if item.download_url
+                                            else None
+                                        ),
+                                        repository=item.repository,
+                                        format=item.format,
+                                    ),
+                                )
+                            )
+                            optional_sidecar_paths.add(sidecar_path)
+                            known_sidecars.add(sidecar_path)
+                            next_index += 1
+                            generated += 1
+                    total += generated
+
                 # Sidecar имеет смысл загружать только после успешного main.
                 # Это не меняет содержимое verified: sidecar для FAIL/ERROR
                 # артефакта туда всё равно никогда не копировался.
@@ -268,6 +317,7 @@ class PipelineService:
         verify: bool,
         enabled: Sequence[str],
         scanner_versions: dict[str, str | None],
+        optional_download: bool,
         summary_results: list[AssetPipelineResult],
         results_lock: threading.Lock,
         report: Callable[[str, str], None],
@@ -281,6 +331,8 @@ class PipelineService:
             report(asset_path, "download")
             if isinstance(item, DockerTag):
                 dl = self.downloader.download_docker_tag(item)
+            elif optional_download:
+                dl = self.downloader.download_asset(item, optional=True)
             else:
                 dl = self.downloader.download_asset(item)
         else:

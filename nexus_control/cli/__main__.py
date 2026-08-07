@@ -62,7 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Max main assets requiring download/re-download; unchanged local "
-            "assets and sidecars do not consume the limit"
+            "assets and sidecars do not consume the limit; Nexus listing stops "
+            "when the limit is reached"
         ),
     )
     p_verify.add_argument(

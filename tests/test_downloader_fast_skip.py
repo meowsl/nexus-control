@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from nexus_control.config import Settings
 from nexus_control.models import DownloadStatus, NexusAsset
+from nexus_control.nexus.client import NexusNotFoundError
 from nexus_control.services.downloader import Downloader
 from nexus_control.utils.safe_path import asset_download_path
 
@@ -108,3 +110,29 @@ def test_legacy_metadata_is_upgraded_after_one_hash(
 
     assert downloader.download_asset(asset).status == DownloadStatus.SKIPPED_EXISTING
     assert hash_calls == 1
+
+
+def test_optional_missing_sidecar_is_not_download_error(tmp_path: Path) -> None:
+    settings = Settings(
+        nexus_url="http://localhost:8081",
+        download_root=tmp_path / "downloads",
+    )
+    asset = NexusAsset(
+        id="sidecar",
+        path="pkg/a.jar.sha1",
+        download_url="http://nexus/repository/repo/pkg/a.jar.sha1",
+        repository="repo",
+        format="maven2",
+    )
+    client = MagicMock()
+    client.resolve_download_url.return_value = asset.download_url
+
+    @contextmanager
+    def missing_download(url: str):
+        raise NexusNotFoundError("missing", 404)
+        yield  # pragma: no cover
+
+    client.stream_download = missing_download
+    result = Downloader(settings, client).download_asset(asset, optional=True)
+
+    assert result.status == DownloadStatus.NOT_FOUND

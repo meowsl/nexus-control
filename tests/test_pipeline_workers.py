@@ -158,8 +158,14 @@ def test_verify_downloads_sidecars_only_for_passed_main(tmp_path: Path) -> None:
     pipeline = PipelineService(settings, MagicMock())
     downloaded: list[str] = []
 
-    def fake_download(asset: NexusAsset) -> DownloadResult:
+    def fake_download(
+        asset: NexusAsset,
+        *,
+        optional: bool = False,
+    ) -> DownloadResult:
         downloaded.append(asset.path)
+        if optional:
+            return DownloadResult(status=DownloadStatus.NOT_FOUND)
         path = tmp_path / "dl" / asset.path.replace("/", "_")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x")
@@ -194,8 +200,15 @@ def test_verify_downloads_sidecars_only_for_passed_main(tmp_path: Path) -> None:
         _asset("pkg/bad.jar"),
         _asset("pkg/bad.jar.sha1"),
     ]
-    summary = pipeline.run(repository="repo", items=items, workers=2)
+    summary = pipeline.run(
+        repository="repo",
+        items=items,
+        workers=2,
+        discover_sidecars=True,
+    )
 
     assert "pkg/good.jar.sha1" in downloaded
     assert "pkg/bad.jar.sha1" not in downloaded
+    assert "pkg/good.jar.md5" in downloaded
+    assert summary.total_errors == 0
     assert summary.total_scanned == 2

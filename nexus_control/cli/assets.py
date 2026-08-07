@@ -157,6 +157,31 @@ def select_assets_for_cli(
         use_checkpoints=use_checkpoints,
     )
 
+    if limit is not None:
+        for page_number, page in enumerate(
+            client.iter_asset_pages(repository),
+            start=1,
+        ):
+            for asset in page:
+                selector.add(asset)
+                if selector.limit_reached:
+                    break
+            if page_number == 1 or page_number % 10 == 0:
+                logger.info(
+                    "Listed %d assets (page %d)…",
+                    selector.total,
+                    page_number,
+                )
+            if selector.limit_reached:
+                logger.info(
+                    "Stopped Nexus listing after download limit=%d (%d assets inspected)",
+                    limit,
+                    selector.total,
+                )
+                break
+        # Частичный результат нельзя сохранять как полный asset-list cache.
+        return selector.finish(), selector.total, selector.stats
+
     def tracked_assets() -> Iterable[NexusAsset]:
         total = 0
         for page_number, page in enumerate(
@@ -206,6 +231,8 @@ def _select_assets(
     )
     for asset in assets:
         selector.add(asset)
+        if selector.limit_reached:
+            break
     return selector.finish(), selector.total, selector.stats
 
 
@@ -237,6 +264,13 @@ class _AssetSelector:
         self._scanners = list(scanners or ())
         self._scanner_versions = dict(scanner_versions or {})
         self._use_checkpoints = use_checkpoints
+
+    @property
+    def limit_reached(self) -> bool:
+        return (
+            self.limit is not None
+            and self.stats.download_needed >= self.limit
+        )
 
     def add(self, asset: NexusAsset) -> None:
         self.total += 1

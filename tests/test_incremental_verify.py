@@ -92,7 +92,7 @@ def test_limit_counts_only_missing_or_changed_assets(tmp_path: Path) -> None:
         scanner_versions={"grype": "test"},
     )
 
-    assert total == 3
+    assert total == 2
     assert [asset.path for asset in selected] == [
         "pkg/unchanged.jar",
         "pkg/changed.jar",
