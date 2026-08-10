@@ -83,6 +83,12 @@ nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 2
 
 # Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
 nexus-control-cli verify --repo maven-hosted --workers 8
+
+# История сканирований (последние verify из TUI / CLI / scheduler)
+nexus-control-cli history
+nexus-control-cli history --repo maven-hosted --limit 20
+nexus-control-cli history show <run_id>
+nexus-control-cli history show <run_id> --json
 ```
 
 `--limit N` ограничивает только основные ассеты, которым действительно нужна
@@ -99,6 +105,12 @@ nexus-control-cli verify --repo maven-hosted --workers 8
 сутки), повторный CLI verify пропускает этот ассет. После TTL он сканируется
 повторно для учёта обновлений vulnerability DB; `scan_checkpoint_ttl = 0`
 полностью отключает такой skip.
+
+Каждый verify (TUI / CLI / scheduler) также пишет компактный snapshot в
+`~/.cache/nexus-control/scan-history/` (index + `runs/*.json`). Хранится
+последние `scan_history_keep` прогонов (по умолчанию 50; `0` = выкл).
+В TUI: клавиша `h` — список; Enter — детали (как отчёт `o`). `o` без
+in-memory отчёта открывает самый свежий disk-run для текущего репо.
 
 ### Планировщик (встроенный daemon)
 
@@ -224,6 +236,7 @@ nexus-control
 | `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
+| `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
 | `LOG_FILE` | `~/nexus-control/logs/nexus-control.log` | Ротируемый лог |
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
@@ -249,7 +262,7 @@ python main.py
 3. В дереве ассетов выберите файл или директорию.
 4. `s` — выбрать сканеры (grype / trivy / оба). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
-6. Изучите модальное окно результатов; позже `o` откроет последний отчёт.
+6. Изучите модальное окно результатов; позже `o` / `h` — последний отчёт и история.
 
 ---
 
@@ -263,6 +276,7 @@ python main.py
 | `r` | Обновить список |
 | `/` | Фильтр по имени |
 | `Enter` | Открыть ассеты |
+| `h` | История сканирований |
 | `?` | Справка |
 
 ### Ассеты
@@ -278,7 +292,8 @@ python main.py
 | `D` | Скачать **весь** репозиторий |
 | `V` | Verify **всего** репозитория |
 | `s` | Сканеры (grype / trivy / оба) |
-| `o` | Открыть последний отчёт |
+| `o` | Последний отчёт (память или disk history) |
+| `h` | История сканирований (текущий репо) |
 | `?` | Справка |
 
 **Правила выбора**
@@ -429,11 +444,12 @@ nexus-control/
     ├── logging_setup.py
     ├── i18n.py
     ├── cli/                     # nexus-control-cli
-    │   ├── __main__.py          # argparse: repos / verify / upload / schedule
+    │   ├── __main__.py          # argparse: repos / verify / upload / schedule / history
     │   ├── cmd_repos.py
     │   ├── cmd_verify.py        # download + scan + verified [+ upload]
     │   ├── cmd_upload.py        # upload локального *-verified без сканера
     │   ├── cmd_schedule.py      # интерактивное меню планировщика
+    │   ├── cmd_history.py       # list/show scan history
     │   ├── assets.py            # listing / cache / inspect / checkpoints
     │   ├── progress.py
     │   └── bootstrap.py
@@ -451,9 +467,10 @@ nexus-control/
     │   ├── downloader.py
     │   ├── grype_scanner.py / trivy_scanner.py
     │   ├── scan_common.py / scan_checkpoint.py
+    │   ├── scan_history.py      # index + run snapshots
     │   ├── verifier.py / verified_uploader.py
     │   └── docker_assets.py
-    ├── ui/                      # экраны / виджеты / кейбинды Textual
+    ├── ui/                      # экраны / виджеты / history / кейбинды Textual
     └── utils/                   # safe_path, fs, hashing, subprocess, tree_builder
 ```
 

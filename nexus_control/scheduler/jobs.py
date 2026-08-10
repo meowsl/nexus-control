@@ -60,6 +60,8 @@ def _run_repo(rule: ScheduleRule, repo: str) -> int:
                 workers=rule.workers,
                 refresh=rule.refresh,
                 json=False,
+                history_source="scheduler",
+                history_rule_id=rule.id,
             )
         )
         return code

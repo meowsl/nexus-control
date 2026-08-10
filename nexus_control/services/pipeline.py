@@ -85,6 +85,10 @@ class PipelineService:
         discover_sidecars: bool = False,
         on_progress: ProgressCallback | None = None,
         should_cancel: Callable[[], bool] | None = None,
+        history_source: str | None = None,
+        history_rule_id: str | None = None,
+        history_path_prefix: str | None = None,
+        history_checkpoint_skipped: int = 0,
     ) -> PipelineSummary:
         enabled = (
             parse_scanner_names(",".join(scanners))
@@ -305,6 +309,22 @@ class PipelineService:
                 self.verifier.write_unverified_list(summary)
             except OSError as exc:
                 logger.error("Failed to write unverified assets list: %s", exc)
+
+        if history_source in {"tui", "cli", "scheduler"}:
+            try:
+                from nexus_control.services.scan_history import record_scan_run
+
+                record_scan_run(
+                    self.settings,
+                    summary,
+                    source=history_source,  # type: ignore[arg-type]
+                    rule_id=history_rule_id,
+                    path_prefix=history_path_prefix,
+                    workers=worker_count if download or scan or verify else None,
+                    checkpoint_skipped=history_checkpoint_skipped,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Scan history recording failed: %s", exc)
         return summary
 
     def _process_item(

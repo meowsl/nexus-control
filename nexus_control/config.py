@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # PASS checkpoint для неизменённых локальных ассетов. После TTL скан
     # выполняется заново, чтобы учитывать обновления vulnerability DB.
     scan_checkpoint_ttl: int = Field(default=86400, ge=0)
+    # Сколько последних verify-прогонов хранить в истории (TUI h / CLI history).
+    # 0 = не писать историю.
+    scan_history_keep: int = Field(default=50, ge=0)
 
     # Grype
     grype_binary: str = "grype"
@@ -261,6 +264,7 @@ class Settings(BaseSettings):
             "scanners": self.scanners,
             "pipeline_workers": self.pipeline_workers,
             "scan_checkpoint_ttl": self.scan_checkpoint_ttl,
+            "scan_history_keep": self.scan_history_keep,
             "grype_binary": self.grype_binary,
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,
