@@ -128,6 +128,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_schedule.set_defaults(_handler="schedule")
 
+    p_history = sub.add_parser(
+        "history",
+        help="List or show saved verify runs (scan history)",
+    )
+    p_history.add_argument(
+        "history_action",
+        nargs="?",
+        default="list",
+        choices=["list", "show"],
+        help="list (default) or show <run_id>",
+    )
+    p_history.add_argument(
+        "run_id",
+        nargs="?",
+        default=None,
+        help="Run id for 'show'",
+    )
+    p_history.add_argument(
+        "--repo",
+        default=None,
+        help="Filter list by repository name",
+    )
+    p_history.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max runs to list (default: 20)",
+    )
+    p_history.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout",
+    )
+    p_history.set_defaults(_handler="history")
+
     return parser
 
 
@@ -151,6 +186,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_schedule import run_schedule
 
             code = run_schedule(args)
+        elif args._handler == "history":
+            from nexus_control.cli.cmd_history import run_history
+
+            code = run_history(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return

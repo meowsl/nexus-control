@@ -17,8 +17,10 @@ from nexus_control.cli.assets import (
 )
 from nexus_control.cli.bootstrap import open_cli_client
 from nexus_control.cli.progress import ProgressPrinter
+from nexus_control.models import PipelineSummary
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.services.scan_common import parse_scanner_names
+from nexus_control.services.scan_history import record_scan_run
 from nexus_control.services.verified_uploader import VerifiedUploader
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,22 @@ def run_verify(args: Namespace) -> int:
             final=True,
         )
         if not items:
+            history_source = getattr(args, "history_source", None) or "cli"
+            empty = PipelineSummary(
+                repository=repo_name,
+                scanners=list(enabled_scanners),
+                scanner_versions=dict(scanner_versions),
+                finished_at=datetime.now(timezone.utc),
+            )
+            record_scan_run(
+                ctx.settings,
+                empty,
+                source=history_source,  # type: ignore[arg-type]
+                rule_id=getattr(args, "history_rule_id", None),
+                path_prefix=args.path_prefix,
+                workers=args.workers,
+                checkpoint_skipped=selection.checkpoint_skipped,
+            )
             if args.json:
                 json.dump(
                     {
@@ -140,6 +158,10 @@ def run_verify(args: Namespace) -> int:
             workers=workers,
             discover_sidecars=args.limit is not None,
             on_progress=progress,
+            history_source=getattr(args, "history_source", None) or "cli",
+            history_rule_id=getattr(args, "history_rule_id", None),
+            history_path_prefix=args.path_prefix,
+            history_checkpoint_skipped=selection.checkpoint_skipped,
         )
 
         upload_info: dict | None = None

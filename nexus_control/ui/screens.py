@@ -35,6 +35,7 @@ from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetwo
 from nexus_control.nexus.errors import is_ssl_certificate_error
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.i18n import _
+from nexus_control.ui.history import HistoryModal, open_latest_report_or_message
 from nexus_control.ui.keybindings import (
     asset_bindings,
     asset_tree_extra_bindings,
@@ -167,6 +168,9 @@ class RepositoriesScreen(Screen[None]):
 
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(help_text()))
+
+    def action_open_history(self) -> None:
+        self.app.push_screen(HistoryModal(repository=None))
 
     def action_logout(self) -> None:
         """Сбросить Nexus-сессию и encrypted credentials, затем выйти."""
@@ -532,6 +536,9 @@ class AssetsScreen(Screen[None]):
 
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(help_text()))
+
+    def action_open_history(self) -> None:
+        self.app.push_screen(HistoryModal(repository=self.repository.name))
 
     def action_search(self) -> None:
         row = self.query_one("#filter-row")
@@ -1247,12 +1254,11 @@ class AssetsScreen(Screen[None]):
         )
 
     def action_open_report(self) -> None:
-        if self._last_summary is None:
-            self.app.push_screen(
-                MessageModal(_("Report"), _("No report yet. Run verify first."))
-            )
-            return
-        self.app.push_screen(ReportModal(self._last_summary))
+        open_latest_report_or_message(
+            self.app,
+            repository=self.repository.name,
+            last_summary=self._last_summary,
+        )
 
     def action_scanner_settings(self) -> None:
         def _after(chosen: list[str] | None) -> None:
@@ -1353,6 +1359,7 @@ class AssetsScreen(Screen[None]):
                 scanners=self._enabled_scanners if scan else None,
                 on_progress=on_progress,
                 should_cancel=lambda: self._cancel,
+                history_source="tui" if (scan or verify) else None,
             )
             schedule_on_app(app, self._on_pipeline_done, summary)
         except Exception as exc:  # noqa: BLE001
