@@ -160,6 +160,31 @@ Timezone по умолчанию — **локальный TZ машины** (`ti
 (`schedule start` или внешний `@reboot`).
 
 Для daemon/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY).
+
+### VK Teams (уведомления scheduler)
+
+После завершения правила планировщик может отправить итог в чат бота
+[VK Teams](https://teams.vk.com/botapi/) (VK Workspace) и, для `action = "verify"`,
+показать кнопку **Upload** — по нажатию загрузит все repos правила в `*-verified`.
+
+1. Создайте бота: `@Metabot` → `/newbot` → сохраните **token**.
+2. Узнайте **API URL** инсталляции (часто `https://myteam.mail.ru/bot/v1`; on-prem — свой).
+3. Узнайте **chatId** (ник, stamp группы или `…@chat.agent`) и добавьте бота в чат.
+4. В `config.toml` / env:
+
+```toml
+vk_teams_token = "…"
+vk_teams_api_url = "https://myteam.mail.ru/bot/v1"
+vk_teams_chat_id = "…"
+vk_teams_notify = "always"   # off | always | failures
+vk_teams_upload_button = true
+```
+
+- `failures` — только при `exit_code != 0` или FAIL/ERROR в истории прогона.
+- При `verify_upload` кнопка не показывается (upload уже выполнен).
+- Callbacks обрабатывает **тот же** scheduler daemon (long-poll `events/get` в idle);
+  без запущенного демона кнопка Upload не сработает.
+
 Альтернатива без встроенного демона — классический cron:
 
 ```cron
@@ -237,6 +262,11 @@ nexus-control
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
+| `VK_TEAMS_TOKEN` | _(пусто)_ | Токен бота VK Teams; пусто = интеграция выкл |
+| `VK_TEAMS_API_URL` | `https://myteam.mail.ru/bot/v1` | Base URL Bot API |
+| `VK_TEAMS_CHAT_ID` | _(пусто)_ | chatId / nick / stamp для уведомлений |
+| `VK_TEAMS_NOTIFY` | `off` | `off` / `always` / `failures` (только scheduler) |
+| `VK_TEAMS_UPLOAD_BUTTON` | `true` | Кнопка Upload для `action=verify` |
 | `LOG_FILE` | `~/nexus-control/logs/nexus-control.log` | Ротируемый лог |
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
@@ -457,6 +487,9 @@ nexus-control/
     │   ├── models.py / store.py / cronutil.py
     │   ├── daemon.py / jobs.py / pidfile.py / state.py
     │   └── paths.py
+    ├── integrations/            # внешние интеграции (VK Teams notify)
+    │   ├── vk_teams.py          # Bot API httpx-клиент
+    │   └── vk_notify.py         # сообщения + Upload callback
     ├── nexus/                   # REST-клиент Nexus
     │   ├── client.py
     │   ├── repositories.py / assets.py / uploads.py

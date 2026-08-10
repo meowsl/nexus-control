@@ -13,6 +13,11 @@ from pathlib import Path
 
 from nexus_control.cli.bootstrap import load_cli_settings
 from nexus_control.config import ConfigError, Settings
+from nexus_control.integrations.vk_notify import (
+    notify_rule_finished,
+    poll_and_handle_events,
+    vk_teams_should_poll,
+)
 from nexus_control.logging_setup import setup_logging
 from nexus_control.scheduler.cronutil import CronError, next_fire
 from nexus_control.scheduler.jobs import run_rule
@@ -132,7 +137,7 @@ def stop_daemon(settings: Settings | None = None, *, timeout: float = 30.0) -> i
 
 def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
     """Синхронный прогон правила (меню / schedule run)."""
-    load_cli_settings(allow_prompt=sys.stdin.isatty())
+    settings = load_cli_settings(allow_prompt=sys.stdin.isatty())
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
@@ -142,7 +147,12 @@ def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
     if not rule.enabled:
         print(f"Rule {rule_id!r} is disabled; running anyway.", file=sys.stderr)
     print(f"Running rule {rule.id} for repos={rule.repos}", file=sys.stderr)
-    return run_rule(rule)
+    code = run_rule(rule)
+    try:
+        notify_rule_finished(settings, rule, code)
+    except Exception:  # noqa: BLE001
+        logger.exception("VK Teams notify_rule_finished failed")
+    return code
 
 
 def _settings_no_prompt() -> Settings:
@@ -284,13 +294,31 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
                 # queue/overlap: v1 трактует queue как последовательный wait
                 # (мы и так последовательны); overlap — тоже sequential в одном
                 # процессе (честный parallel overlap отложен).
-                _execute_rule(rule, fire_at, fire_key, state, state_file, last_fire_keys)
+                _execute_rule(
+                    settings,
+                    rule,
+                    fire_at,
+                    fire_key,
+                    state,
+                    state_file,
+                    last_fire_keys,
+                )
             _refresh_next_fires(config, state, state_file)
             continue
 
         # Sleep until next fire (max 30s so signals/reload are responsive).
+        # When VK Teams Upload buttons are enabled, long-poll events instead.
         sleep_for = _seconds_until_next(config)
-        time.sleep(min(max(sleep_for, 0.2), 30.0))
+        wait = min(max(sleep_for, 0.2), 30.0)
+        if vk_teams_should_poll(settings):
+            poll_time = max(1, min(int(wait), 25))
+            try:
+                poll_and_handle_events(settings, poll_time=poll_time)
+            except Exception:  # noqa: BLE001
+                logger.exception("VK Teams event poll failed")
+                time.sleep(min(wait, 5.0))
+        else:
+            time.sleep(wait)
 
     state.busy = False
     state.current_rule = None
@@ -301,6 +329,7 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
 
 
 def _execute_rule(
+    settings: Settings,
     rule: ScheduleRule,
     fire_at: datetime,
     fire_key: str,
@@ -340,6 +369,10 @@ def _execute_rule(
         )
         last_fire_keys.add(fire_key)
         save_state(state_file, state)
+        try:
+            notify_rule_finished(settings, rule, code)
+        except Exception:  # noqa: BLE001
+            logger.exception("VK Teams notify_rule_finished failed")
 
 
 def _due_rules(

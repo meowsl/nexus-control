@@ -363,16 +363,24 @@ def test_overlap_skip_records_skipped(tmp_path: Path) -> None:
 
     # _execute_rule still runs when called (overlap check is in loop)
     rule = ScheduleRule(id="x", cron="0 0 * * *", repos=["r"])
+    settings = MagicMock()
+    settings.vk_teams_token = ""
+    settings.vk_teams_chat_id = ""
+    settings.vk_teams_notify = "off"
     with patch("nexus_control.scheduler.daemon.run_rule", return_value=0):
-        keys: set[str] = set()
-        _execute_rule(
-            rule,
-            datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
-            "x:202601010000",
-            SchedulerState(),
-            state_file,
-            keys,
-        )
+        with patch(
+            "nexus_control.scheduler.daemon.notify_rule_finished"
+        ):
+            keys: set[str] = set()
+            _execute_rule(
+                settings,
+                rule,
+                datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
+                "x:202601010000",
+                SchedulerState(),
+                state_file,
+                keys,
+            )
     assert "x:202601010000" in keys
 
 

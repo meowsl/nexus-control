@@ -91,6 +91,48 @@ class Settings(BaseSettings):
     # 0 = не писать историю.
     scan_history_keep: int = Field(default=50, ge=0)
 
+    # VK Teams (VK Workspace) — уведомления scheduler + кнопка Upload.
+    vk_teams_token: str = Field(
+        default="",
+        description="Bot API token from Metabot /newbot",
+        validation_alias=AliasChoices("vk_teams_token", "VK_TEAMS_TOKEN"),
+    )
+    vk_teams_api_url: str = Field(
+        default="https://myteam.mail.ru/bot/v1",
+        description="VK Teams Bot API base URL",
+        validation_alias=AliasChoices("vk_teams_api_url", "VK_TEAMS_API_URL"),
+    )
+    vk_teams_chat_id: str = Field(
+        default="",
+        description="chatId / nick / stamp for notifications",
+        validation_alias=AliasChoices("vk_teams_chat_id", "VK_TEAMS_CHAT_ID"),
+    )
+    vk_teams_notify: Literal["off", "always", "failures"] = Field(
+        default="off",
+        description="When to notify: off | always | failures",
+        validation_alias=AliasChoices("vk_teams_notify", "VK_TEAMS_NOTIFY"),
+    )
+    vk_teams_upload_button: bool = Field(
+        default=True,
+        description="Show Upload button for verify-only scheduler rules",
+        validation_alias=AliasChoices(
+            "vk_teams_upload_button",
+            "VK_TEAMS_UPLOAD_BUTTON",
+        ),
+    )
+    vk_teams_verify_ssl: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "vk_teams_verify_ssl",
+            "VK_TEAMS_VERIFY_SSL",
+        ),
+    )
+    vk_teams_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("vk_teams_timeout", "VK_TEAMS_TIMEOUT"),
+    )
+
     # Grype
     grype_binary: str = "grype"
     grype_use_docker: ScannerDockerMode = "auto"
@@ -192,6 +234,39 @@ class Settings(BaseSettings):
 
         return normalize_locale(str(value if value is not None else "ru"))
 
+    @field_validator("vk_teams_notify", mode="before")
+    @classmethod
+    def _normalize_vk_teams_notify(cls, value: object) -> str:
+        text = str(value if value is not None else "off").strip().lower()
+        if text in {"0", "no", "false", ""}:
+            return "off"
+        if text in {"1", "yes", "true", "on"}:
+            return "always"
+        if text not in {"off", "always", "failures"}:
+            raise ValueError(
+                "vk_teams_notify must be off, always, or failures"
+            )
+        return text
+
+    @field_validator("vk_teams_api_url", mode="before")
+    @classmethod
+    def _normalize_vk_teams_api_url(cls, value: object) -> str:
+        text = str(value or "https://myteam.mail.ru/bot/v1").strip().rstrip("/")
+        if not text:
+            return "https://myteam.mail.ru/bot/v1"
+        return text
+
+    @field_validator(
+        "vk_teams_token",
+        "vk_teams_chat_id",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_vk_teams_str(cls, value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
     @field_validator("log_level", mode="before")
     @classmethod
     def _normalize_log_level(cls, value: object) -> str:
@@ -265,6 +340,11 @@ class Settings(BaseSettings):
             "pipeline_workers": self.pipeline_workers,
             "scan_checkpoint_ttl": self.scan_checkpoint_ttl,
             "scan_history_keep": self.scan_history_keep,
+            "vk_teams_notify": self.vk_teams_notify,
+            "vk_teams_chat_id": self.vk_teams_chat_id or "",
+            "vk_teams_api_url": self.vk_teams_api_url,
+            "vk_teams_token": "***" if self.vk_teams_token else "",
+            "vk_teams_upload_button": self.vk_teams_upload_button,
             "grype_binary": self.grype_binary,
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,
