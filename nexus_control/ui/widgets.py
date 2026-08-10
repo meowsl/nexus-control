@@ -161,7 +161,7 @@ class HelpModal(ModalScreen[None]):
 
 
 class ScannerSettingsModal(ModalScreen[list[str] | None]):
-    """Выбор сканеров для verify: grype / trivy / оба."""
+    """Выбор сканеров для verify: grype / trivy / osv."""
 
     DEFAULT_CSS = """
     ScannerSettingsModal {
@@ -198,7 +198,7 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
             yield Label(f"[b]{_('Vulnerability scanners')}[/b]")
             yield Static(
                 _(
-                    "Enable one or both. Verify copies to *-verified only if all "
+                    "Enable one or more. Verify copies to *-verified only if all "
                     "enabled scanners PASS."
                 ),
                 classes="hint",
@@ -212,6 +212,11 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
                 "Trivy",
                 value="trivy" in self._selected,
                 id="scan-trivy",
+            )
+            yield Checkbox(
+                "OSV",
+                value="osv" in self._selected,
+                id="scan-osv",
             )
             yield Static("", id="scan-error", classes="error")
             with Horizontal(classes="buttons"):
@@ -228,6 +233,8 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
                 chosen.append("grype")
             if self.query_one("#scan-trivy", Checkbox).value:
                 chosen.append("trivy")
+            if self.query_one("#scan-osv", Checkbox).value:
+                chosen.append("osv")
             if not chosen:
                 self.query_one("#scan-error", Static).update(
                     _("Select at least one scanner.")

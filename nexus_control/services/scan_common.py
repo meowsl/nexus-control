@@ -1,4 +1,4 @@
-"""Общие хелперы для сканеров уязвимостей (Grype / Trivy)."""
+"""Общие хелперы для сканеров уязвимостей (Grype / Trivy / OSV)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ SEVERITY_MAP = {
     "": Severity.UNKNOWN,
 }
 
-KNOWN_SCANNERS = ("grype", "trivy")
+KNOWN_SCANNERS = ("grype", "trivy", "osv")
 
 # Checksum / signature sidecars — CVE-сканеры не запускаем; в verified копируем
 # только вместе с PASS-артефактом (см. pipeline / verifier).
@@ -166,5 +166,7 @@ def parse_scanner_names(value: str) -> list[str]:
         if name not in seen:
             seen.append(name)
     if not seen:
-        raise ValueError("At least one scanner must be enabled (grype and/or trivy)")
+        raise ValueError(
+            "At least one scanner must be enabled (grype, trivy, and/or osv)"
+        )
     return seen

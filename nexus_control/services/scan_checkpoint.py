@@ -49,6 +49,18 @@ def scan_policy_hash(settings: Settings, scanners: Sequence[str]) -> str:
                     )
                 )
             )
+        elif name == "osv":
+            parts.append(
+                "|".join(
+                    (
+                        "osv",
+                        settings.osv_binary,
+                        settings.osv_use_docker,
+                        settings.osv_docker_image,
+                        settings.osv_extra_args,
+                    )
+                )
+            )
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 

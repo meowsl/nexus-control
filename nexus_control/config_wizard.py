@@ -119,7 +119,9 @@ def run_first_run_wizard(
     verify_raw = input(_("Verify TLS certificates? [Y/n]") + ": ").strip().lower()
     verify_ssl = verify_raw not in {"n", "no", "0", "false", "off", "н", "нет"}
 
-    scanners_raw = input(_("Scanners (grype, trivy, or both) [grype]") + ": ").strip()
+    scanners_raw = input(
+        _("Scanners (grype, trivy, osv — comma-separated) [grype]") + ": "
+    ).strip()
     scanners = scanners_raw or "grype"
 
     data: dict[str, object] = {

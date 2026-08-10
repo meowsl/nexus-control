@@ -1,6 +1,6 @@
 # nexus-control
 
-Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype** и/или **Trivy** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
+Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype**, **Trivy** и/или **OSV-Scanner** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
 
 ```bash
 python -m nexus_control
@@ -21,7 +21,7 @@ python -m nexus_control
 - Мультивыбор ассетов/папок (Space), затем download или verify; либо действие на весь репозиторий
 - Фоновые workers для сети, скачивания, сканеров и копирования (UI не блокируется)
 - Потоковое скачивание с защитой от path traversal
-- Grype и/или Trivy (локально или Docker-fallback); в TUI — клавиша `s`
+- Grype / Trivy / OSV-Scanner (локально или Docker-fallback); в TUI — клавиша `s`
 - Строгая политика verify: в `<repo>-verified` только если все включённые сканеры дали PASS
 - Ротация логов в файл + панель логов в TUI (секреты маскируются)
 
@@ -44,7 +44,7 @@ UI (Textual) / CLI / scheduler  →  services (pipeline, scanners, verifier)
 - **Python 3.13+** (или `uv`, который подтянет нужный Python)
 - Целевая среда — **Linux** (TUI + POSIX-права). На Windows возможны unit-тесты и ограниченный UI
 - Доступный **Nexus Repository CE** с REST API (`/service/rest/v1`)
-- **grype** и/или **trivy** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy`)
+- **grype** / **trivy** / **osv-scanner** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy` / `ghcr.io/google/osv-scanner`)
 - Опционально для docker-репозиториев: **skopeo** (предпочтительно) или **docker** CLI
 
 ---
@@ -227,13 +227,15 @@ nexus-control
 | `NEXUS_DOCKER_REGISTRY` | _(пусто)_ | Переопределение docker connector `host:port` |
 | `NEXUS_CONTROL_CONFIG` | `~/.config/nexus-control/config.toml` | Путь к TOML-конфигу |
 | `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
-| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*`) |
+| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*` / `osv_*`) |
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
-| `SCANNERS` | `grype` | Через запятую: `grype`, `trivy` (в TUI — клавиша `s`) |
+| `SCANNERS` | `grype` | Через запятую: `grype`, `trivy`, `osv` (в TUI — клавиша `s`) |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
 | `TRIVY_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
+| `OSV_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
+| `OSV_DOCKER_IMAGE` | `ghcr.io/google/osv-scanner:latest` | Образ для docker-fallback |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
@@ -260,7 +262,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. `s` — выбрать сканеры (grype / trivy / оба). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
+4. `s` — выбрать сканеры (grype / trivy / osv). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` / `h` — последний отчёт и история.
 
@@ -291,7 +293,7 @@ python main.py
 | `v` | Verify выбранного / отмеченного |
 | `D` | Скачать **весь** репозиторий |
 | `V` | Verify **всего** репозитория |
-| `s` | Сканеры (grype / trivy / оба) |
+| `s` | Сканеры (grype / trivy / osv) |
 | `o` | Последний отчёт (память или disk history) |
 | `h` | История сканирований (текущий репо) |
 | `?` | Справка |
@@ -311,7 +313,7 @@ python main.py
 | Тип | Путь |
 |-----|------|
 | Downloads | `/home/alice/nexus-control/downloads/my-repo/...` |
-| Reports | `/home/alice/nexus-control/reports/my-repo/grype_....json` / `trivy_....json` |
+| Reports | `/home/alice/nexus-control/reports/my-repo/grype_....json` / `trivy_....json` / `osv_....json` |
 | Verified | `/home/alice/nexus-control/my-repo-verified/...` |
 | Manifest | `/home/alice/nexus-control/my-repo-verified/verified-manifest.json` |
 | Logs | `/home/alice/nexus-control/logs/nexus-control.log` |
@@ -336,14 +338,16 @@ Docker-образы сохраняются как:
 
 ---
 
-## Сканеры (Grype / Trivy) и Docker-fallback
+## Сканеры (Grype / Trivy / OSV) и Docker-fallback
 
-Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify оба могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`.
+Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify включённые сканеры могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`, `osv_<asset>.json|txt`.
+
+OSV-Scanner всегда запускается с `--experimental-plugins=directory,artifact` (presets для directory + artifact extractors). Доп. флаги — через `OSV_EXTRA_ARGS`.
 
 Порядок выбора бэкенда (для каждого сканера отдельно):
 
 1. Локальный бинарник, если найден и `*_USE_DOCKER` не принудительно `true`
-2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
+2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE` / `OSV_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
 3. Иначе понятная ошибка в UI / логах
 
 Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется.
@@ -400,7 +404,7 @@ pytest
 | Auth failed | Логин/пароль; права пользователя на репозитории |
 | Ошибки TLS | Self-signed в лаборатории → `NEXUS_VERIFY_SSL=false` (ожидается warning) |
 | Пустые docker-теги | Задайте `NEXUS_DOCKER_REGISTRY=host:port` |
-| Grype/Trivy не найден | Установите бинарник **или** docker + образ; либо выключите сканер клавишей `s` |
+| Grype/Trivy/OSV не найден | Установите бинарник **или** docker + образ; либо выключите сканер клавишей `s` |
 | skopeo/docker pull падает | Auth к registry; для insecure HTTP помогает `NEXUS_VERIFY_SSL=false` |
 | Путь отклонён | В path был `..` или абсолютный путь — пропуск из соображений безопасности |
 | UI «зависает» | Не должен; проверьте панель логов / файл лога |
@@ -465,7 +469,7 @@ nexus-control/
     ├── services/
     │   ├── pipeline.py          # download → scan → verified copy
     │   ├── downloader.py
-    │   ├── grype_scanner.py / trivy_scanner.py
+    │   ├── grype_scanner.py / trivy_scanner.py / osv_scanner.py
     │   ├── scan_common.py / scan_checkpoint.py
     │   ├── scan_history.py      # index + run snapshots
     │   ├── verifier.py / verified_uploader.py

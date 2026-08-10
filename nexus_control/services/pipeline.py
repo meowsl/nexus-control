@@ -25,6 +25,7 @@ from nexus_control.models import (
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.grype_scanner import GrypeScanner
+from nexus_control.services.osv_scanner import OsvScanner
 from nexus_control.services.scan_checkpoint import write_pass_checkpoint
 from nexus_control.services.scan_common import (
     KNOWN_SCANNERS,
@@ -49,15 +50,18 @@ class PipelineService:
         self.downloader = Downloader(settings, client)
         self.grype = GrypeScanner(settings)
         self.trivy = TrivyScanner(settings)
+        self.osv = OsvScanner(settings)
         self.verifier = Verifier(settings)
         # Совместимость со старым кодом / тестами
         self.scanner = self.grype
 
-    def _scanner_for(self, name: str) -> GrypeScanner | TrivyScanner:
+    def _scanner_for(self, name: str) -> GrypeScanner | TrivyScanner | OsvScanner:
         if name == "grype":
             return self.grype
         if name == "trivy":
             return self.trivy
+        if name == "osv":
+            return self.osv
         raise ValueError(f"Unknown scanner: {name}")
 
     def scanner_versions(

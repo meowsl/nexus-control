@@ -230,6 +230,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Verify entire repository": "Verify весь репозиторий",
         "Open last report": "Открыть последний отчёт",
         "Scanners (grype / trivy / both)": "Сканеры (grype / trivy / оба)",
+        "Scanners (grype / trivy / osv)": "Сканеры (grype / trivy / osv)",
+        "Enable one or more. Verify copies to *-verified only if all "
+        "enabled scanners PASS.": (
+            "Включите один или несколько. Verify копирует в *-verified "
+            "только если все включённые сканеры дали PASS."
+        ),
         "Space on file/image marks one asset": (
             "Space на файле / образе — отметить один ассет"
         ),
@@ -261,6 +267,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Verify TLS certificates? [Y/n]": "Проверять TLS-сертификаты? [Y/n]",
         "Scanners (grype, trivy, or both) [grype]": (
             "Сканеры (grype, trivy или оба) [grype]"
+        ),
+        "Scanners (grype, trivy, osv — comma-separated) [grype]": (
+            "Сканеры (grype, trivy, osv — через запятую) [grype]"
         ),
         "Wrote {path}": "Записано {path}",
         "Nexus authentication": "Аутентификация Nexus",
