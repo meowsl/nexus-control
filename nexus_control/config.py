@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     reports_root: Path = Path("~/nexus-control/reports")
     verified_root: Path = Path("~/nexus-control")
 
-    # Сканеры (через запятую: grype, trivy). Можно менять в TUI (клавиша s).
+    # Сканеры (через запятую: grype, trivy, osv). Можно менять в TUI (клавиша s).
     scanners: str = "grype"
     # Параллельная обработка ассетов в pipeline (download/scan/verify).
     # 1 = строго последовательно; 4–8 обычно оптимально для сети + I/O.
@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     trivy_use_docker: ScannerDockerMode = "auto"
     trivy_docker_image: str = "aquasec/trivy:latest"
     trivy_extra_args: str = ""
+
+    # OSV-Scanner
+    osv_binary: str = "osv-scanner"
+    osv_use_docker: ScannerDockerMode = "auto"
+    osv_docker_image: str = "ghcr.io/google/osv-scanner:latest"
+    osv_extra_args: str = ""
 
     # Docker / skopeo
     docker_binary: str = "docker"
@@ -165,7 +171,9 @@ class Settings(BaseSettings):
             return ""
         return str(value)
 
-    @field_validator("grype_use_docker", "trivy_use_docker", mode="before")
+    @field_validator(
+        "grype_use_docker", "trivy_use_docker", "osv_use_docker", mode="before"
+    )
     @classmethod
     def _normalize_scanner_docker(cls, value: object) -> str:
         text = str(value).strip().lower()
@@ -240,6 +248,13 @@ class Settings(BaseSettings):
             return []
         return shlex.split(self.trivy_extra_args)
 
+    @property
+    def osv_extra_args_list(self) -> list[str]:
+        """Безопасный разбор OSV_EXTRA_ARGS (без shell)."""
+        if not self.osv_extra_args.strip():
+            return []
+        return shlex.split(self.osv_extra_args)
+
     def verified_repo_dir(self, repository_name: str) -> Path:
         """Вернуть ``VERIFIED_ROOT/<repository>-verified``."""
         from nexus_control.utils.safe_path import sanitize_repo_name
@@ -269,6 +284,8 @@ class Settings(BaseSettings):
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,
             "trivy_use_docker": self.trivy_use_docker,
+            "osv_binary": self.osv_binary,
+            "osv_use_docker": self.osv_use_docker,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
         }
