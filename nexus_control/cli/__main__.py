@@ -112,8 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
         "schedule_action",
         nargs="?",
         default="menu",
-        choices=["menu", "start", "stop", "status", "run", "_daemon"],
-        help="menu (default) | start | stop | status | run",
+        choices=[
+            "menu",
+            "start",
+            "stop",
+            "status",
+            "run",
+            "login",
+            "logout",
+            "_daemon",
+        ],
+        help=(
+            "menu (default) | start | stop | status | run | "
+            "login | logout"
+        ),
     )
     p_schedule.add_argument(
         "rule_id",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import getpass
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -10,7 +12,14 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from nexus_control.cli.bootstrap import open_cli_client
-from nexus_control.config import ConfigError
+from nexus_control.config import ConfigError, load_settings
+from nexus_control.nexus.client import NexusClient
+from nexus_control.nexus.credentials import (
+    NON_INTERACTIVE_CREDS_HINT,
+    SCHEDULER_VAULT_FILENAME,
+    clear_scheduler_credentials,
+    save_scheduler_credentials,
+)
 from nexus_control.scheduler.cronutil import (
     CRON_HELP,
     CRON_PRESETS,
@@ -58,6 +67,10 @@ def run_schedule(args: Namespace) -> int:
             console.print("[red]rule id required for run[/red]")
             return 2
         return run_rule_now(rule_id, schedule_file=schedule_file)
+    if action == "login":
+        return _cmd_login()
+    if action == "logout":
+        return _cmd_logout()
     if action == "menu":
         return _run_menu(schedule_file)
     console.print(f"[red]Unknown schedule action: {action}[/red]")
@@ -81,12 +94,14 @@ def _run_menu(schedule_file: Path | None) -> int:
             "  [cyan]6[/cyan]) Stop daemon\n"
             "  [cyan]7[/cyan]) Status / next runs\n"
             "  [cyan]8[/cyan]) Run rule now\n"
+            "  [cyan]9[/cyan]) Login (save encrypted creds for daemon)\n"
+            "  [cyan]L[/cyan]) Logout (clear saved scheduler creds)\n"
             "  [cyan]0[/cyan]) Quit"
         )
         choice = Prompt.ask(
             "Select",
-            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"],
-            default="0"
+            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "L", "l"],
+            default="0",
         )
         if choice == "0":
             return 0
@@ -108,6 +123,10 @@ def _run_menu(schedule_file: Path | None) -> int:
             _cmd_status(path)
         elif choice == "8":
             _menu_run(path)
+        elif choice == "9":
+            _cmd_login()
+        elif choice.lower() == "l":
+            _cmd_logout()
 
 
 def _load(path: Path) -> ScheduleConfig:
@@ -536,12 +555,80 @@ def _prompt_repos(default: list[str] | None) -> list[str]:
 
 def _fetch_repo_names() -> list[str]:
     try:
-        with open_cli_client() as ctx:
+        with open_cli_client(allow_prompt=False) as ctx:
             repos = ctx.client.list_repositories()
             return [r.name for r in repos if not r.is_docker]
     except (ConfigError, Exception) as exc:  # noqa: BLE001
         console.print(f"[red]Cannot list repos: {exc}[/red]")
+        console.print(
+            "[yellow]Hint:[/yellow] set NEXUS_USERNAME/NEXUS_PASSWORD in .env "
+            "or run [cyan]nexus-control-cli schedule login[/cyan]"
+        )
         return []
+
+
+def _cmd_login() -> int:
+    """Один раз спросить креды, проверить против Nexus, сохранить scheduler vault."""
+    settings = load_settings()
+    env_user = (settings.nexus_username or "").strip()
+    env_password = settings.nexus_password or ""
+
+    if env_user and env_password:
+        username, password = env_user, env_password
+        console.print(
+            f"Using NEXUS_USERNAME from env/config ([bold]{username}[/bold]); "
+            "validating against Nexus…"
+        )
+    else:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            console.print(f"[red]{NON_INTERACTIVE_CREDS_HINT}[/red]")
+            return 2
+        console.print("Nexus authentication for scheduler")
+        console.print(
+            f"Credentials are stored encrypted in {SCHEDULER_VAULT_FILENAME} "
+            "(not tied to NEXUS_SESSION_TTL; clear with schedule logout)."
+        )
+        hint = f" [{env_user}]" if env_user else ""
+        username = input(f"Username{hint}: ").strip() or env_user
+        if not username:
+            console.print("[red]Username is required[/red]")
+            return 2
+        password = getpass.getpass("Password: ")
+        if not password:
+            console.print("[red]Password is required[/red]")
+            return 2
+
+    probe = settings.model_copy(
+        update={"nexus_username": username, "nexus_password": password}
+    )
+    client = NexusClient(probe)
+    try:
+        client.open()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Nexus authentication failed:[/red] {exc}")
+        return 2
+    finally:
+        client.close()
+
+    path = save_scheduler_credentials(probe, username=username, password=password)
+    console.print(
+        f"[green]Saved encrypted scheduler credentials[/green] "
+        f"(user=[bold]{username}[/bold])\n"
+        f"Vault: {path}\n"
+        "Daemon/start/run will reuse them without prompting. "
+        "Clear with [cyan]schedule logout[/cyan]."
+    )
+    return 0
+
+
+def _cmd_logout() -> int:
+    settings = load_settings()
+    existed = clear_scheduler_credentials(settings)
+    if existed:
+        console.print("[green]Scheduler credentials cleared.[/green]")
+    else:
+        console.print("No scheduler credentials were stored.")
+    return 0
 
 
 def _maybe_prompt_scheduler_meta(config: ScheduleConfig) -> None:

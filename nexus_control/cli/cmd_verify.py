@@ -38,7 +38,7 @@ def run_verify(args: Namespace) -> int:
         else None
     )
 
-    with open_cli_client() as ctx:
+    with open_cli_client(allow_prompt=getattr(args, "allow_prompt", None)) as ctx:
         repo = ctx.client.get_repository(repo_name)
         if repo is None:
             console.print(f"[red]Repository not found:[/red] {repo_name}")

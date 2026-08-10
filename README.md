@@ -117,7 +117,9 @@ in-memory отчёта открывает самый свежий disk-run дл�
 Интерактивное меню для правил и локального демона (без systemd):
 
 ```bash
-nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run
+nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run/login
+nexus-control-cli schedule login        # сохранить зашифрованные креды для демона
+nexus-control-cli schedule logout       # очистить сохранённые scheduler-креды
 nexus-control-cli schedule start
 nexus-control-cli schedule stop
 nexus-control-cli schedule status
@@ -159,7 +161,13 @@ Timezone по умолчанию — **локальный TZ машины** (`ti
 `SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова
 (`schedule start` или внешний `@reboot`).
 
-Для daemon/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY).
+Для daemon / `schedule start|run` **нет интерактивного prompt**. Задайте креды одним из способов:
+
+1. `NEXUS_USERNAME` / `NEXUS_PASSWORD` в env или `.env`
+2. Один раз: `nexus-control-cli schedule login` — пароль в `NEXUS_CACHE_DIR/credentials.scheduler.vault` (Fernet, `0o600`), без TTL сессии; сброс: `schedule logout`
+
+Session vault TUI (`credentials.vault`, TTL `NEXUS_SESSION_TTL`) для демона **не** считается долгоживущим источником.
+
 Альтернатива без встроенного демона — классический cron:
 
 ```cron
@@ -215,7 +223,9 @@ nexus-control
 |------------|----------|
 | `NEXUS_USERNAME` / `NEXUS_PASSWORD` | Опционально. Если не заданы — prompt при старте (TTY). Для CI задайте в env. |
 
-После успешного логина пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+После успешного логина в TUI пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+
+Для планировщика отдельно: `schedule login` → `credentials.scheduler.vault` (без TTL сессии).
 
 ### Важные опциональные
 

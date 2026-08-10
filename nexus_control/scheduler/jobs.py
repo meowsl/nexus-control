@@ -45,6 +45,7 @@ def _run_repo(rule: ScheduleRule, repo: str) -> int:
                 repo=repo,
                 target=target,
                 json=False,
+                allow_prompt=False,
             )
         )
 
@@ -62,6 +63,7 @@ def _run_repo(rule: ScheduleRule, repo: str) -> int:
                 json=False,
                 history_source="scheduler",
                 history_rule_id=rule.id,
+                allow_prompt=False,
             )
         )
         return code
@@ -72,5 +74,6 @@ def _run_repo(rule: ScheduleRule, repo: str) -> int:
             repo=repo,
             target=target,
             json=False,
+            allow_prompt=False,
         )
     )

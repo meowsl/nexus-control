@@ -77,6 +77,10 @@ def test_parser_schedule_flags() -> None:
     start = parser.parse_args(["schedule", "start", "--schedule-file", "/tmp/s.toml"])
     assert start.schedule_action == "start"
     assert start.schedule_file == "/tmp/s.toml"
+    login = parser.parse_args(["schedule", "login"])
+    assert login.schedule_action == "login"
+    logout = parser.parse_args(["schedule", "logout"])
+    assert logout.schedule_action == "logout"
 
 
 def test_filter_path_prefix_and_limit() -> None:

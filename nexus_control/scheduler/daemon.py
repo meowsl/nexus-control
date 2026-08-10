@@ -131,8 +131,11 @@ def stop_daemon(settings: Settings | None = None, *, timeout: float = 30.0) -> i
 
 
 def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
-    """Синхронный прогон правила (меню / schedule run)."""
-    load_cli_settings(allow_prompt=sys.stdin.isatty())
+    """Синхронный прогон правила (меню / schedule run).
+
+    Креды только из env / scheduler vault — без интерактивного prompt.
+    """
+    load_cli_settings(allow_prompt=False)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
