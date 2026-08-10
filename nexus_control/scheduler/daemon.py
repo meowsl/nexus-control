@@ -104,35 +104,119 @@ def start_daemon(
 
 
 def stop_daemon(settings: Settings | None = None, *, timeout: float = 30.0) -> int:
+    """Остановить демон: SIGTERM → wait → при необходимости SIGKILL.
+
+    Во время длинного ``_execute_rule`` флаг stop проверяется только после
+    окончания job, поэтому graceful stop может затянуться — тогда форсируем.
+    """
     cfg = settings or _settings_no_prompt()
     path = pid_path(cfg.nexus_cache_dir)
+    sp = state_path(cfg.nexus_cache_dir)
     pid = running_pid(path)
     if pid is None:
         print("Scheduler is not running.", file=sys.stderr)
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=None)
         return 0
+
+    st = load_state(sp)
+    if st.busy and st.current_rule:
+        print(
+            f"Scheduler pid={pid} is busy with rule {st.current_rule!r}; "
+            f"sending SIGTERM (will SIGKILL after {timeout:.0f}s if needed)…",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Stopping scheduler (pid={pid})…", file=sys.stderr)
+
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        path.unlink(missing_ok=True)
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
         print("Scheduler is not running.", file=sys.stderr)
         return 0
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not process_is_alive(pid):
-            print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
-            return 0
-        time.sleep(0.2)
+    if _wait_until_dead(pid, timeout):
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
+        return 0
+
     print(
-        f"Scheduler pid={pid} did not exit within {timeout:.0f}s; try kill -9",
+        f"Scheduler pid={pid} did not exit within {timeout:.0f}s; sending SIGKILL…",
+        file=sys.stderr,
+    )
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
+        return 0
+
+    if _wait_until_dead(pid, 5.0):
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid}, forced)", file=sys.stderr)
+        return 0
+
+    print(
+        f"Scheduler pid={pid} still alive after SIGKILL; check process manually.",
         file=sys.stderr,
     )
     return 1
 
 
-def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
-    """Синхронный прогон правила (меню / schedule run)."""
-    load_cli_settings(allow_prompt=sys.stdin.isatty())
+def _wait_until_dead(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not process_is_alive(pid):
+            return True
+        time.sleep(0.2)
+    return not process_is_alive(pid)
+
+
+def _cleanup_stale_scheduler_files(
+    pid_file: Path,
+    state_file: Path,
+    *,
+    expected_pid: int | None,
+) -> None:
+    """Убрать pidfile и сбросить busy в state после остановки."""
+    try:
+        if pid_file.is_file():
+            if expected_pid is None:
+                pid_file.unlink(missing_ok=True)
+            else:
+                try:
+                    current = int(pid_file.read_text(encoding="utf-8").strip())
+                except (OSError, ValueError):
+                    current = None
+                if current in {None, expected_pid}:
+                    pid_file.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        st = load_state(state_file)
+        if expected_pid is not None and st.pid not in {None, expected_pid}:
+            return
+        if st.busy or st.current_rule or st.pid is not None:
+            st.busy = False
+            st.current_rule = None
+            st.pid = None
+            st.clear_progress()
+            save_state(state_file, st)
+    except OSError:
+        pass
+
+
+def run_rule_now(
+    rule_id: str,
+    *,
+    schedule_file: Path | None = None,
+    scan_limit: int | None = None,
+) -> int:
+    """Синхронный прогон правила (меню / schedule run).
+
+    Креды только из env / scheduler vault — без интерактивного prompt.
+    """
+    load_cli_settings(allow_prompt=False)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
@@ -141,8 +225,16 @@ def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
         return 2
     if not rule.enabled:
         print(f"Rule {rule_id!r} is disabled; running anyway.", file=sys.stderr)
-    print(f"Running rule {rule.id} for repos={rule.repos}", file=sys.stderr)
-    return run_rule(rule)
+    if scan_limit is not None and scan_limit < 1:
+        print("--scan-limit must be >= 1", file=sys.stderr)
+        return 2
+    effective = scan_limit if scan_limit is not None else rule.scan_limit
+    print(
+        f"Running rule {rule.id} for repos={rule.repos}"
+        + (f" scan_limit={effective}" if effective is not None else ""),
+        file=sys.stderr,
+    )
+    return run_rule(rule, scan_limit=scan_limit)
 
 
 def _settings_no_prompt() -> Settings:
@@ -308,6 +400,8 @@ def _execute_rule(
     state_file: Path,
     last_fire_keys: set[str],
 ) -> None:
+    from nexus_control.scheduler.progress import StateProgressSink
+
     logger.info(
         "Firing rule %s at %s repos=%s",
         rule.id,
@@ -316,12 +410,21 @@ def _execute_rule(
     )
     state.busy = True
     state.current_rule = rule.id
+    state.clear_progress()
     started = iso_now()
     save_state(state_file, state)
+    sink = StateProgressSink(state_file, state)
+
+    def _on_repo_start(repo: str) -> None:
+        state.current_repo = repo
+        state.progress_message = f"Starting repo {repo}"
+        state.progress_updated_at = iso_now()
+        save_state(state_file, state)
+
     code = 1
     message = ""
     try:
-        code = run_rule(rule)
+        code = run_rule(rule, on_progress=sink, on_repo_start=_on_repo_start)
         message = f"exit={code}"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Rule %s failed: %s", rule.id, exc)
@@ -330,6 +433,7 @@ def _execute_rule(
     finally:
         state.busy = False
         state.current_rule = None
+        state.clear_progress()
         state.last_runs[rule.id] = RuleRunRecord(
             rule_id=rule.id,
             started_at=started,

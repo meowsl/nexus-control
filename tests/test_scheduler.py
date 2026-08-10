@@ -112,6 +112,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
                 "path_prefix": "com/example",
                 "workers": 2,
                 "limit": 10,
+                "scan_limit": 5,
             },
         ],
     }
@@ -121,6 +122,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert config.rules[0].wants_upload()
     assert config.rules[1].wants_verify()
     assert config.rules[1].wants_upload()
+    assert config.rules[1].scan_limit == 5
     assert config.get_rule("weekend") is not None
 
     path = tmp_path / "schedule.toml"
@@ -130,6 +132,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert [r.id for r in loaded.rules] == ["nightly-core", "weekend"]
     assert loaded.rules[1].path_prefix == "com/example"
     assert loaded.rules[1].workers == 2
+    assert loaded.rules[1].scan_limit == 5
 
 
 def test_parse_rejects_duplicate_ids() -> None:
@@ -198,11 +201,50 @@ def test_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "scheduler-state.json"
     state = SchedulerState(started_at="t0", pid=123, busy=True, current_rule="r1")
     state.next_fires["r1"] = "2026-01-01T00:00:00+00:00"
+    state.current_repo = "maven-hosted"
+    state.progress_pct = 0.42
+    state.progress_stage = "scan"
+    state.progress_asset = "a.jar"
+    state.progress_message = "scan: a.jar"
+    state.progress_updated_at = "t1"
     save_state(path, state)
     loaded = load_state(path)
     assert loaded.pid == 123
     assert loaded.busy is True
     assert loaded.next_fires["r1"].startswith("2026")
+    assert loaded.current_repo == "maven-hosted"
+    assert loaded.progress_pct == 0.42
+    assert loaded.progress_stage == "scan"
+    assert loaded.progress_asset == "a.jar"
+    loaded.clear_progress()
+    assert loaded.progress_pct is None
+    assert loaded.current_repo is None
+
+
+def test_state_progress_sink_throttled(tmp_path: Path) -> None:
+    from nexus_control.scheduler.progress import StateProgressSink
+
+    path = tmp_path / "scheduler-state.json"
+    state = SchedulerState(busy=True, current_rule="r1")
+    save_state(path, state)
+    sink = StateProgressSink(path, state, min_interval=10.0)
+    sink("pkg.jar", 0.1, "download")
+    first = load_state(path)
+    assert first.progress_pct == 0.1
+    assert first.progress_stage == "download"
+    # throttled — second call within interval should not overwrite
+    sink("other.jar", 0.2, "download")
+    second = load_state(path)
+    assert second.progress_asset == "pkg.jar"
+    # completion always writes
+    sink("other.jar", 1.0, "scan")
+    done = load_state(path)
+    assert done.progress_pct == 1.0
+    assert done.progress_asset.endswith("other.jar")
+    sink.status("Selecting assets…")
+    # status may be throttled after completion write; force via final
+    sink.status("Selecting done", final=True)
+    assert load_state(path).progress_message == "Selecting done"
 
 
 def test_due_rules_marks_recent_slot(monkeypatch: pytest.MonkeyPatch) -> None:

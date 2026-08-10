@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 SCANNER_NAME = "osv"
 EXPERIMENTAL_PLUGINS = "directory,artifact"
 
+# osv-scanner exit≠0 без JSON, когда в цели нет извлекаемых пакетов
+# (пустой/битый jar, metadata-only и т.п.). Grype/Trivy в таких случаях
+# обычно отдают пустой отчёт → PASS; выравниваем поведение.
+_OSV_SOFT_EMPTY_MARKERS = (
+    "no package sources found",
+    "no package sources were found",
+)
+
 
 class OsvError(RuntimeError):
     pass
@@ -175,6 +183,18 @@ class OsvScanner:
             if exc.result and exc.result.stdout.strip().startswith("{"):
                 return exc.result
             stderr = (exc.result.stderr if exc.result else "") or str(exc)
+            stdout = (exc.result.stdout if exc.result else "") or ""
+            if is_osv_soft_empty(stderr, stdout):
+                # Как Grype/Trivy на seed/empty jar: нечего сканировать → PASS.
+                logger.info(
+                    "osv-scanner reported no package sources; treating as empty PASS"
+                )
+                return CommandResult(
+                    returncode=0,
+                    stdout='{"results": []}\n',
+                    stderr=stderr,
+                    argv=list(exc.result.argv) if exc.result else list(osv_args),
+                )
             try:
                 json_report_path.write_text(
                     json.dumps({"error": stderr}, indent=2),
@@ -232,6 +252,12 @@ def _build_osv_args(local_path: Path, scheme: str, extra: list[str]) -> list[str
     if scheme in {"docker-archive", "oci-archive"}:
         return ["scan", "image", "--archive", str(local_path), *plugins]
     return ["scan", "source", str(local_path), *plugins]
+
+
+def is_osv_soft_empty(stderr: str, stdout: str = "") -> bool:
+    """True, если osv-scanner не нашёл источников пакетов (мягкий пустой скан)."""
+    text = f"{stderr}\n{stdout}".lower()
+    return any(marker in text for marker in _OSV_SOFT_EMPTY_MARKERS)
 
 
 def parse_osv_json(payload: str | dict[str, Any]) -> ScanResult:

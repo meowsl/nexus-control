@@ -80,6 +80,7 @@ nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
 nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
+nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max mains to verify
 
 # Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
 nexus-control-cli verify --repo maven-hosted --workers 8
@@ -99,6 +100,12 @@ nexus-control-cli history show <run_id> --json
 запрашиваются напрямую по стандартным суффиксам, поэтому дочитывать весь
 репозиторий ради них не требуется.
 
+`--scan-limit N` — отдельный дебаг-лимит: в verify попадает не больше `N`
+основных ассетов (с их sidecar'ами), независимо от того, нужна ли перезагрузка.
+Удобно на больших репозиториях, когда `--limit` почти ничего не режет, потому
+что локальный кэш уже заполнен. В scheduler: флаг `schedule run … --scan-limit`
+или поле `scan_limit` в `schedule.toml`.
+
 После полного PASS + verified copy рядом с локальным файлом сохраняется
 `*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки
 сканеров не изменились и checkpoint моложе `scan_checkpoint_ttl` (по умолчанию
@@ -117,10 +124,14 @@ in-memory отчёта открывает самый свежий disk-run дл�
 Интерактивное меню для правил и локального демона (без systemd):
 
 ```bash
-nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run
+nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run/login
+nexus-control-cli schedule login        # сохранить зашифрованные креды для демона
+nexus-control-cli schedule logout       # очистить сохранённые scheduler-креды
 nexus-control-cli schedule start
 nexus-control-cli schedule stop
 nexus-control-cli schedule status
+nexus-control-cli schedule status -m          # live progress (Ctrl+C)
+nexus-control-cli schedule status -m --interval 0.5
 nexus-control-cli schedule run nightly-core
 ```
 
@@ -154,12 +165,20 @@ upload = true
 ```
 
 Демон: pidfile в `NEXUS_CACHE_DIR/scheduler.pid`, лог — `scheduler.log` рядом с `LOG_FILE`.
+Во время job демон пишет live-progress в `scheduler-state.json`; смотреть без логов:
+`schedule status -m` / `--monitor` (обновление раз в `--interval` сек, по умолчанию 1).
 Timezone по умолчанию — **локальный TZ машины** (`timezone = "local"`: `$TZ`,
 `/etc/timezone`, `/etc/localtime`). Явный IANA в `schedule.toml` перекрывает его.
 `SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова
 (`schedule start` или внешний `@reboot`).
 
-Для daemon/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY).
+Для daemon / `schedule start|run` **нет интерактивного prompt**. Задайте креды одним из способов:
+
+1. `NEXUS_USERNAME` / `NEXUS_PASSWORD` в env или `.env`
+2. Один раз: `nexus-control-cli schedule login` — пароль в `NEXUS_CACHE_DIR/credentials.scheduler.vault` (Fernet, `0o600`), без TTL сессии; сброс: `schedule logout`
+
+Session vault TUI (`credentials.vault`, TTL `NEXUS_SESSION_TTL`) для демона **не** считается долгоживущим источником.
+
 Альтернатива без встроенного демона — классический cron:
 
 ```cron
@@ -215,7 +234,9 @@ nexus-control
 |------------|----------|
 | `NEXUS_USERNAME` / `NEXUS_PASSWORD` | Опционально. Если не заданы — prompt при старте (TTY). Для CI задайте в env. |
 
-После успешного логина пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+После успешного логина в TUI пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+
+Для планировщика отдельно: `schedule login` → `credentials.scheduler.vault` (без TTL сессии).
 
 ### Важные опциональные
 

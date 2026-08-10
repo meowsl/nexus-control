@@ -28,4 +28,5 @@ upload = true
 # scanners = "grype,trivy,osv"
 # path_prefix = "com/example"
 # workers = 4
-# limit = 100
+# limit = 100          # max assets needing download/re-download
+# scan_limit = 20      # max mains to verify (handy for debug on large repos)

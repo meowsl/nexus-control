@@ -31,6 +31,7 @@ class ScheduleRule:
     path_prefix: str | None = None
     workers: int | None = None
     limit: int | None = None
+    scan_limit: int | None = None
     refresh: bool = False
 
     def wants_verify(self) -> bool:

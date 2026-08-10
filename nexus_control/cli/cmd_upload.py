@@ -78,7 +78,7 @@ def _summary_from_verified_dir(settings: Settings, repository: str) -> PipelineS
 
 def run_upload(args: Namespace) -> int:
     repo_name = args.repo.strip()
-    with open_cli_client() as ctx:
+    with open_cli_client(allow_prompt=getattr(args, "allow_prompt", None)) as ctx:
         repo = ctx.client.get_repository(repo_name)
         if repo is None:
             console.print(f"[red]Source repository not found:[/red] {repo_name}")
@@ -93,7 +93,7 @@ def run_upload(args: Namespace) -> int:
         console.print(
             f"Uploading {len(summary.results)} local verified file(s) for {repo_name}"
         )
-        progress = ProgressPrinter()
+        progress = getattr(args, "on_progress", None) or ProgressPrinter()
         uploader = VerifiedUploader(ctx.client)
         up = uploader.upload(
             summary,

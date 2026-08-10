@@ -67,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_verify.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max main assets to put into the verify pipeline (download + "
+            "scan-only); useful for debug on large repos. Independent of "
+            "--limit. Nexus listing stops when the scan-limit is reached"
+        ),
+    )
+    p_verify.add_argument(
         "--workers",
         type=int,
         default=None,
@@ -112,8 +122,20 @@ def build_parser() -> argparse.ArgumentParser:
         "schedule_action",
         nargs="?",
         default="menu",
-        choices=["menu", "start", "stop", "status", "run", "_daemon"],
-        help="menu (default) | start | stop | status | run",
+        choices=[
+            "menu",
+            "start",
+            "stop",
+            "status",
+            "run",
+            "login",
+            "logout",
+            "_daemon",
+        ],
+        help=(
+            "menu (default) | start | stop | status | run | "
+            "login | logout"
+        ),
     )
     p_schedule.add_argument(
         "rule_id",
@@ -125,6 +147,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--schedule-file",
         default=None,
         help="Path to schedule.toml (default: XDG config schedule.toml)",
+    )
+    p_schedule.add_argument(
+        "-m",
+        "--monitor",
+        action="store_true",
+        help="With status: live-refresh daemon/job progress (Ctrl+C to stop)",
+    )
+    p_schedule.add_argument(
+        "--interval",
+        dest="monitor_interval",
+        type=float,
+        default=1.0,
+        help="Monitor refresh interval in seconds (default: 1.0)",
+    )
+    p_schedule.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "With run: override rule scan_limit — max main assets to verify "
+            "(debug). Also accepted on verify."
+        ),
     )
     p_schedule.set_defaults(_handler="schedule")
 
