@@ -66,6 +66,19 @@ def test_parser_repos_and_upload() -> None:
     assert up.target == "r-v"
 
 
+def test_parser_schedule_flags() -> None:
+    parser = build_parser()
+    menu = parser.parse_args(["schedule"])
+    assert menu._handler == "schedule"
+    assert menu.schedule_action == "menu"
+    run = parser.parse_args(["schedule", "run", "nightly-core"])
+    assert run.schedule_action == "run"
+    assert run.rule_id == "nightly-core"
+    start = parser.parse_args(["schedule", "start", "--schedule-file", "/tmp/s.toml"])
+    assert start.schedule_action == "start"
+    assert start.schedule_file == "/tmp/s.toml"
+
+
 def test_filter_path_prefix_and_limit() -> None:
     assets = [
         _asset("com/a/1.0/a.jar"),
@@ -113,6 +126,11 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
     client = MagicMock()
     client.iter_asset_pages.return_value = iter(pages)
 
+    progress_calls: list[tuple[int, str]] = []
+
+    def on_progress(listed: int, stats, source: str) -> None:
+        progress_calls.append((listed, source))
+
     selected, total, stats = select_assets_for_cli(
         client,
         settings,
@@ -120,6 +138,7 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
         path_prefix="com",
         limit=1,
         refresh=True,
+        on_progress=on_progress,
     )
     assert total == 2
     assert sorted(a.path for a in selected) == [
@@ -127,3 +146,5 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
         "com/a.jar.sha1",
     ]
     assert stats.download_needed == 1
+    assert progress_calls
+    assert progress_calls[-1] == (2, "nexus")

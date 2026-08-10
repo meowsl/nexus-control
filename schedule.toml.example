@@ -1,0 +1,31 @@
+# Example: copy to ~/.config/nexus-control/schedule.toml
+# Manage via: nexus-control-cli schedule
+
+[scheduler]
+# local = timezone машины (/etc/timezone, $TZ). Можно задать IANA явно.
+timezone = "local"
+# If a previous job is still running: skip | queue | overlap
+overlap = "skip"
+
+[[rules]]
+id = "nightly-core"
+enabled = true
+cron = "0 3 * * 1-5"
+description = "Основные maven/npm"
+repos = ["maven-hosted", "npm-hosted"]
+action = "verify_upload"
+# Optional per-repo upload targets (default = <repo>-verified):
+# targets = { maven-hosted = "maven-hosted-verified", npm-hosted = "npm-clean" }
+
+[[rules]]
+id = "weekend-raw"
+enabled = true
+cron = "30 4 * * 6"
+description = "Сырые и pypi по субботам"
+repos = ["raw-hosted", "pypi-hosted", "maven-snapshots"]
+action = "verify"
+upload = true
+# scanners = "grype,trivy"
+# path_prefix = "com/example"
+# workers = 4
+# limit = 100

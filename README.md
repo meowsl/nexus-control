@@ -29,20 +29,13 @@ python -m nexus_control
 
 ## Архитектура
 
-```
-nexus_control/
-  config.py          # pydantic-settings + XDG TOML
-  config_wizard.py   # first-run setup
-  models.py          # доменные dataclasses
-  logging_setup.py
-  cli/               # nexus-control-cli (repos / verify / upload)
-  nexus/             # REST-клиент, кэш сессии, парсеры
-  services/          # downloader, grype, trivy, verifier, docker, pipeline
-  ui/                # экраны / виджеты / кейбинды Textual
-  utils/             # safe_path, fs, subprocess, tree_builder
-```
+Слои разделены: UI/CLI вызывают сервисы; сервисы используют Nexus-клиент; безопасность путей — в `utils/safe_path.py`.
 
-Слои разделены: UI вызывает сервисы; сервисы используют Nexus-клиент; безопасность путей — в `utils/safe_path.py`.
+```
+UI (Textual) / CLI / scheduler  →  services (pipeline, scanners, verifier)
+                                →  nexus (REST client, cache, credentials)
+                                →  utils (safe_path, fs, hashing, …)
+```
 
 ---
 
@@ -107,7 +100,55 @@ nexus-control-cli verify --repo maven-hosted --workers 8
 повторно для учёта обновлений vulnerability DB; `scan_checkpoint_ttl = 0`
 полностью отключает такой skip.
 
-Для cron/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY). Пример:
+### Планировщик (встроенный daemon)
+
+Интерактивное меню для правил и локального демона (без systemd):
+
+```bash
+nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run
+nexus-control-cli schedule start
+nexus-control-cli schedule stop
+nexus-control-cli schedule status
+nexus-control-cli schedule run nightly-core
+```
+
+Правила хранятся в `~/.config/nexus-control/schedule.toml` (или `$NEXUS_CONTROL_SCHEDULE`).
+Одно правило = одно cron-расписание + список репозиториев.
+В меню Add/Edit показывается шпаргалка по полям cron и пресеты
+(`1` = каждый день 03:00, `2` = будни 03:00, …); можно ввести `help` или свой
+5-field cron — перед сохранением CLI покажет ближайшие запуски.
+
+```toml
+[scheduler]
+timezone = "local"   # timezone машины; или IANA, напр. Europe/Moscow
+overlap = "skip"   # skip | queue | overlap
+
+[[rules]]
+id = "nightly-core"
+enabled = true
+cron = "0 3 * * 1-5"
+description = "Основные maven/npm"
+repos = ["maven-hosted", "npm-hosted"]
+action = "verify_upload"
+# targets = { "maven-hosted" = "maven-hosted-verified", "npm-hosted" = "npm-clean" }
+
+[[rules]]
+id = "weekend-raw"
+enabled = true
+cron = "30 4 * * 6"
+repos = ["raw-hosted", "pypi-hosted"]
+action = "verify"
+upload = true
+```
+
+Демон: pidfile в `NEXUS_CACHE_DIR/scheduler.pid`, лог — `scheduler.log` рядом с `LOG_FILE`.
+Timezone по умолчанию — **локальный TZ машины** (`timezone = "local"`: `$TZ`,
+`/etc/timezone`, `/etc/localtime`). Явный IANA в `schedule.toml` перекрывает его.
+`SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова
+(`schedule start` или внешний `@reboot`).
+
+Для daemon/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY).
+Альтернатива без встроенного демона — классический cron:
 
 ```cron
 0 3 * * * NEXUS_USERNAME=… NEXUS_PASSWORD=… nexus-control-cli verify --repo maven-hosted --upload >>/var/log/nexus-verify.log 2>&1
@@ -368,14 +409,52 @@ pytest
 
 ```
 nexus-control/
-├── nexus_control/           # пакет приложения
-├── tests/
-├── .env.example
-├── QUICKSTART.md
-├── requirements.txt
+├── main.py                      # тонкая обёртка: python main.py
 ├── pyproject.toml
-├── main.py
-└── README.md
+├── requirements.txt
+├── uv.lock
+├── config.toml.example
+├── schedule.toml.example        # пример правил планировщика
+├── .env.example                 # legacy env
+├── QUICKSTART.md
+├── README.md
+├── scripts/                     # вспомогательные скрипты
+├── tests/                       # pytest
+└── nexus_control/               # пакет приложения
+    ├── app.py / __main__.py     # Textual TUI entry
+    ├── config.py                # pydantic-settings + XDG TOML
+    ├── config_wizard.py         # first-run setup
+    ├── config_io.py / config_paths.py
+    ├── models.py
+    ├── logging_setup.py
+    ├── i18n.py
+    ├── cli/                     # nexus-control-cli
+    │   ├── __main__.py          # argparse: repos / verify / upload / schedule
+    │   ├── cmd_repos.py
+    │   ├── cmd_verify.py        # download + scan + verified [+ upload]
+    │   ├── cmd_upload.py        # upload локального *-verified без сканера
+    │   ├── cmd_schedule.py      # интерактивное меню планировщика
+    │   ├── assets.py            # listing / cache / inspect / checkpoints
+    │   ├── progress.py
+    │   └── bootstrap.py
+    ├── scheduler/               # schedule.toml + daemon (pidfile/cron loop)
+    │   ├── models.py / store.py / cronutil.py
+    │   ├── daemon.py / jobs.py / pidfile.py / state.py
+    │   └── paths.py
+    ├── nexus/                   # REST-клиент Nexus
+    │   ├── client.py
+    │   ├── repositories.py / assets.py / uploads.py
+    │   ├── session.py / credentials.py
+    │   └── asset_cache.py
+    ├── services/
+    │   ├── pipeline.py          # download → scan → verified copy
+    │   ├── downloader.py
+    │   ├── grype_scanner.py / trivy_scanner.py
+    │   ├── scan_common.py / scan_checkpoint.py
+    │   ├── verifier.py / verified_uploader.py
+    │   └── docker_assets.py
+    ├── ui/                      # экраны / виджеты / кейбинды Textual
+    └── utils/                   # safe_path, fs, hashing, subprocess, tree_builder
 ```
 
 ---

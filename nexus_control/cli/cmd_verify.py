@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from rich.console import Console
 
 from nexus_control.cli.assets import (
+    AssetSelectionStats,
     require_non_docker_repo,
     select_assets_for_cli,
 )
@@ -45,6 +46,24 @@ def run_verify(args: Namespace) -> int:
         enabled_scanners = scanners or list(ctx.settings.scanners_list)
         pipeline = PipelineService(ctx.settings, ctx.client)
         scanner_versions = pipeline.scanner_versions(enabled_scanners)
+        progress = ProgressPrinter()
+        console.print(
+            f"Selecting assets for [bold]{repo_name}[/bold] "
+            "(Nexus list / cache + local inspect & checkpoints)…"
+        )
+
+        def on_select_progress(
+            listed: int,
+            stats: AssetSelectionStats,
+            source: str,
+        ) -> None:
+            progress.status(
+                f"Selecting ({source}): listed={listed} "
+                f"download={stats.download_needed} "
+                f"scan-only={stats.scan_only} "
+                f"checkpoint-skip={stats.checkpoint_skipped}"
+            )
+
         items, listed_total, selection = select_assets_for_cli(
             ctx.client,
             ctx.settings,
@@ -57,6 +76,14 @@ def run_verify(args: Namespace) -> int:
             # Upload строится из текущего summary; checkpoint-only assets в него
             # не входят, поэтому для --upload выполняем scan-only pipeline.
             use_checkpoints=not bool(args.upload),
+            on_progress=on_select_progress,
+        )
+        progress.status(
+            f"Selecting done: listed={listed_total} "
+            f"download={selection.download_needed} "
+            f"scan-only={selection.scan_only} "
+            f"checkpoint-skip={selection.checkpoint_skipped}",
+            final=True,
         )
         if not items:
             if args.json:
@@ -103,7 +130,6 @@ def run_verify(args: Namespace) -> int:
             f"checkpoint-skip={selection.checkpoint_skipped}, "
             f"workers={effective_workers}"
         )
-        progress = ProgressPrinter()
         summary = pipeline.run(
             repository=repo_name,
             items=items,

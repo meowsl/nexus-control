@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from nexus_control.config import Settings
@@ -19,6 +19,9 @@ from nexus_control.services.scan_checkpoint import checkpoint_is_valid
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
 
 logger = logging.getLogger(__name__)
+
+# (inspected_count, stats, source_label) — source: "nexus" | "cache"
+SelectionProgressCallback = Callable[[int, "AssetSelectionStats", str], None]
 
 
 @dataclass(slots=True)
@@ -110,6 +113,7 @@ def select_assets_for_cli(
     scanners: Sequence[str] | None = None,
     scanner_versions: Mapping[str, str | None] | None = None,
     use_checkpoints: bool = True,
+    on_progress: SelectionProgressCallback | None = None,
 ) -> tuple[list[NexusAsset], int, AssetSelectionStats]:
     """Потоково выбрать pipeline-items и вернуть ``(items, total_listed)``.
 
@@ -128,6 +132,12 @@ def select_assets_for_cli(
         )
         if cached is not None:
             stream, age = cached
+            logger.info(
+                "Using streaming asset cache for %s (age=%ds); "
+                "inspecting local downloads/checkpoints…",
+                repository,
+                int(age),
+            )
             selected, total, stats = _select_assets(
                 stream,
                 path_prefix=path_prefix,
@@ -137,12 +147,13 @@ def select_assets_for_cli(
                 scanners=scanners,
                 scanner_versions=scanner_versions,
                 use_checkpoints=use_checkpoints,
+                on_progress=on_progress,
+                progress_source="cache",
             )
             logger.info(
-                "Using streaming asset cache for %s (%d assets, age=%ds)",
+                "Finished asset cache for %s (%d assets inspected)",
                 repository,
                 total,
-                int(age),
             )
             return selected, total, stats
 
@@ -155,6 +166,8 @@ def select_assets_for_cli(
         scanners=scanners,
         scanner_versions=scanner_versions,
         use_checkpoints=use_checkpoints,
+        on_progress=on_progress,
+        progress_source="nexus",
     )
 
     if limit is not None:
@@ -172,6 +185,7 @@ def select_assets_for_cli(
                     selector.total,
                     page_number,
                 )
+            selector.emit_progress(force=True)
             if selector.limit_reached:
                 logger.info(
                     "Stopped Nexus listing after download limit=%d (%d assets inspected)",
@@ -194,6 +208,7 @@ def select_assets_for_cli(
                 yield asset
             if page_number == 1 or page_number % 10 == 0:
                 logger.info("Listed %d assets (page %d)…", total, page_number)
+            selector.emit_progress(force=True)
 
     stream = iter(tracked_assets())
     if ttl > 0:
@@ -219,6 +234,8 @@ def _select_assets(
     scanners: Sequence[str] | None = None,
     scanner_versions: Mapping[str, str | None] | None = None,
     use_checkpoints: bool = True,
+    on_progress: SelectionProgressCallback | None = None,
+    progress_source: str = "nexus",
 ) -> tuple[list[NexusAsset], int, AssetSelectionStats]:
     selector = _AssetSelector(
         path_prefix=path_prefix,
@@ -228,6 +245,8 @@ def _select_assets(
         scanners=scanners,
         scanner_versions=scanner_versions,
         use_checkpoints=use_checkpoints,
+        on_progress=on_progress,
+        progress_source=progress_source,
     )
     for asset in assets:
         selector.add(asset)
@@ -247,6 +266,9 @@ class _AssetSelector:
         scanners: Sequence[str] | None = None,
         scanner_versions: Mapping[str, str | None] | None = None,
         use_checkpoints: bool = True,
+        on_progress: SelectionProgressCallback | None = None,
+        progress_source: str = "nexus",
+        progress_every: int = 50,
     ) -> None:
         self.prefix = (path_prefix or "").strip().lstrip("/")
         self.limit = limit
@@ -264,6 +286,9 @@ class _AssetSelector:
         self._scanners = list(scanners or ())
         self._scanner_versions = dict(scanner_versions or {})
         self._use_checkpoints = use_checkpoints
+        self._on_progress = on_progress
+        self._progress_source = progress_source
+        self._progress_every = max(1, progress_every)
 
     @property
     def limit_reached(self) -> bool:
@@ -272,14 +297,23 @@ class _AssetSelector:
             and self.stats.download_needed >= self.limit
         )
 
+    def emit_progress(self, *, force: bool = False) -> None:
+        if self._on_progress is None:
+            return
+        if not force and self.total % self._progress_every != 0:
+            return
+        self._on_progress(self.total, self.stats, self._progress_source)
+
     def add(self, asset: NexusAsset) -> None:
         self.total += 1
         path = asset.path.replace("\\", "/").lstrip("/")
         if self.prefix and not path.startswith(self.prefix):
+            self.emit_progress()
             return
         main_path = main_asset_path_for_sidecar(path)
         if main_path is not None:
             self._sidecars.setdefault(main_path, []).append(asset)
+            self.emit_progress()
             return
         if self._downloader is not None and self._settings is not None:
             inspection = self._downloader.inspect_asset(asset)
@@ -288,6 +322,7 @@ class _AssetSelector:
                     self.limit is not None
                     and self.stats.download_needed >= self.limit
                 ):
+                    self.emit_progress()
                     return
                 self.stats.download_needed += 1
             elif (
@@ -302,15 +337,19 @@ class _AssetSelector:
                 )
             ):
                 self.stats.checkpoint_skipped += 1
+                self.emit_progress()
                 return
             else:
                 self.stats.scan_only += 1
         elif self.limit is not None and len(self._mains) >= self.limit:
+            self.emit_progress()
             return
         self._mains.append(asset)
         self._main_paths.add(path)
+        self.emit_progress()
 
     def finish(self) -> list[NexusAsset]:
+        self.emit_progress(force=True)
         selected = list(self._mains)
         for main_path in self._main_paths:
             selected.extend(self._sidecars.get(main_path, ()))
