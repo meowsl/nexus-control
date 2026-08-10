@@ -38,6 +38,8 @@ def test_parser_verify_flags() -> None:
             "com/example",
             "--limit",
             "5",
+            "--scan-limit",
+            "3",
             "--workers",
             "8",
             "--refresh",
@@ -52,6 +54,7 @@ def test_parser_verify_flags() -> None:
     assert args.target == "maven-hosted-verified"
     assert args.path_prefix == "com/example"
     assert args.limit == 5
+    assert args.scan_limit == 3
     assert args.workers == 8
     assert args.refresh is True
     assert args.json is True
@@ -85,6 +88,11 @@ def test_parser_schedule_flags() -> None:
     assert mon.schedule_action == "status"
     assert mon.monitor is True
     assert mon.monitor_interval == 0.5
+    run_lim = parser.parse_args(
+        ["schedule", "run", "nightly-core", "--scan-limit", "10"]
+    )
+    assert run_lim.schedule_action == "run"
+    assert run_lim.scan_limit == 10
 
 
 def test_filter_path_prefix_and_limit() -> None:
@@ -110,6 +118,24 @@ def test_filter_path_prefix_and_limit() -> None:
     assert len(non_side) == 1
     # Sidecars for the selected main should be attached
     assert any(is_scan_ignored_path(a.path) for a in limited)
+
+    # Sidecars before the main so they are seen before scan_limit stops the loop.
+    scan_assets = [
+        _asset("com/a/1.0/a.jar.md5"),
+        _asset("com/a/1.0/a.jar.sha1"),
+        _asset("com/a/1.0/a.jar"),
+        _asset("com/b/1.0/b.jar"),
+    ]
+    scan_limited = filter_assets_for_pipeline(
+        scan_assets, path_prefix="com", scan_limit=1
+    )
+    scan_mains = [a for a in scan_limited if not is_scan_ignored_path(a.path)]
+    assert len(scan_mains) == 1
+    assert scan_mains[0].path == "com/a/1.0/a.jar"
+    assert {a.path for a in scan_limited if is_scan_ignored_path(a.path)} == {
+        "com/a/1.0/a.jar.md5",
+        "com/a/1.0/a.jar.sha1",
+    }
 
 
 def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
@@ -156,3 +182,54 @@ def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
     assert stats.download_needed == 1
     assert progress_calls
     assert progress_calls[-1] == (2, "nexus")
+
+
+def test_scan_limit_stops_streaming_even_when_download_not_needed(
+    tmp_path: Path,
+) -> None:
+    """scan_limit caps mains; unlike --limit it still stops when downloads are not needed."""
+    from unittest.mock import patch
+
+    from nexus_control.services.downloader import DownloadInspection
+
+    settings = Settings(
+        nexus_url="http://localhost:8081",
+        nexus_cache_dir=tmp_path / "cache",
+        assets_cache_ttl=300,
+    )
+    pages = [
+        [
+            _asset("com/a.jar.sha1"),
+            _asset("com/a.jar"),
+            _asset("com/b.jar"),
+            _asset("com/b.jar.sha1"),
+            _asset("com/c.jar"),
+        ],
+    ]
+    client = MagicMock()
+    client.iter_asset_pages.return_value = iter(pages)
+
+    with patch(
+        "nexus_control.cli.assets.Downloader.inspect_asset",
+        return_value=DownloadInspection(
+            needs_download=False,
+            local_path=tmp_path / "cached.jar",
+        ),
+    ):
+        selected, total, stats = select_assets_for_cli(
+            client,
+            settings,
+            "repo",
+            path_prefix="com",
+            scan_limit=1,
+            refresh=True,
+            use_checkpoints=False,
+        )
+
+    assert sorted(a.path for a in selected) == [
+        "com/a.jar",
+        "com/a.jar.sha1",
+    ]
+    assert total == 2
+    assert stats.download_needed == 0
+    assert stats.scan_only == 1

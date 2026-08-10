@@ -80,6 +80,7 @@ nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
 nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
+nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max mains to verify
 
 # Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
 nexus-control-cli verify --repo maven-hosted --workers 8
@@ -98,6 +99,12 @@ nexus-control-cli history show <run_id> --json
 список не сохраняется как полный asset cache. Companion sidecar'ы для PASS
 запрашиваются напрямую по стандартным суффиксам, поэтому дочитывать весь
 репозиторий ради них не требуется.
+
+`--scan-limit N` — отдельный дебаг-лимит: в verify попадает не больше `N`
+основных ассетов (с их sidecar'ами), независимо от того, нужна ли перезагрузка.
+Удобно на больших репозиториях, когда `--limit` почти ничего не режет, потому
+что локальный кэш уже заполнен. В scheduler: флаг `schedule run … --scan-limit`
+или поле `scan_limit` в `schedule.toml`.
 
 После полного PASS + verified copy рядом с локальным файлом сохраняется
 `*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки

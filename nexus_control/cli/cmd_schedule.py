@@ -74,7 +74,11 @@ def run_schedule(args: Namespace) -> int:
         if not rule_id:
             console.print("[red]rule id required for run[/red]")
             return 2
-        return run_rule_now(rule_id, schedule_file=schedule_file)
+        return run_rule_now(
+            rule_id,
+            schedule_file=schedule_file,
+            scan_limit=getattr(args, "scan_limit", None),
+        )
     if action == "login":
         return _cmd_login()
     if action == "logout":
@@ -521,10 +525,18 @@ def _prompt_rule(
     workers = int(workers_s) if workers_s else None
 
     limit_s = Prompt.ask(
-        "limit (empty=none)",
+        "limit / download-limit (empty=none)",
         default=str(existing.limit) if existing and existing.limit else "",
     ).strip()
     limit = int(limit_s) if limit_s else None
+
+    scan_limit_s = Prompt.ask(
+        "scan_limit / max mains to verify (empty=none, debug)",
+        default=(
+            str(existing.scan_limit) if existing and existing.scan_limit else ""
+        ),
+    ).strip()
+    scan_limit = int(scan_limit_s) if scan_limit_s else None
 
     wants_upload = action in {"upload", "verify_upload"} or upload
     targets: dict[str, str] = {}
@@ -555,6 +567,7 @@ def _prompt_rule(
         path_prefix=path_prefix,
         workers=workers,
         limit=limit,
+        scan_limit=scan_limit,
         refresh=refresh,
     )
 

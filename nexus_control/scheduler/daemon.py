@@ -206,7 +206,12 @@ def _cleanup_stale_scheduler_files(
         pass
 
 
-def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
+def run_rule_now(
+    rule_id: str,
+    *,
+    schedule_file: Path | None = None,
+    scan_limit: int | None = None,
+) -> int:
     """Синхронный прогон правила (меню / schedule run).
 
     Креды только из env / scheduler vault — без интерактивного prompt.
@@ -220,8 +225,16 @@ def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
         return 2
     if not rule.enabled:
         print(f"Rule {rule_id!r} is disabled; running anyway.", file=sys.stderr)
-    print(f"Running rule {rule.id} for repos={rule.repos}", file=sys.stderr)
-    return run_rule(rule)
+    if scan_limit is not None and scan_limit < 1:
+        print("--scan-limit must be >= 1", file=sys.stderr)
+        return 2
+    effective = scan_limit if scan_limit is not None else rule.scan_limit
+    print(
+        f"Running rule {rule.id} for repos={rule.repos}"
+        + (f" scan_limit={effective}" if effective is not None else ""),
+        file=sys.stderr,
+    )
+    return run_rule(rule, scan_limit=scan_limit)
 
 
 def _settings_no_prompt() -> Settings:

@@ -23,17 +23,27 @@ def run_rule(
     *,
     on_progress: ProgressSink | None = None,
     on_repo_start: RepoStartFn | None = None,
+    scan_limit: int | None = None,
 ) -> int:
-    """Выполнить правило для всех repos; вернуть worst exit code."""
+    """Выполнить правило для всех repos; вернуть worst exit code.
+
+    ``scan_limit`` перекрывает ``rule.scan_limit`` (CLI ``schedule run --scan-limit``).
+    """
     if not rule.repos:
         logger.warning("Rule %s has no repos", rule.id)
         return 0
 
+    effective_scan_limit = scan_limit if scan_limit is not None else rule.scan_limit
     worst = 0
     for repo in rule.repos:
         if on_repo_start is not None:
             on_repo_start(repo)
-        code = _run_repo(rule, repo, on_progress=on_progress)
+        code = _run_repo(
+            rule,
+            repo,
+            on_progress=on_progress,
+            scan_limit=effective_scan_limit,
+        )
         if code > worst:
             worst = code
     return worst
@@ -44,15 +54,17 @@ def _run_repo(
     repo: str,
     *,
     on_progress: ProgressSink | None = None,
+    scan_limit: int | None = None,
 ) -> int:
     target = rule.target_for(repo)
     logger.info(
-        "Scheduler rule=%s repo=%s action=%s upload=%s target=%s",
+        "Scheduler rule=%s repo=%s action=%s upload=%s target=%s scan_limit=%s",
         rule.id,
         repo,
         rule.action,
         rule.wants_upload(),
         target or f"{repo}-verified",
+        scan_limit,
     )
     if rule.action == "upload" and not rule.wants_verify():
         return run_upload(
@@ -74,6 +86,7 @@ def _run_repo(
                 target=target,
                 path_prefix=rule.path_prefix,
                 limit=rule.limit,
+                scan_limit=scan_limit,
                 workers=rule.workers,
                 refresh=rule.refresh,
                 json=False,

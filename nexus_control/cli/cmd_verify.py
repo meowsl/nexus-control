@@ -32,6 +32,10 @@ def run_verify(args: Namespace) -> int:
     if args.limit is not None and args.limit < 1:
         console.print("[red]--limit must be >= 1[/red]")
         return 2
+    scan_limit = getattr(args, "scan_limit", None)
+    if scan_limit is not None and scan_limit < 1:
+        console.print("[red]--scan-limit must be >= 1[/red]")
+        return 2
     scanners = (
         parse_scanner_names(args.scanners)
         if args.scanners
@@ -72,6 +76,7 @@ def run_verify(args: Namespace) -> int:
             repo_name,
             path_prefix=args.path_prefix,
             limit=args.limit,
+            scan_limit=scan_limit,
             refresh=bool(args.refresh),
             scanners=enabled_scanners,
             scanner_versions=scanner_versions,
@@ -156,7 +161,7 @@ def run_verify(args: Namespace) -> int:
             verify=True,
             scanners=scanners,
             workers=workers,
-            discover_sidecars=args.limit is not None,
+            discover_sidecars=args.limit is not None or scan_limit is not None,
             on_progress=progress,
             history_source=getattr(args, "history_source", None) or "cli",
             history_rule_id=getattr(args, "history_rule_id", None),

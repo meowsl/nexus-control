@@ -67,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_verify.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max main assets to put into the verify pipeline (download + "
+            "scan-only); useful for debug on large repos. Independent of "
+            "--limit. Nexus listing stops when the scan-limit is reached"
+        ),
+    )
+    p_verify.add_argument(
         "--workers",
         type=int,
         default=None,
@@ -150,6 +160,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Monitor refresh interval in seconds (default: 1.0)",
+    )
+    p_schedule.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "With run: override rule scan_limit — max main assets to verify "
+            "(debug). Also accepted on verify."
+        ),
     )
     p_schedule.set_defaults(_handler="schedule")
 

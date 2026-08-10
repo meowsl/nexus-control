@@ -112,6 +112,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
                 "path_prefix": "com/example",
                 "workers": 2,
                 "limit": 10,
+                "scan_limit": 5,
             },
         ],
     }
@@ -121,6 +122,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert config.rules[0].wants_upload()
     assert config.rules[1].wants_verify()
     assert config.rules[1].wants_upload()
+    assert config.rules[1].scan_limit == 5
     assert config.get_rule("weekend") is not None
 
     path = tmp_path / "schedule.toml"
@@ -130,6 +132,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert [r.id for r in loaded.rules] == ["nightly-core", "weekend"]
     assert loaded.rules[1].path_prefix == "com/example"
     assert loaded.rules[1].workers == 2
+    assert loaded.rules[1].scan_limit == 5
 
 
 def test_parse_rejects_duplicate_ids() -> None:
