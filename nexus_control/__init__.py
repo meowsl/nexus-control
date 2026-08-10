@@ -1,3 +1,3 @@
 """nexus-control: Textual TUI для просмотра / загрузки / проверки Grype в Nexus Sonatype CE."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
