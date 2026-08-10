@@ -66,6 +66,19 @@ def test_parser_repos_and_upload() -> None:
     assert up.target == "r-v"
 
 
+def test_parser_schedule_flags() -> None:
+    parser = build_parser()
+    menu = parser.parse_args(["schedule"])
+    assert menu._handler == "schedule"
+    assert menu.schedule_action == "menu"
+    run = parser.parse_args(["schedule", "run", "nightly-core"])
+    assert run.schedule_action == "run"
+    assert run.rule_id == "nightly-core"
+    start = parser.parse_args(["schedule", "start", "--schedule-file", "/tmp/s.toml"])
+    assert start.schedule_action == "start"
+    assert start.schedule_file == "/tmp/s.toml"
+
+
 def test_filter_path_prefix_and_limit() -> None:
     assets = [
         _asset("com/a/1.0/a.jar"),

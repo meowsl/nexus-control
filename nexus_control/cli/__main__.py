@@ -104,6 +104,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_upload.set_defaults(_handler="upload")
 
+    p_schedule = sub.add_parser(
+        "schedule",
+        help="Interactive scheduler (rules in schedule.toml + local daemon)",
+    )
+    p_schedule.add_argument(
+        "schedule_action",
+        nargs="?",
+        default="menu",
+        choices=["menu", "start", "stop", "status", "run", "_daemon"],
+        help="menu (default) | start | stop | status | run",
+    )
+    p_schedule.add_argument(
+        "rule_id",
+        nargs="?",
+        default=None,
+        help="Rule id for 'run'",
+    )
+    p_schedule.add_argument(
+        "--schedule-file",
+        default=None,
+        help="Path to schedule.toml (default: XDG config schedule.toml)",
+    )
+    p_schedule.set_defaults(_handler="schedule")
+
     return parser
 
 
@@ -123,6 +147,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_upload import run_upload
 
             code = run_upload(args)
+        elif args._handler == "schedule":
+            from nexus_control.cli.cmd_schedule import run_schedule
+
+            code = run_schedule(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return
