@@ -123,6 +123,8 @@ nexus-control-cli schedule logout       # очистить сохранённы�
 nexus-control-cli schedule start
 nexus-control-cli schedule stop
 nexus-control-cli schedule status
+nexus-control-cli schedule status -m          # live progress (Ctrl+C)
+nexus-control-cli schedule status -m --interval 0.5
 nexus-control-cli schedule run nightly-core
 ```
 
@@ -156,6 +158,8 @@ upload = true
 ```
 
 Демон: pidfile в `NEXUS_CACHE_DIR/scheduler.pid`, лог — `scheduler.log` рядом с `LOG_FILE`.
+Во время job демон пишет live-progress в `scheduler-state.json`; смотреть без логов:
+`schedule status -m` / `--monitor` (обновление раз в `--interval` сек, по умолчанию 1).
 Timezone по умолчанию — **локальный TZ машины** (`timezone = "local"`: `$TZ`,
 `/etc/timezone`, `/etc/localtime`). Явный IANA в `schedule.toml` перекрывает его.
 `SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова

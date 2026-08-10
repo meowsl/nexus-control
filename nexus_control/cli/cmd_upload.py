@@ -93,7 +93,7 @@ def run_upload(args: Namespace) -> int:
         console.print(
             f"Uploading {len(summary.results)} local verified file(s) for {repo_name}"
         )
-        progress = ProgressPrinter()
+        progress = getattr(args, "on_progress", None) or ProgressPrinter()
         uploader = VerifiedUploader(ctx.client)
         up = uploader.upload(
             summary,

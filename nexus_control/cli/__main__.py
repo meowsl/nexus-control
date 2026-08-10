@@ -138,6 +138,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to schedule.toml (default: XDG config schedule.toml)",
     )
+    p_schedule.add_argument(
+        "-m",
+        "--monitor",
+        action="store_true",
+        help="With status: live-refresh daemon/job progress (Ctrl+C to stop)",
+    )
+    p_schedule.add_argument(
+        "--interval",
+        dest="monitor_interval",
+        type=float,
+        default=1.0,
+        help="Monitor refresh interval in seconds (default: 1.0)",
+    )
     p_schedule.set_defaults(_handler="schedule")
 
     p_history = sub.add_parser(

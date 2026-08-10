@@ -48,7 +48,7 @@ def run_verify(args: Namespace) -> int:
         enabled_scanners = scanners or list(ctx.settings.scanners_list)
         pipeline = PipelineService(ctx.settings, ctx.client)
         scanner_versions = pipeline.scanner_versions(enabled_scanners)
-        progress = ProgressPrinter()
+        progress = getattr(args, "on_progress", None) or ProgressPrinter()
         console.print(
             f"Selecting assets for [bold]{repo_name}[/bold] "
             "(Nexus list / cache + local inspect & checkpoints)…"

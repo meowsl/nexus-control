@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import getpass
 import sys
+import time
 from argparse import Namespace
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
+from rich.live import Live
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
 from nexus_control.cli.bootstrap import open_cli_client
 from nexus_control.config import ConfigError, load_settings
@@ -60,7 +64,11 @@ def run_schedule(args: Namespace) -> int:
     if action == "stop":
         return stop_daemon()
     if action == "status":
-        return _cmd_status(schedule_file)
+        return _cmd_status(
+            schedule_file,
+            monitor=bool(getattr(args, "monitor", False)),
+            interval=float(getattr(args, "monitor_interval", 1.0) or 1.0),
+        )
     if action == "run":
         rule_id = getattr(args, "rule_id", None)
         if not rule_id:
@@ -263,29 +271,96 @@ def _menu_run(path: Path) -> None:
     console.print(f"Finished with exit code {code}")
 
 
-def _cmd_status(schedule_file: Path | None) -> int:
+def _cmd_status(
+    schedule_file: Path | None,
+    *,
+    monitor: bool = False,
+    interval: float = 1.0,
+) -> int:
+    if not monitor:
+        try:
+            console.print(_status_renderable(schedule_file))
+        except ConfigError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 2
+        return 0
+
+    poll = max(0.2, float(interval))
+    console.print(
+        f"[dim]Monitoring scheduler (Ctrl+C to stop), refresh={poll:.1f}s[/dim]"
+    )
     try:
-        status = get_status(schedule_file=schedule_file)
+        with Live(
+            _status_renderable(schedule_file),
+            console=console,
+            refresh_per_second=max(1, int(1.0 / poll)),
+            transient=False,
+        ) as live:
+            while True:
+                time.sleep(poll)
+                live.update(_status_renderable(schedule_file))
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         return 2
+    except KeyboardInterrupt:
+        console.print("\n[dim]Monitor stopped.[/dim]")
+        return 0
 
+
+def _status_renderable(schedule_file: Path | None):
+    """Собрать Rich-renderable для одноразового status / Live monitor."""
+    from rich.console import Group
+
+    status = get_status(schedule_file=schedule_file)
+    lines: list[str | Text] = []
     if status.running:
-        console.print(f"[green]Daemon running[/green] pid={status.pid}")
+        lines.append(
+            Text(f"Daemon running pid={status.pid}", style="green")
+        )
     else:
-        console.print("[yellow]Daemon not running[/yellow]")
-    console.print(f"Schedule file: {status.schedule_path}")
-    console.print(
+        lines.append(Text("Daemon not running", style="yellow"))
+    lines.append(f"Schedule file: {status.schedule_path}")
+    lines.append(
         f"Timezone={status.config.resolved_timezone()} "
         f"(config={status.config.timezone})  "
         f"overlap={status.config.overlap}  "
         f"rules={len(status.config.rules)}"
     )
     if status.state.started_at:
-        console.print(f"Started at: {status.state.started_at}")
-    if status.state.busy:
-        console.print(f"[cyan]Busy:[/cyan] {status.state.current_rule}")
+        lines.append(f"Started at: {status.state.started_at}")
+    lines.append(f"Updated: {datetime.now().astimezone().isoformat(timespec='seconds')}")
 
+    if status.state.busy:
+        rule = status.state.current_rule or "?"
+        repo = status.state.current_repo
+        busy = f"Busy: {rule}"
+        if repo:
+            busy += f"  repo={repo}"
+        lines.append(Text(busy, style="cyan bold"))
+        pct = status.state.progress_pct
+        if pct is not None:
+            bar = int(max(0.0, min(1.0, pct)) * 20)
+            gauge = "█" * bar + "░" * (20 - bar)
+            lines.append(
+                Text(
+                    f"Progress: [{gauge}] {int(pct * 100):3d}%  "
+                    f"{status.state.progress_stage}",
+                    style="cyan",
+                )
+            )
+        if status.state.progress_message:
+            lines.append(f"  {status.state.progress_message}")
+        if status.state.progress_updated_at:
+            lines.append(
+                Text(
+                    f"  progress@ {status.state.progress_updated_at}",
+                    style="dim",
+                )
+            )
+    else:
+        lines.append(Text("Idle (waiting for next cron fire)", style="dim"))
+
+    parts: list[object] = list(lines)
     if status.config.rules:
         table = Table(title="Next fires / last runs")
         table.add_column("ID")
@@ -319,8 +394,8 @@ def _cmd_status(schedule_file: Path | None) -> int:
                 last_s,
                 exit_s,
             )
-        console.print(table)
-    return 0
+        parts.append(table)
+    return Group(*parts)
 
 
 def _print_cron_presets() -> None:

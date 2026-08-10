@@ -81,6 +81,10 @@ def test_parser_schedule_flags() -> None:
     assert login.schedule_action == "login"
     logout = parser.parse_args(["schedule", "logout"])
     assert logout.schedule_action == "logout"
+    mon = parser.parse_args(["schedule", "status", "-m", "--interval", "0.5"])
+    assert mon.schedule_action == "status"
+    assert mon.monitor is True
+    assert mon.monitor_interval == 0.5
 
 
 def test_filter_path_prefix_and_limit() -> None:
