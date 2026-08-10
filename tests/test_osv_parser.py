@@ -8,6 +8,7 @@ from nexus_control.models import Severity, Verdict
 from nexus_control.services.osv_scanner import (
     EXPERIMENTAL_PLUGINS,
     _build_osv_args,
+    is_osv_soft_empty,
     parse_osv_json,
 )
 from nexus_control.services.scan_common import parse_scanner_names
@@ -148,3 +149,20 @@ def test_build_osv_args_image_archive() -> None:
 def test_parse_scanner_names_accepts_osv() -> None:
     assert parse_scanner_names("grype,osv") == ["grype", "osv"]
     assert parse_scanner_names("osv") == ["osv"]
+
+
+def test_is_osv_soft_empty_no_package_sources() -> None:
+    stderr = (
+        "Error during extraction: java/archive invalid archive: "
+        "zip: not a valid zip file\n"
+        "No package sources found, --help for usage information.\n"
+    )
+    assert is_osv_soft_empty(stderr) is True
+    assert is_osv_soft_empty("fatal: database unavailable") is False
+
+
+def test_soft_empty_parses_as_pass() -> None:
+    """Синтетический пустой JSON после soft-empty → PASS, как у Grype/Trivy."""
+    result = parse_osv_json('{"results": []}\n')
+    assert result.verdict == Verdict.PASS
+    assert result.vulnerability_count == 0
