@@ -30,6 +30,8 @@ class DownloadStatus(str, Enum):
     SKIPPED_EXISTING = "skipped_existing"
     NOT_FOUND = "not_found"
     ERROR = "error"
+    # Disk-pressure: new download paused; orchestrator retries later.
+    DEFERRED = "deferred"
 
 
 class ScanStatus(str, Enum):
