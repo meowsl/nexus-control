@@ -13,6 +13,7 @@ from pathlib import Path
 
 from nexus_control.config import Settings
 from nexus_control.utils.fs import ensure_dir
+from nexus_control.nexus.uploads import normalize_storage_asset_path
 from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
@@ -268,13 +269,24 @@ class ResourceGovernor:
         for asset_path in unique_paths:
             try:
                 dest = asset_download_path(
-                    self.settings.download_root, repository, asset_path
+                    self.settings.download_root,
+                    repository,
+                    normalize_storage_asset_path(asset_path),
                 )
             except UnsafePathError:
                 continue
             local = resolve_storage_path(dest)
             if not local.is_file():
-                continue
+                # Legacy path without .nupkg suffix (pre-normalize storage).
+                try:
+                    legacy = asset_download_path(
+                        self.settings.download_root, repository, asset_path
+                    )
+                except UnsafePathError:
+                    continue
+                local = resolve_storage_path(legacy)
+                if not local.is_file():
+                    continue
             try:
                 size = local.stat().st_size
             except OSError:

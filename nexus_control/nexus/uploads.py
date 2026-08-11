@@ -74,6 +74,94 @@ def is_verified_local_sidecar(asset_path: str) -> bool:
     return False
 
 
+def is_nuget_package_path(asset_path: str) -> bool:
+    """True для явного ``.nupkg`` / ``.snupkg`` в path."""
+    path = asset_path.replace("\\", "/").lstrip("/").lower()
+    return path.endswith(_NUGET_PACKAGE_SUFFIXES)
+
+
+def looks_like_nuget_metadata_path(asset_path: str) -> bool:
+    """Эвристика: NuGet V3 registration/index/nuspec без расширения пакета."""
+    path = asset_path.replace("\\", "/").lstrip("/").lower()
+    if is_nuget_package_path(path):
+        return False
+    if path.startswith("v3/registration/") or "/registration/" in path:
+        return True
+    if path.startswith("v3/") and path.endswith(".json"):
+        return True
+    if path.endswith(".nuspec"):
+        return True
+    return False
+
+
+def is_nuget_hosted_component_path(asset_path: str) -> bool:
+    """Hosted NuGet asset path вида ``Package.Id/1.2.3`` (без ``.nupkg`` в API).
+
+    Так Nexus CE отдаёт компоненты, залитые через Components API.
+    """
+    path = asset_path.replace("\\", "/").lstrip("/")
+    if not path or looks_like_nuget_metadata_path(path):
+        return False
+    if is_nuget_package_path(path):
+        return True
+    parts = PurePosixPath(path).parts
+    if len(parts) != 2:
+        return False
+    package_id, version = parts
+    if not package_id or not version:
+        return False
+    ver_l = version.lower()
+    if ver_l.endswith((".json", ".nuspec", ".xml", ".md5", ".sha1", ".sha256", ".sha512")):
+        return False
+    return True
+
+
+def is_nuget_uploadable_path(asset_path: str) -> bool:
+    """Пакет nuget: ``*.nupkg``/``*.snupkg`` или hosted ``Id/version``."""
+    return is_nuget_package_path(asset_path) or is_nuget_hosted_component_path(
+        asset_path
+    )
+
+
+def nuget_package_filename(package_id: str, version: str) -> str:
+    """Локальное/upload имя как в Nexus UI browse: ``Id-version.nupkg``."""
+    return f"{package_id}-{version}.nupkg"
+
+
+def normalize_storage_asset_path(asset_path: str, *, fmt: str | None = None) -> str:
+    """Нормализовать path для downloads/verified.
+
+    Hosted NuGet API даёт ``Package.Id/1.0.0`` (файл без расширения). Локально
+    сохраняем как ``Package.Id/1.0.0/Package.Id-1.0.0.nupkg``, как в UI Nexus.
+    """
+    path = asset_path.replace("\\", "/").lstrip("/")
+    fmt_l = (fmt or "").lower().strip()
+    if is_nuget_package_path(path):
+        return path
+    if fmt_l == "nuget" or (not fmt_l and is_nuget_hosted_component_path(path)):
+        if is_nuget_hosted_component_path(path):
+            package_id, version = PurePosixPath(path).parts
+            return f"{package_id}/{version}/{nuget_package_filename(package_id, version)}"
+    return path
+
+
+def nuget_upload_filename(asset_path: str, local_path: Path) -> str:
+    """Имя файла для ``nuget.asset`` (Nexus ожидает ``.nupkg``)."""
+    name = local_path.name
+    lower = name.lower()
+    if lower.endswith(_NUGET_PACKAGE_SUFFIXES):
+        return name
+    path = asset_path.replace("\\", "/").lstrip("/")
+    # Уже нормализованный storage path …/Id-version.nupkg
+    if is_nuget_package_path(path):
+        return PurePosixPath(path).name
+    parts = PurePosixPath(path).parts
+    if len(parts) == 2:
+        package_id, version = parts
+        return nuget_package_filename(package_id, version)
+    return f"{name}.nupkg"
+
+
 def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
     """Подходит ли локальный PASS-ассет для загрузки в hosted ``fmt``."""
     if is_verified_local_sidecar(asset_path):
@@ -90,8 +178,8 @@ def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
     if fmt_l == "pypi":
         return path.endswith(_PYPI_PACKAGE_SUFFIXES)
     if fmt_l == "nuget":
-        # Только пакеты. v3/registration/*.json, *.nuspec, index — metadata Nexus.
-        return path.endswith(_NUGET_PACKAGE_SUFFIXES)
+        # Пакеты: *.nupkg / hosted Id/version. Не registration/*.json.
+        return is_nuget_uploadable_path(asset_path)
     if fmt_l == "maven2":
         # Nexus при HTTP PUT отдельных файлов сам maven-metadata не генерирует —
         # нужно заливать metadata (+ checksum sidecars) вместе с артефактами.
@@ -104,8 +192,29 @@ def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
         return False
     if fmt_l == "docker":
         return False
+    # Без format: nuget V3 metadata всё равно не uploadable.
+    if looks_like_nuget_metadata_path(path):
+        return False
     # Прочие форматы — пробуем как файл с именем.
     return bool(name) and not name.startswith(".")
+
+
+def is_scan_package_asset(fmt: str | None, asset_path: str) -> bool:
+    """Стоит ли сканировать/копировать в verified как пакет.
+
+    Для nuget/npm/pypi metadata (registration, bare npm name, …) — False.
+    """
+    fmt_l = (fmt or "").lower().strip()
+    path = asset_path.replace("\\", "/").lstrip("/")
+    if looks_like_nuget_metadata_path(path):
+        return False
+    if fmt_l == "nuget":
+        return is_nuget_uploadable_path(path)
+    if fmt_l == "npm":
+        return is_uploadable_asset("npm", path)
+    if fmt_l == "pypi":
+        return is_uploadable_asset("pypi", path)
+    return True
 
 
 def build_hosted_create_payload(name: str, fmt: str) -> dict:
@@ -237,7 +346,7 @@ class RepositoryUploader:
         elif fmt_l == "pypi":
             self._upload_pypi(repository, local_path)
         elif fmt_l == "nuget":
-            self._upload_nuget(repository, local_path)
+            self._upload_nuget(repository, local_path, asset_path=asset_path)
         elif fmt_l == "maven2":
             self._upload_maven(repository, asset_path, local_path)
         else:
@@ -296,9 +405,15 @@ class RepositoryUploader:
             )
         self._raise_upload(response, repository, filename)
 
-    def _upload_nuget(self, repository: str, local_path: Path) -> None:
-        filename = local_path.name
-        logger.info("Uploading %s -> nuget://%s", local_path, repository)
+    def _upload_nuget(
+        self,
+        repository: str,
+        local_path: Path,
+        *,
+        asset_path: str | None = None,
+    ) -> None:
+        filename = nuget_upload_filename(asset_path or local_path.name, local_path)
+        logger.info("Uploading %s -> nuget://%s as %s", local_path, repository, filename)
         with local_path.open("rb") as fh:
             response = self.client.post(
                 "/service/rest/v1/components",

@@ -286,6 +286,8 @@ nexus-control
 | `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
 | `OSV_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `OSV_DOCKER_IMAGE` | `ghcr.io/google/osv-scanner:latest` | Образ для docker-fallback |
+| `OSV_API_URL` | `https://api.osv.dev` | OSV API для NuGet identity-скана |
+| `OSV_API_TIMEOUT` | `30` | Таймаут OSV API (секунды) |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
@@ -394,7 +396,9 @@ Docker-образы сохраняются как:
 
 OSV-Scanner всегда запускается с `--experimental-plugins=directory,artifact` (presets для directory + artifact extractors). Доп. флаги — через `OSV_EXTRA_ARGS`.
 
-Порядок выбора бэкенда (для каждого сканера отдельно):
+**NuGet (`.nupkg`):** Grype/Trivy/osv-scanner CLI не извлекают Id+Version из пакета. Для nuget-ассетов nexus-control всегда делает **identity-скан**: читает `.nuspec` → запрос OSV API (`ecosystem: NuGet`, `OSV_API_URL`, по умолчанию `https://api.osv.dev`). Grype/Trivy для таких ассетов помечаются `SKIPPED` (не влияют на aggregate). Бинарник `osv-scanner` для NuGet не нужен; нужен доступ к OSV API.
+
+Порядок выбора бэкенда (для Grype / Trivy / osv-scanner CLI):
 
 1. Локальный бинарник, если найден и `*_USE_DOCKER` не принудительно `true`
 2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE` / `OSV_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
@@ -402,7 +406,7 @@ OSV-Scanner всегда запускается с `--experimental-plugins=direc
 
 Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется.
 
-**Политика вердикта (строгая):** у каждого сканера любая уязвимость → `FAIL`. В verified копируется только если **все** включённые сканеры дали `PASS`.
+**Политика вердикта (строгая):** у каждого *участвующего* сканера любая уязвимость → `FAIL`. `SKIPPED` в aggregate не учитывается. В verified копируется только если итоговый вердикт `PASS`.
 
 ---
 

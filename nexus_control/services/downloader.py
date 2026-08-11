@@ -24,6 +24,7 @@ from nexus_control.utils.hashing import (
     remote_identity_unchanged,
     soft_checksum_warning,
 )
+from nexus_control.nexus.uploads import normalize_storage_asset_path
 from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_download_path,
@@ -56,7 +57,7 @@ class Downloader:
             dest = asset_download_path(
                 self.settings.download_root,
                 asset.repository,
-                asset.path,
+                normalize_storage_asset_path(asset.path, fmt=asset.format),
             )
         except UnsafePathError:
             return DownloadInspection(needs_download=True, local_path=None)
@@ -78,7 +79,7 @@ class Downloader:
             dest = asset_download_path(
                 self.settings.download_root,
                 asset.repository,
-                asset.path,
+                normalize_storage_asset_path(asset.path, fmt=asset.format),
             )
         except UnsafePathError as exc:
             logger.error("Unsafe asset path skipped: %s (%s)", asset.path, exc)

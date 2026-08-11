@@ -16,6 +16,12 @@ from nexus_control.nexus.asset_cache import (
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.scan_checkpoint import checkpoint_is_valid
+from nexus_control.nexus.uploads import (
+    is_scan_package_asset,
+    looks_like_nuget_metadata_path,
+)
+from nexus_control.services.nuget_osv import NUGET_OSV_SCANNER_VERSION
+from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
 
 logger = logging.getLogger(__name__)
@@ -334,6 +340,12 @@ class _AssetSelector:
             self._sidecars.setdefault(main_path, []).append(asset)
             self.emit_progress()
             return
+        # NuGet V3 registration/index и т.п. — не пакеты, в verify не берём.
+        if looks_like_nuget_metadata_path(path) or not is_scan_package_asset(
+            asset.format, path
+        ):
+            self.emit_progress()
+            return
         if self.scan_limit is not None and len(self._mains) >= self.scan_limit:
             self.emit_progress()
             return
@@ -347,20 +359,27 @@ class _AssetSelector:
                     self.emit_progress()
                     return
                 self.stats.download_needed += 1
-            elif (
-                self._use_checkpoints
-                and inspection.local_path is not None
-                and checkpoint_is_valid(
+            elif self._use_checkpoints and inspection.local_path is not None:
+                ck_scanners = checkpoint_scanners_for_asset(
+                    self._scanners,
+                    asset_fmt=asset.format,
+                    asset_path=path,
+                    local_path=inspection.local_path,
+                )
+                ck_versions = dict(self._scanner_versions)
+                if ck_scanners == ["osv"]:
+                    ck_versions["osv"] = NUGET_OSV_SCANNER_VERSION
+                if checkpoint_is_valid(
                     settings=self._settings,
                     asset=asset,
                     local_path=inspection.local_path,
-                    scanners=self._scanners,
-                    scanner_versions=self._scanner_versions,
-                )
-            ):
-                self.stats.checkpoint_skipped += 1
-                self.emit_progress()
-                return
+                    scanners=ck_scanners,
+                    scanner_versions=ck_versions,
+                ):
+                    self.stats.checkpoint_skipped += 1
+                    self.emit_progress()
+                    return
+                self.stats.scan_only += 1
             else:
                 self.stats.scan_only += 1
         elif self.limit is not None and len(self._mains) >= self.limit:
