@@ -18,6 +18,7 @@ from nexus_control.cli.assets import (
 from nexus_control.cli.bootstrap import open_cli_client
 from nexus_control.cli.progress import ProgressPrinter
 from nexus_control.models import PipelineSummary
+from nexus_control.services.osv_offline_db import EnsureStatus, ensure_osv_offline_db
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.services.resource_governor import DiskPressureError, resolve_limits
 from nexus_control.services.resource_pipeline import run_resourced_pipeline
@@ -56,8 +57,31 @@ def run_verify(args: Namespace) -> int:
         require_non_docker_repo(repo)
 
         enabled_scanners = scanners or list(ctx.settings.scanners_list)
-        pipeline = PipelineService(ctx.settings, ctx.client)
-        scanner_versions = pipeline.scanner_versions(enabled_scanners)
+        # Offline OSV DB preflight (nuget всегда нужен osv; иначе — если osv в scanners).
+        allow_prompt = getattr(args, "allow_prompt", None)
+        interactive = (allow_prompt is not False) and sys.stdin.isatty()
+        ensure = ensure_osv_offline_db(
+            ctx.settings,
+            repo_format=repo.format,
+            enabled_scanners=list(enabled_scanners),
+            interactive=interactive,
+        )
+        if ensure.status == EnsureStatus.CANCELLED:
+            console.print(f"[yellow]{ensure.message}[/yellow]")
+            return 1
+        if ensure.status == EnsureStatus.ERROR:
+            console.print(f"[red]{ensure.message}[/red]")
+            return 1
+        run_settings = ensure.settings or ctx.settings
+        if ensure.status == EnsureStatus.OK and ensure.message:
+            console.print(f"[dim]{ensure.message}[/dim]")
+
+        pipeline = PipelineService(run_settings, ctx.client)
+        # NuGet всегда гоняет osv identity; версия нужна для PASS-checkpoint.
+        version_names = list(enabled_scanners)
+        if "osv" not in version_names:
+            version_names.append("osv")
+        scanner_versions = pipeline.scanner_versions(version_names)
         progress = getattr(args, "on_progress", None) or ProgressPrinter()
         console.print(
             f"Selecting assets for [bold]{repo_name}[/bold] "
@@ -78,7 +102,7 @@ def run_verify(args: Namespace) -> int:
 
         items, listed_total, selection = select_assets_for_cli(
             ctx.client,
-            ctx.settings,
+            run_settings,
             repo_name,
             path_prefix=args.path_prefix,
             limit=args.limit,
@@ -107,7 +131,7 @@ def run_verify(args: Namespace) -> int:
                 finished_at=datetime.now(timezone.utc),
             )
             record_scan_run(
-                ctx.settings,
+                run_settings,
                 empty,
                 source=history_source,  # type: ignore[arg-type]
                 rule_id=getattr(args, "history_rule_id", None),
@@ -147,7 +171,7 @@ def run_verify(args: Namespace) -> int:
             return 2
 
         limits = resolve_limits(
-            ctx.settings,
+            run_settings,
             scanner_count=len(enabled_scanners),
             workers_override=workers,
             max_scanner_procs_override=max_scanner_procs,

@@ -20,7 +20,6 @@ from nexus_control.nexus.uploads import (
     is_scan_package_asset,
     looks_like_nuget_metadata_path,
 )
-from nexus_control.services.nuget_osv import NUGET_OSV_SCANNER_VERSION
 from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
 
@@ -366,15 +365,12 @@ class _AssetSelector:
                     asset_path=path,
                     local_path=inspection.local_path,
                 )
-                ck_versions = dict(self._scanner_versions)
-                if ck_scanners == ["osv"]:
-                    ck_versions["osv"] = NUGET_OSV_SCANNER_VERSION
                 if checkpoint_is_valid(
                     settings=self._settings,
                     asset=asset,
                     local_path=inspection.local_path,
                     scanners=ck_scanners,
-                    scanner_versions=ck_versions,
+                    scanner_versions=self._scanner_versions,
                 ):
                     self.stats.checkpoint_skipped += 1
                     self.emit_progress()

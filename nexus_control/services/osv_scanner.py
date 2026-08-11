@@ -116,15 +116,11 @@ class OsvScanner:
                 error=f"Scan target does not exist: {local_path}",
             )
 
-        # .nupkg: osv-scanner CLI не видит NuGet identity → OSV API.
-        from nexus_control.services.nuget_osv import (
-            is_nupkg_local_path,
-            scan_nupkg_via_osv_api,
-        )
+        from nexus_control.services.nuget_osv import is_nupkg_local_path
 
+        # .nupkg: CLI не видит identity → nuspec → temporary osv-scanner lockfile.
         if is_nupkg_local_path(local_path):
-            return scan_nupkg_via_osv_api(
-                settings=self.settings,
+            return self._scan_nupkg(
                 repository=repository,
                 asset_path=asset_path,
                 local_path=local_path,
@@ -154,7 +150,120 @@ class OsvScanner:
             scheme,
             list(self.settings.osv_extra_args_list),
         )
+        return self._finalize_scan(
+            osv_args,
+            asset_path=asset_path,
+            local_path=local_path,
+            json_path=json_path,
+            txt_path=txt_path,
+            version=version,
+        )
 
+    def _scan_nupkg(
+        self,
+        *,
+        repository: str,
+        asset_path: str,
+        local_path: Path,
+    ) -> ScanResult:
+        """NuGet: nuspec Id+Version → custom lockfile → osv-scanner CLI."""
+        from nexus_control.services.nuget_osv import (
+            NugetOsvError,
+            build_nuget_osv_args,
+            extract_nupkg_identity,
+            write_nuget_identity_lockfile,
+        )
+        from nexus_control.utils.safe_path import sanitize_filename, sanitize_repo_name
+
+        try:
+            self.resolve_backend()
+        except OsvError as exc:
+            return ScanResult(
+                status=ScanStatus.ERROR,
+                verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
+                error=str(exc),
+            )
+
+        json_path, txt_path = report_paths(
+            self.settings.reports_root,
+            repository,
+            asset_path,
+            scanner=SCANNER_NAME,
+        )
+        ensure_parent_dir(json_path)
+        version = self.get_version()
+
+        try:
+            identity = extract_nupkg_identity(local_path)
+        except NugetOsvError as exc:
+            logger.warning("NuGet identity extract failed for %s: %s", asset_path, exc)
+            _write_text(txt_path, f"SCAN_ERROR\n{exc}\n")
+            write_json(
+                json_path,
+                {"error": str(exc), "mode": "nuget-osv-scanner"},
+            )
+            return ScanResult(
+                status=ScanStatus.ERROR,
+                verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
+                json_report_path=json_path,
+                text_report_path=txt_path,
+                error=str(exc),
+                scanner_version=version,
+            )
+
+        # Lockfile под REPORTS_ROOT — rw-mount для docker-fallback.
+        lock_path = (
+            self.settings.reports_root
+            / sanitize_repo_name(repository)
+            / "_nuget_osv_lockfiles"
+            / f"{sanitize_filename(asset_path.replace('/', '__'))}.osv-scanner.json"
+        )
+        write_nuget_identity_lockfile(identity, lock_path)
+        osv_args = build_nuget_osv_args(
+            lock_path,
+            list(self.settings.osv_extra_args_list),
+        )
+        logger.info(
+            "NuGet osv-scanner identity scan %s → %s@%s",
+            asset_path,
+            identity.package_id,
+            identity.version,
+        )
+        result = self._finalize_scan(
+            osv_args,
+            asset_path=asset_path,
+            local_path=local_path,
+            json_path=json_path,
+            txt_path=txt_path,
+            version=version,
+            raw_extra={
+                "mode": "nuget-osv-scanner",
+                "package": {
+                    "name": identity.package_id,
+                    "version": identity.version,
+                    "ecosystem": "NuGet",
+                },
+            },
+        )
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return result
+
+    def _finalize_scan(
+        self,
+        osv_args: list[str],
+        *,
+        asset_path: str,
+        local_path: Path,
+        json_path: Path,
+        txt_path: Path,
+        version: str | None,
+        raw_extra: dict[str, Any] | None = None,
+    ) -> ScanResult:
         try:
             result = self._run_scan(osv_args, json_path)
         except OsvError as exc:
@@ -174,6 +283,8 @@ class OsvScanner:
             raw = json.loads(result.stdout) if result.stdout.strip() else parsed.raw
         except json.JSONDecodeError:
             raw = parsed.raw
+        if isinstance(raw, dict) and raw_extra:
+            raw = {**raw_extra, **raw}
         if raw is not None:
             write_json(json_path, raw)
         else:
@@ -187,6 +298,7 @@ class OsvScanner:
         parsed.text_report_path = txt_path
         parsed.scanner = SCANNER_NAME
         parsed.scanner_version = version
+        parsed.raw = raw if isinstance(raw, dict) else parsed.raw
         return parsed
 
     def _run_scan(self, osv_args: list[str], json_report_path: Path) -> CommandResult:
@@ -219,30 +331,45 @@ class OsvScanner:
             raise OsvError(f"osv-scanner failed: {stderr.strip()}") from exc
 
     def _run(self, osv_args: list[str], timeout: float) -> CommandResult:
+        from nexus_control.services.osv_offline_db import (
+            osv_db_cache_root,
+            osv_scanner_environ,
+        )
+
         mode = self.resolve_backend()
+        env = osv_scanner_environ(self.settings)
         if mode == "local":
             assert self._osv_path
             return run_command(
                 [self._osv_path, *osv_args],
                 timeout=timeout,
                 check=True,
+                env=env,
             )
 
         assert self._osv_path  # docker binary
         download_root = self.settings.download_root.resolve()
         reports_root = self.settings.reports_root.resolve()
+        cache_root = osv_db_cache_root(self.settings).resolve()
+        cache_root.mkdir(parents=True, exist_ok=True)
         argv = [
             self._osv_path,
             "run",
             "--rm",
+            "-e",
+            f"XDG_CACHE_HOME={cache_root}",
+            "-e",
+            f"OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY={cache_root}",
             "-v",
             f"{download_root}:{download_root}:ro",
             "-v",
             f"{reports_root}:{reports_root}:rw",
+            "-v",
+            f"{cache_root}:{cache_root}:rw",
             self.settings.osv_docker_image,
             *osv_args,
         ]
-        return run_command(argv, timeout=timeout, check=True)
+        return run_command(argv, timeout=timeout, check=True, env=env)
 
 
 def _infer_scheme(path: Path) -> str:

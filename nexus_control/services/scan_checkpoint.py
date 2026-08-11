@@ -58,8 +58,6 @@ def scan_policy_hash(settings: Settings, scanners: Sequence[str]) -> str:
                         settings.osv_use_docker,
                         settings.osv_docker_image,
                         settings.osv_extra_args,
-                        settings.osv_api_url,
-                        str(settings.osv_api_timeout),
                     )
                 )
             )

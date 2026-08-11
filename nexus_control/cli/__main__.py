@@ -182,6 +182,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_schedule.set_defaults(_handler="schedule")
 
+    p_osv_db = sub.add_parser(
+        "osv-db",
+        help="Show or update local osv-scanner offline vulnerability DB",
+    )
+    p_osv_db.add_argument(
+        "osv_db_action",
+        nargs="?",
+        default="status",
+        choices=["status", "update"],
+        help="status (default) or update",
+    )
+    p_osv_db.add_argument(
+        "--ecosystem",
+        default=None,
+        help="With update: download only this ecosystem (e.g. NuGet)",
+    )
+    p_osv_db.add_argument(
+        "--all",
+        dest="all_ecosystems",
+        action="store_true",
+        help="With update: download every ecosystem (large)",
+    )
+    p_osv_db.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout",
+    )
+    p_osv_db.set_defaults(_handler="osv_db")
+
     p_history = sub.add_parser(
         "history",
         help="List or show saved verify runs (scan history)",
@@ -244,6 +273,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_history import run_history
 
             code = run_history(args)
+        elif args._handler == "osv_db":
+            from nexus_control.cli.cmd_osv_db import run_osv_db
+
+            code = run_osv_db(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return
