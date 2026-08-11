@@ -25,20 +25,29 @@ from nexus_control.models import (
     Verdict,
     VerifyResult,
 )
-from nexus_control.nexus.uploads import is_verified_local_sidecar
+from nexus_control.nexus.uploads import (
+    is_uploadable_asset,
+    is_verified_local_sidecar,
+)
 from nexus_control.services.verified_uploader import VerifiedUploader
 
 logger = logging.getLogger(__name__)
 console = Console(stderr=True)
 
 
-def _summary_from_verified_dir(settings: Settings, repository: str) -> PipelineSummary:
+def _summary_from_verified_dir(
+    settings: Settings,
+    repository: str,
+    *,
+    fmt: str,
+) -> PipelineSummary:
     """Собрать PipelineSummary из локального ``<repo>-verified`` для upload."""
     root = settings.verified_repo_dir(repository)
     if not root.is_dir():
         raise SystemExit(f"Local verified directory not found: {root}")
 
     summary = PipelineSummary(repository=repository, scanners=["cli"])
+    skipped_non_package = 0
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
@@ -51,6 +60,9 @@ def _summary_from_verified_dir(settings: Settings, repository: str) -> PipelineS
             "verified-manifest.json",
             "unverified_assets.txt",
         }:
+            continue
+        if not is_uploadable_asset(fmt, rel):
+            skipped_non_package += 1
             continue
         summary.results.append(
             AssetPipelineResult(
@@ -73,6 +85,13 @@ def _summary_from_verified_dir(settings: Settings, repository: str) -> PipelineS
                 ),
             )
         )
+    if skipped_non_package:
+        logger.info(
+            "Ignored %d non-package file(s) under %s for format=%s",
+            skipped_non_package,
+            root,
+            fmt,
+        )
     return summary
 
 
@@ -85,13 +104,26 @@ def run_upload(args: Namespace) -> int:
             return 2
         require_non_docker_repo(repo)
 
-        summary = _summary_from_verified_dir(ctx.settings, repo_name)
+        summary = _summary_from_verified_dir(
+            ctx.settings, repo_name, fmt=repo.format
+        )
         if not summary.results:
-            console.print(f"[yellow]No files under verified dir for {repo_name}.[/yellow]")
+            console.print(
+                f"[yellow]No uploadable packages under verified dir for "
+                f"{repo_name} (format={repo.format}).[/yellow]"
+            )
+            if repo.format.lower() == "nuget":
+                console.print(
+                    "[yellow]NuGet upload expects .nupkg/.snupkg in "
+                    f"{ctx.settings.verified_repo_dir(repo_name)}. "
+                    "V3 registration/*.json is metadata and is skipped. "
+                    "Re-run verify so only packages land in *-verified.[/yellow]"
+                )
             return 0
 
         console.print(
-            f"Uploading {len(summary.results)} local verified file(s) for {repo_name}"
+            f"Uploading {len(summary.results)} local verified package(s) "
+            f"for {repo_name} (format={repo.format})"
         )
         progress = getattr(args, "on_progress", None) or ProgressPrinter()
         uploader = VerifiedUploader(ctx.client)

@@ -37,6 +37,11 @@ from nexus_control.services.scan_common import (
 )
 from nexus_control.services.trivy_scanner import TrivyScanner
 from nexus_control.services.verifier import Verifier, apply_verify_for_result
+from nexus_control.nexus.uploads import is_nuget_package_path, is_scan_package_asset
+from nexus_control.services.nuget_osv import (
+    NUGET_OSV_SCANNER_VERSION,
+    is_nupkg_local_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +134,12 @@ class PipelineService:
         for index, item in enumerate(items):
             path = item.path if isinstance(item, NexusAsset) else item.path
             if isinstance(item, NexusAsset) and is_scan_ignored_path(path):
+                sidecars.append((index, item))
+            elif isinstance(item, NexusAsset) and not is_scan_package_asset(
+                item.format, path
+            ):
+                # nuget registration/index и пр. — не пакеты: не сканируем и
+                # не копируем в verified (обработаем в конце как skip-only).
                 sidecars.append((index, item))
             else:
                 mains.append((index, item))
@@ -297,6 +308,12 @@ class PipelineService:
                 eligible_sidecars: list[tuple[int, NexusAsset | DockerTag]] = []
                 for entry in sidecars:
                     _index, item = entry
+                    if isinstance(item, NexusAsset) and not is_scan_package_asset(
+                        item.format, item.path
+                    ):
+                        # Non-package metadata: always process (early skip, no download).
+                        eligible_sidecars.append(entry)
+                        continue
                     main_path = main_asset_path_for_sidecar(item.path)
                     if main_path and _main_artifact_verified(
                         summary.results,
@@ -391,6 +408,33 @@ class PipelineService:
         kind = AssetKind.FILE if isinstance(item, NexusAsset) else AssetKind.IMAGE
         report(asset_path, "starting")
         scans: dict[str, ScanResult] = {}
+        asset_fmt = item.format if isinstance(item, NexusAsset) else None
+        checkpoint_scanners: list[str] = list(enabled)
+
+        # NuGet V3 registration/index и аналогичная metadata — не качаем и не сканим.
+        if isinstance(item, NexusAsset) and not is_scan_package_asset(
+            asset_fmt, asset_path
+        ):
+            logger.info(
+                "Skipping non-package asset (%s): %s",
+                asset_fmt or "unknown-format",
+                asset_path,
+            )
+            for name in enabled:
+                scans[name] = ScanResult(
+                    status=ScanStatus.SKIPPED,
+                    verdict=Verdict.SKIPPED,
+                    scanner=name,
+                )
+            return AssetPipelineResult(
+                asset_path=asset_path,
+                kind=kind,
+                download=DownloadResult(
+                    status=DownloadStatus.SKIPPED_EXISTING,
+                    error="non-package asset",
+                ),
+                scans=scans,
+            )
 
         if download:
             report(asset_path, "download")
@@ -460,12 +504,25 @@ class PipelineService:
                     )
             else:
                 scheme = "docker-archive" if isinstance(item, DockerTag) else None
-                scans = self._run_scanners(
+                scan_names = _effective_scanners_for_asset(
                     enabled,
+                    asset_fmt=asset_fmt,
+                    asset_path=asset_path,
+                    local_path=dl.local_path,
+                )
+                scans = self._run_scanners(
+                    scan_names,
                     repository=repository,
                     asset_path=asset_path,
                     local_path=dl.local_path,
                     target_scheme=scheme,
+                    asset_fmt=asset_fmt,
+                )
+                checkpoint_scanners = checkpoint_scanners_for_asset(
+                    enabled,
+                    asset_fmt=asset_fmt,
+                    asset_path=asset_path,
+                    local_path=dl.local_path,
                 )
         else:
             for name in enabled:
@@ -522,12 +579,21 @@ class PipelineService:
             )
 
         if verify and isinstance(item, NexusAsset):
+            # Для NuGet checkpoint должен отражать osv (identity), не grype/trivy.
+            ck_scanners = checkpoint_scanners
+            ck_versions = {
+                name: scanner_versions.get(name)
+                for name in ck_scanners
+            }
+            if ck_scanners == ["osv"]:
+                # Стабильная метка: NuGet идёт через API, не через osv-scanner CLI.
+                ck_versions["osv"] = NUGET_OSV_SCANNER_VERSION
             write_pass_checkpoint(
                 settings=self.settings,
                 asset=item,
                 result=result,
-                scanners=enabled,
-                scanner_versions=scanner_versions,
+                scanners=ck_scanners,
+                scanner_versions=ck_versions,
             )
 
         return result
@@ -568,8 +634,36 @@ class PipelineService:
         asset_path: str,
         local_path: Path,
         target_scheme: str | None,
+        asset_fmt: str | None = None,
     ) -> dict[str, ScanResult]:
         """Запустить включённые сканеры параллельно под глобальным semaphore."""
+        nuget = _is_nuget_scan_target(
+            asset_fmt=asset_fmt,
+            asset_path=asset_path,
+            local_path=local_path,
+        )
+        # NuGet: Grype/Trivy дают ложный empty PASS — пропускаем, гоняем только OSV API.
+        run_names = list(enabled)
+        skipped: dict[str, ScanResult] = {}
+        if nuget:
+            run_names = []
+            for name in enabled:
+                if name == "osv":
+                    run_names.append(name)
+                elif name in {"grype", "trivy"}:
+                    skipped[name] = ScanResult(
+                        status=ScanStatus.SKIPPED,
+                        verdict=Verdict.SKIPPED,
+                        scanner=name,
+                        error="NuGet packages use OSV identity scan (nuspec → api.osv.dev)",
+                    )
+            if "osv" not in run_names:
+                run_names.append("osv")
+            logger.info(
+                "NuGet package %s: OSV identity scan (skipping %s)",
+                asset_path,
+                ", ".join(sorted(skipped)) or "none",
+            )
 
         def scan_one(name: str) -> ScanResult:
             gov = self._governor
@@ -586,31 +680,98 @@ class PipelineService:
                 if gov is not None:
                     gov.release_scanner()
 
-        if len(enabled) == 1:
-            name = enabled[0]
-            return {name: scan_one(name)}
+        results: dict[str, ScanResult] = dict(skipped)
+        if not run_names:
+            return results
 
-        results: dict[str, ScanResult] = {}
-        with ThreadPoolExecutor(max_workers=len(enabled)) as pool:
-            futures = {
-                pool.submit(scan_one, name): name
-                for name in enabled
-                if name in KNOWN_SCANNERS
-            }
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    results[name] = fut.result()
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("Scanner %s crashed", name)
-                    results[name] = ScanResult(
-                        status=ScanStatus.ERROR,
-                        verdict=Verdict.ERROR,
-                        scanner=name,
-                        error=str(exc),
-                    )
-        # Стабильный порядок ключей как в enabled
-        return {name: results[name] for name in enabled if name in results}
+        if len(run_names) == 1:
+            name = run_names[0]
+            results[name] = scan_one(name)
+        else:
+            with ThreadPoolExecutor(max_workers=len(run_names)) as pool:
+                futures = {
+                    pool.submit(scan_one, name): name
+                    for name in run_names
+                    if name in KNOWN_SCANNERS
+                }
+                for fut in as_completed(futures):
+                    name = futures[fut]
+                    try:
+                        results[name] = fut.result()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Scanner %s crashed", name)
+                        results[name] = ScanResult(
+                            status=ScanStatus.ERROR,
+                            verdict=Verdict.ERROR,
+                            scanner=name,
+                            error=str(exc),
+                        )
+        # Стабильный порядок: сначала enabled, затем автодобавленный osv.
+        ordered: dict[str, ScanResult] = {}
+        for name in enabled:
+            if name in results:
+                ordered[name] = results[name]
+        for name, sc in results.items():
+            if name not in ordered:
+                ordered[name] = sc
+        return ordered
+
+
+def _is_nuget_scan_target(
+    *,
+    asset_fmt: str | None,
+    asset_path: str,
+    local_path: Path | None,
+) -> bool:
+    """NuGet package asset / локальный ``.nupkg`` — нужен identity-скан."""
+    if local_path is not None and is_nupkg_local_path(local_path):
+        return True
+    if is_nuget_package_path(asset_path):
+        return True
+    fmt = (asset_fmt or "").lower().strip()
+    if fmt == "nuget" and is_scan_package_asset(fmt, asset_path):
+        return True
+    return False
+
+
+def _effective_scanners_for_asset(
+    enabled: Sequence[str],
+    *,
+    asset_fmt: str | None,
+    asset_path: str,
+    local_path: Path | None,
+) -> list[str]:
+    """Для NuGet гарантировать osv в списке (остальное решит ``_run_scanners``)."""
+    names = list(enabled)
+    if not _is_nuget_scan_target(
+        asset_fmt=asset_fmt,
+        asset_path=asset_path,
+        local_path=local_path,
+    ):
+        return names
+    if "osv" not in names:
+        names.append("osv")
+    return names
+
+
+def checkpoint_scanners_for_asset(
+    enabled: Sequence[str],
+    *,
+    asset_fmt: str | None,
+    asset_path: str,
+    local_path: Path | None,
+) -> list[str]:
+    """Сканеры, которые реально участвуют в вердикте (для PASS-checkpoint).
+
+    NuGet → только ``osv`` (Grype/Trivy SKIPPED).
+    """
+    if _is_nuget_scan_target(
+        asset_fmt=asset_fmt,
+        asset_path=asset_path,
+        local_path=local_path,
+    ):
+        return ["osv"]
+    return list(enabled)
 
 
 def _main_artifact_verified(

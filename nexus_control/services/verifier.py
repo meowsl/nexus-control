@@ -59,10 +59,12 @@ class Verifier:
                     f"images/{safe_tag}.tar",
                 )
             else:
+                from nexus_control.nexus.uploads import normalize_storage_asset_path
+
                 dest = asset_verified_path(
                     self.settings.verified_root,
                     repository,
-                    asset_path,
+                    normalize_storage_asset_path(asset_path),
                 )
         except UnsafePathError as exc:
             return VerifyResult(error=f"Unsafe verified path: {exc}")
