@@ -78,12 +78,22 @@ class Settings(BaseSettings):
     download_root: Path = Path("~/nexus-control/downloads")
     reports_root: Path = Path("~/nexus-control/reports")
     verified_root: Path = Path("~/nexus-control")
+    # tar.gz после disk-pressure reclaim (downloads purge).
+    archive_root: Path = Path("~/nexus-control/archive")
 
     # Сканеры (через запятую: grype, trivy, osv). Можно менять в TUI (клавиша s).
     scanners: str = "grype"
     # Параллельная обработка ассетов в pipeline (download/scan/verify).
-    # 1 = строго последовательно; 4–8 обычно оптимально для сети + I/O.
-    pipeline_workers: int = Field(default=4, ge=1)
+    # 0 = auto от CPU/RAM; 1 = строго последовательно; явные 2–8 — override.
+    pipeline_workers: int = Field(default=0, ge=0)
+    # Глобальный лимит одновременных процессов сканеров (все ассеты × сканеры).
+    # 0 = auto от CPU/RAM (формула в resource_governor).
+    max_scanner_procs: int = Field(default=0, ge=0)
+    # Disk-pressure: pause new downloads at high, resume after reclaim below low.
+    disk_high_watermark: float = Field(default=0.80, ge=0.01, le=0.99)
+    disk_low_watermark: float = Field(default=0.70, ge=0.01, le=0.99)
+    disk_critical_watermark: float = Field(default=0.95, ge=0.01, le=0.99)
+    disk_reclaim_enabled: bool = True
     # PASS checkpoint для неизменённых локальных ассетов. После TTL скан
     # выполняется заново, чтобы учитывать обновления vulnerability DB.
     scan_checkpoint_ttl: int = Field(default=86400, ge=0)
@@ -148,6 +158,7 @@ class Settings(BaseSettings):
         "download_root",
         "reports_root",
         "verified_root",
+        "archive_root",
         "log_file",
         mode="before",
     )
@@ -210,9 +221,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _post_init_dirs(self) -> Settings:
+        if self.disk_low_watermark >= self.disk_high_watermark:
+            raise ValueError(
+                "disk_low_watermark must be < disk_high_watermark"
+            )
+        if self.disk_high_watermark >= self.disk_critical_watermark:
+            raise ValueError(
+                "disk_high_watermark must be < disk_critical_watermark"
+            )
         ensure_dir(self.download_root)
         ensure_dir(self.reports_root)
         ensure_dir(self.verified_root)
+        # archive_root создаётся лениво при первом reclaim
         ensure_parent_dir(self.log_file)
         ensure_dir(self.nexus_cache_dir, mode=0o700)
         if not self.nexus_verify_ssl:
@@ -276,8 +296,14 @@ class Settings(BaseSettings):
             "download_root": str(self.download_root),
             "reports_root": str(self.reports_root),
             "verified_root": str(self.verified_root),
+            "archive_root": str(self.archive_root),
             "scanners": self.scanners,
             "pipeline_workers": self.pipeline_workers,
+            "max_scanner_procs": self.max_scanner_procs,
+            "disk_high_watermark": self.disk_high_watermark,
+            "disk_low_watermark": self.disk_low_watermark,
+            "disk_critical_watermark": self.disk_critical_watermark,
+            "disk_reclaim_enabled": self.disk_reclaim_enabled,
             "scan_checkpoint_ttl": self.scan_checkpoint_ttl,
             "scan_history_keep": self.scan_history_keep,
             "grype_binary": self.grype_binary,

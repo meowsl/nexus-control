@@ -19,9 +19,18 @@ locale = "ru"
 # assets_cache_ttl = 86400
 
 # scanners = "grype"          # или "trivy", "osv", или "grype,trivy,osv"
-# Параллельная обработка ассетов (download/scan/verify). 1 = последовательно.
-# CLI: --workers N. Для чистой сети обычно 4–8; сканеры CPU-bound — не раздувайте.
-# pipeline_workers = 4
+# Параллельная обработка ассетов (download/scan/verify). 0 = auto (CPU/RAM).
+# CLI: --workers N. Явное значение перекрывает auto.
+# pipeline_workers = 0
+# Глобальный лимит процессов сканеров (все ассеты × scanners). 0 = auto.
+# CLI: --max-scanner-procs N
+# max_scanner_procs = 0
+# Disk-pressure: pause new downloads at high, resume after reclaim below low.
+# disk_high_watermark = 0.80
+# disk_low_watermark = 0.70
+# disk_critical_watermark = 0.95
+# disk_reclaim_enabled = true
+# archive_root = "~/nexus-control/archive"
 # Неизменённый PASS-ассет повторно не сканируется в пределах TTL.
 # После TTL checkpoint протухает, чтобы учитывать обновления vulnerability DB.
 # 0 = всегда сканировать. По умолчанию 86400 (сутки).

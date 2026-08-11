@@ -82,8 +82,8 @@ nexus-control-cli upload --repo maven-hosted
 nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
 nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max mains to verify
 
-# Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
-nexus-control-cli verify --repo maven-hosted --workers 8
+# Параллельная загрузка/скан (по умолчанию auto от CPU/RAM; или явный override)
+nexus-control-cli verify --repo maven-hosted --workers 8 --max-scanner-procs 4
 
 # История сканирований (последние verify из TUI / CLI / scheduler)
 nexus-control-cli history
@@ -105,6 +105,35 @@ nexus-control-cli history show <run_id> --json
 Удобно на больших репозиториях, когда `--limit` почти ничего не режет, потому
 что локальный кэш уже заполнен. В scheduler: флаг `schedule run … --scan-limit`
 или поле `scan_limit` в `schedule.toml`.
+
+### Ресурсы (CPU / RAM / диск)
+
+По умолчанию `pipeline_workers = 0` и `max_scanner_procs = 0` означают **auto**:
+лимиты считаются от числа CPU и `MemAvailable` (~2 GiB на один concurrent
+scanner, потолок 8). Явные значения в config / `--workers` /
+`--max-scanner-procs` перекрывают auto. При старте verify печатается строка
+`Resource limits: …`.
+
+Глобальный семафор `max_scanner_procs` ограничивает одновременные процессы
+сканеров across всех asset-workers (иначе `workers × scanners` легко
+перегружает хост).
+
+**Disk-pressure** (CLI / scheduler verify): при заполнении volume выше
+`disk_high_watermark` (по умолчанию 80%) новые downloads паузятся →
+сканируются уже локальные файлы → при `--upload` / `verify_upload` идёт
+upload finished → downloads упаковываются в `archive_root` (`*.tar.gz`) и
+удаляются с диска → при usage ≤ `disk_low_watermark` (70%) качание
+возобновляется. Критический порог `disk_critical_watermark` (95%) —
+ошибка без бесконечного цикла. Отключение: `disk_reclaim_enabled = false`.
+
+Жёсткий потолок снаружи процесса (рекомендуется для daemon):
+
+```ini
+# /etc/systemd/system/nexus-control-scheduler.service.d/override.conf
+[Service]
+MemoryMax=8G
+CPUQuota=200%
+```
 
 После полного PASS + verified copy рядом с локальным файлом сохраняется
 `*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки

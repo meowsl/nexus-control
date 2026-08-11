@@ -26,6 +26,7 @@ from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.grype_scanner import GrypeScanner
 from nexus_control.services.osv_scanner import OsvScanner
+from nexus_control.services.resource_governor import ResourceGovernor, resolve_limits
 from nexus_control.services.scan_checkpoint import write_pass_checkpoint
 from nexus_control.services.scan_common import (
     KNOWN_SCANNERS,
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, float, str], None]
 # (asset_path, progress 0..1, сообщение этапа)
+DownloadGate = Callable[[], bool]
 
 
 class PipelineService:
@@ -54,6 +56,7 @@ class PipelineService:
         self.verifier = Verifier(settings)
         # Совместимость со старым кодом / тестами
         self.scanner = self.grype
+        self._governor: ResourceGovernor | None = None
 
     def _scanner_for(self, name: str) -> GrypeScanner | TrivyScanner | OsvScanner:
         if name == "grype":
@@ -86,7 +89,11 @@ class PipelineService:
         verify: bool = True,
         scanners: Sequence[str] | None = None,
         workers: int | None = None,
+        max_scanner_procs: int | None = None,
+        governor: ResourceGovernor | None = None,
+        allow_new_download: DownloadGate | None = None,
         discover_sidecars: bool = False,
+        finalize: bool = True,
         on_progress: ProgressCallback | None = None,
         should_cancel: Callable[[], bool] | None = None,
         history_source: str | None = None,
@@ -101,10 +108,16 @@ class PipelineService:
         )
         summary = PipelineSummary(repository=repository, scanners=list(enabled))
         total = max(len(items), 1)
-        worker_count = max(
-            1,
-            int(workers if workers is not None else self.settings.pipeline_workers)
+        limits = resolve_limits(
+            self.settings,
+            scanner_count=len(enabled),
+            workers_override=workers,
+            max_scanner_procs_override=max_scanner_procs,
         )
+        worker_count = limits.pipeline_workers
+        self._governor = governor or ResourceGovernor(self.settings, limits)
+        if governor is None:
+            logger.info("Resource limits: %s", limits.describe())
 
         if scan:
             summary.scanner_versions = self.scanner_versions(enabled)
@@ -157,11 +170,13 @@ class PipelineService:
                     isinstance(item, NexusAsset)
                     and item.path in optional_sidecar_paths
                 ),
+                allow_new_download=allow_new_download,
                 summary_results=summary.results,
                 results_lock=results_lock,
                 report=report_item,
             )
-            mark_done(result.asset_path)
+            if result.download.status != DownloadStatus.DEFERRED:
+                mark_done(result.asset_path)
             return result
 
         def run_batch(batch: list[tuple[int, NexusAsset | DockerTag]]) -> None:
@@ -298,6 +313,32 @@ class PipelineService:
             summary.cancelled = True
             logger.warning("Pipeline cancelled by user")
 
+        if finalize:
+            self.finalize_summary(
+                summary,
+                verify=verify,
+                history_source=history_source,
+                history_rule_id=history_rule_id,
+                history_path_prefix=history_path_prefix,
+                history_workers=(
+                    worker_count if download or scan or verify else None
+                ),
+                history_checkpoint_skipped=history_checkpoint_skipped,
+            )
+        return summary
+
+    def finalize_summary(
+        self,
+        summary: PipelineSummary,
+        *,
+        verify: bool = True,
+        history_source: str | None = None,
+        history_rule_id: str | None = None,
+        history_path_prefix: str | None = None,
+        history_workers: int | None = None,
+        history_checkpoint_skipped: int = 0,
+    ) -> None:
+        """Записать reports/manifest/history в конце (в т.ч. после batch-оркестрации)."""
         summary.finished_at = datetime.now(timezone.utc)
         if verify:
             try:
@@ -324,12 +365,11 @@ class PipelineService:
                     source=history_source,  # type: ignore[arg-type]
                     rule_id=history_rule_id,
                     path_prefix=history_path_prefix,
-                    workers=worker_count if download or scan or verify else None,
+                    workers=history_workers,
                     checkpoint_skipped=history_checkpoint_skipped,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Scan history recording failed: %s", exc)
-        return summary
 
     def _process_item(
         self,
@@ -342,6 +382,7 @@ class PipelineService:
         enabled: Sequence[str],
         scanner_versions: dict[str, str | None],
         optional_download: bool,
+        allow_new_download: DownloadGate | None,
         summary_results: list[AssetPipelineResult],
         results_lock: threading.Lock,
         report: Callable[[str, str], None],
@@ -353,6 +394,24 @@ class PipelineService:
 
         if download:
             report(asset_path, "download")
+            deferred = self._maybe_defer_download(
+                item,
+                optional_download=optional_download,
+                allow_new_download=allow_new_download,
+            )
+            if deferred is not None:
+                for name in enabled:
+                    scans[name] = ScanResult(
+                        status=ScanStatus.SKIPPED,
+                        verdict=Verdict.SKIPPED,
+                        scanner=name,
+                    )
+                return AssetPipelineResult(
+                    asset_path=asset_path,
+                    kind=kind,
+                    download=deferred,
+                    scans=scans,
+                )
             if isinstance(item, DockerTag):
                 dl = self.downloader.download_docker_tag(item)
             elif optional_download:
@@ -473,6 +532,34 @@ class PipelineService:
 
         return result
 
+    def _maybe_defer_download(
+        self,
+        item: NexusAsset | DockerTag,
+        *,
+        optional_download: bool,
+        allow_new_download: DownloadGate | None,
+    ) -> DownloadResult | None:
+        """Если disk-pressure запрещает новые downloads и файл не локальный — DEFERRED."""
+        if allow_new_download is None or allow_new_download():
+            return None
+        if isinstance(item, DockerTag):
+            # Docker archives: без inspect считаем, что нужен download.
+            return DownloadResult(
+                status=DownloadStatus.DEFERRED,
+                error="disk pressure: download paused",
+            )
+        inspection = self.downloader.inspect_asset(item)
+        if not inspection.needs_download:
+            return None
+        if optional_download:
+            # Optional sidecar: отсутствие файла — норма; не откладываем весь batch.
+            return None
+        return DownloadResult(
+            status=DownloadStatus.DEFERRED,
+            error="disk pressure: download paused",
+            local_path=inspection.local_path,
+        )
+
     def _run_scanners(
         self,
         enabled: Sequence[str],
@@ -482,28 +569,31 @@ class PipelineService:
         local_path: Path,
         target_scheme: str | None,
     ) -> dict[str, ScanResult]:
-        """Запустить включённые сканеры параллельно."""
-        if len(enabled) == 1:
-            name = enabled[0]
-            return {
-                name: self._scanner_for(name).scan_path(
+        """Запустить включённые сканеры параллельно под глобальным semaphore."""
+
+        def scan_one(name: str) -> ScanResult:
+            gov = self._governor
+            if gov is not None:
+                gov.acquire_scanner()
+            try:
+                return self._scanner_for(name).scan_path(
                     repository=repository,
                     asset_path=asset_path,
                     local_path=local_path,
                     target_scheme=target_scheme,
                 )
-            }
+            finally:
+                if gov is not None:
+                    gov.release_scanner()
+
+        if len(enabled) == 1:
+            name = enabled[0]
+            return {name: scan_one(name)}
 
         results: dict[str, ScanResult] = {}
         with ThreadPoolExecutor(max_workers=len(enabled)) as pool:
             futures = {
-                pool.submit(
-                    self._scanner_for(name).scan_path,
-                    repository=repository,
-                    asset_path=asset_path,
-                    local_path=local_path,
-                    target_scheme=target_scheme,
-                ): name
+                pool.submit(scan_one, name): name
                 for name in enabled
                 if name in KNOWN_SCANNERS
             }

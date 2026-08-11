@@ -82,7 +82,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Parallel asset workers for download/scan/verify "
-            "(default: config pipeline_workers, usually 4)"
+            "(default: config pipeline_workers, or auto from CPU/RAM when 0)"
+        ),
+    )
+    p_verify.add_argument(
+        "--max-scanner-procs",
+        type=int,
+        default=None,
+        dest="max_scanner_procs",
+        help=(
+            "Max concurrent scanner processes across all assets "
+            "(default: config max_scanner_procs, or auto from CPU/RAM when 0)"
         ),
     )
     p_verify.add_argument(

@@ -19,6 +19,8 @@ from nexus_control.cli.bootstrap import open_cli_client
 from nexus_control.cli.progress import ProgressPrinter
 from nexus_control.models import PipelineSummary
 from nexus_control.services.pipeline import PipelineService
+from nexus_control.services.resource_governor import DiskPressureError, resolve_limits
+from nexus_control.services.resource_pipeline import run_resourced_pipeline
 from nexus_control.services.scan_common import parse_scanner_names
 from nexus_control.services.scan_history import record_scan_run
 from nexus_control.services.verified_uploader import VerifiedUploader
@@ -41,6 +43,10 @@ def run_verify(args: Namespace) -> int:
         if args.scanners
         else None
     )
+    max_scanner_procs = getattr(args, "max_scanner_procs", None)
+    if max_scanner_procs is not None and max_scanner_procs < 1:
+        console.print("[red]--max-scanner-procs must be >= 1[/red]")
+        return 2
 
     with open_cli_client(allow_prompt=getattr(args, "allow_prompt", None)) as ctx:
         repo = ctx.client.get_repository(repo_name)
@@ -140,8 +146,11 @@ def run_verify(args: Namespace) -> int:
             console.print("[red]--workers must be >= 1[/red]")
             return 2
 
-        effective_workers = (
-            workers if workers is not None else ctx.settings.pipeline_workers
+        limits = resolve_limits(
+            ctx.settings,
+            scanner_count=len(enabled_scanners),
+            workers_override=workers,
+            max_scanner_procs_override=max_scanner_procs,
         )
         selected_mains = selection.download_needed + selection.scan_only
         selected_sidecars = max(0, len(items) - selected_mains)
@@ -151,42 +160,67 @@ def run_verify(args: Namespace) -> int:
             f"download={selection.download_needed} "
             f"scan-only={selection.scan_only} "
             f"checkpoint-skip={selection.checkpoint_skipped}, "
-            f"workers={effective_workers}"
-        )
-        summary = pipeline.run(
-            repository=repo_name,
-            items=items,
-            download=True,
-            scan=True,
-            verify=True,
-            scanners=scanners,
-            workers=workers,
-            discover_sidecars=args.limit is not None or scan_limit is not None,
-            on_progress=progress,
-            history_source=getattr(args, "history_source", None) or "cli",
-            history_rule_id=getattr(args, "history_rule_id", None),
-            history_path_prefix=args.path_prefix,
-            history_checkpoint_skipped=selection.checkpoint_skipped,
+            f"workers={limits.pipeline_workers} "
+            f"scanners_procs={limits.max_scanner_procs}"
         )
 
-        upload_info: dict | None = None
-        if args.upload:
-            uploader = VerifiedUploader(ctx.client)
-            up = uploader.upload(
+        uploader = VerifiedUploader(ctx.client) if args.upload else None
+
+        def do_upload(summary: PipelineSummary):
+            assert uploader is not None
+            return uploader.upload(
                 summary,
                 target_repository=args.target,
                 on_progress=progress,
             )
+
+        def on_status(msg: str) -> None:
+            console.print(f"[cyan]{msg}[/cyan]")
+
+        try:
+            summary, upload_parts = run_resourced_pipeline(
+                pipeline,
+                repository=repo_name,
+                items=items,
+                download=True,
+                scan=True,
+                verify=True,
+                scanners=scanners,
+                workers=workers,
+                max_scanner_procs=max_scanner_procs,
+                discover_sidecars=args.limit is not None or scan_limit is not None,
+                on_progress=progress,
+                on_status=on_status,
+                do_upload=do_upload if args.upload else None,
+                history_source=getattr(args, "history_source", None) or "cli",
+                history_rule_id=getattr(args, "history_rule_id", None),
+                history_path_prefix=args.path_prefix,
+                history_checkpoint_skipped=selection.checkpoint_skipped,
+            )
+        except DiskPressureError as exc:
+            console.print(f"[red]Disk pressure:[/red] {exc}")
+            return 1
+
+        upload_info: dict | None = None
+        if args.upload:
+            uploaded = sum(u.uploaded for u in upload_parts)
+            skipped = sum(u.skipped for u in upload_parts)
+            failed = sum(u.failed for u in upload_parts)
+            target = (
+                upload_parts[-1].target_repository
+                if upload_parts
+                else (args.target or f"{repo_name}-verified")
+            )
             upload_info = {
-                "target": up.target_repository,
-                "uploaded": up.uploaded,
-                "skipped": up.skipped,
-                "failed": up.failed,
-                "created_repository": up.created_repository,
+                "target": target,
+                "uploaded": uploaded,
+                "skipped": skipped,
+                "failed": failed,
+                "batches": len(upload_parts),
             }
             console.print(
-                f"Upload → {up.target_repository}: "
-                f"uploaded={up.uploaded} skipped={up.skipped} failed={up.failed}"
+                f"Upload → {target}: "
+                f"uploaded={uploaded} skipped={skipped} failed={failed}"
             )
 
         payload = {
@@ -201,6 +235,12 @@ def run_verify(args: Namespace) -> int:
             "failed": summary.total_failed,
             "errors": summary.total_errors,
             "copied": summary.total_copied,
+            "resources": {
+                "workers": limits.pipeline_workers,
+                "max_scanner_procs": limits.max_scanner_procs,
+                "disk_high_watermark": limits.disk_high_watermark,
+                "disk_low_watermark": limits.disk_low_watermark,
+            },
             "selection": {
                 "download_needed": selection.download_needed,
                 "scan_only": selection.scan_only,
