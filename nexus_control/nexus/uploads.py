@@ -30,6 +30,8 @@ _FORMAT_API_SLUG: dict[str, str] = {
 
 _NPM_PACKAGE_SUFFIXES = (".tgz", ".tar.gz")
 _PYPI_PACKAGE_SUFFIXES = (".whl", ".tar.gz", ".zip", ".egg")
+# .nupkg — пакет; .snupkg — symbols (Nexus Components API тоже через nuget.asset).
+_NUGET_PACKAGE_SUFFIXES = (".nupkg", ".snupkg")
 _MAVEN_PUT_SUFFIXES = (
     ".jar",
     ".war",
@@ -87,6 +89,9 @@ def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
         return path.endswith(_NPM_PACKAGE_SUFFIXES) or "/-/" in path and name.endswith(".tgz")
     if fmt_l == "pypi":
         return path.endswith(_PYPI_PACKAGE_SUFFIXES)
+    if fmt_l == "nuget":
+        # Только пакеты. v3/registration/*.json, *.nuspec, index — metadata Nexus.
+        return path.endswith(_NUGET_PACKAGE_SUFFIXES)
     if fmt_l == "maven2":
         # Nexus при HTTP PUT отдельных файлов сам maven-metadata не генерирует —
         # нужно заливать metadata (+ checksum sidecars) вместе с артефактами.
@@ -231,6 +236,8 @@ class RepositoryUploader:
             self._upload_npm(repository, local_path)
         elif fmt_l == "pypi":
             self._upload_pypi(repository, local_path)
+        elif fmt_l == "nuget":
+            self._upload_nuget(repository, local_path)
         elif fmt_l == "maven2":
             self._upload_maven(repository, asset_path, local_path)
         else:
@@ -284,6 +291,20 @@ class RepositoryUploader:
                 params={"repository": repository},
                 files={
                     "pypi.asset": (filename, fh, "application/octet-stream"),
+                },
+                timeout=max(self.timeout, 120.0),
+            )
+        self._raise_upload(response, repository, filename)
+
+    def _upload_nuget(self, repository: str, local_path: Path) -> None:
+        filename = local_path.name
+        logger.info("Uploading %s -> nuget://%s", local_path, repository)
+        with local_path.open("rb") as fh:
+            response = self.client.post(
+                "/service/rest/v1/components",
+                params={"repository": repository},
+                files={
+                    "nuget.asset": (filename, fh, "application/octet-stream"),
                 },
                 timeout=max(self.timeout, 120.0),
             )

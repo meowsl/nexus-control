@@ -40,6 +40,16 @@ def test_is_uploadable_by_format() -> None:
     )
     assert is_uploadable_asset("raw", "docs/readme.txt")
     assert not is_uploadable_asset("docker", "library/alpine/latest")
+    assert is_uploadable_asset(
+        "nuget",
+        "v3/content/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg",
+    )
+    assert is_uploadable_asset("nuget", "Some.Package.1.0.0.snupkg")
+    assert not is_uploadable_asset(
+        "nuget",
+        "v3/registration/newtonsoft.json/index.json",
+    )
+    assert not is_uploadable_asset("nuget", "newtonsoft.json.nuspec")
 
 
 def test_verified_sidecars_not_uploadable() -> None:
