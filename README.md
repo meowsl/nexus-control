@@ -90,6 +90,12 @@ nexus-control-cli history
 nexus-control-cli history --repo maven-hosted --limit 20
 nexus-control-cli history show <run_id>
 nexus-control-cli history show <run_id> --json
+
+# Offline OSV vulnerability DB (для osv / nuget verify без remote API)
+nexus-control-cli osv-db status
+nexus-control-cli osv-db update --ecosystem NuGet
+# cron example:
+# 0 3 * * * nexus-control-cli osv-db update --ecosystem NuGet
 ```
 
 `--limit N` ограничивает только основные ассеты, которым действительно нужна
@@ -286,8 +292,7 @@ nexus-control
 | `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
 | `OSV_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `OSV_DOCKER_IMAGE` | `ghcr.io/google/osv-scanner:latest` | Образ для docker-fallback |
-| `OSV_API_URL` | `https://api.osv.dev` | OSV API для NuGet identity-скана |
-| `OSV_API_TIMEOUT` | `30` | Таймаут OSV API (секунды) |
+| `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` | `~/.cache` (XDG) | Корень offline DB (`osv-scalibr/<Eco>/all.zip`) |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
@@ -396,7 +401,9 @@ Docker-образы сохраняются как:
 
 OSV-Scanner всегда запускается с `--experimental-plugins=directory,artifact` (presets для directory + artifact extractors). Доп. флаги — через `OSV_EXTRA_ARGS`.
 
-**NuGet (`.nupkg`):** Grype/Trivy/osv-scanner CLI не извлекают Id+Version из пакета. Для nuget-ассетов nexus-control всегда делает **identity-скан**: читает `.nuspec` → запрос OSV API (`ecosystem: NuGet`, `OSV_API_URL`, по умолчанию `https://api.osv.dev`). Grype/Trivy для таких ассетов помечаются `SKIPPED` (не влияют на aggregate). Бинарник `osv-scanner` для NuGet не нужен; нужен доступ к OSV API.
+**NuGet (`.nupkg`):** сырой archive osv-scanner не разбирает. Для nuget-ассетов nexus-control делает **identity-скан**: читает `.nuspec` → временный custom lockfile → `osv-scanner --lockfile osv-scanner:…`. Grype/Trivy для таких ассетов помечаются `SKIPPED` (не влияют на aggregate). Нужен локальный `osv-scanner` (или Docker-fallback).
+
+**OSV offline DB preflight:** если нужен osv (`--scanners osv` или nuget-репо), перед verify проверяется локальная offline DB (`~/.cache/osv-scalibr/<Eco>/all.zip`). Если DB нет — в TTY предложит скачать; отказ / non-interactive → **сканирование отменяется** (без remote OSV API). После успеха прогон идёт с `--offline --offline-vulnerabilities`. Обновление DB: `nexus-control-cli osv-db update --ecosystem NuGet` (cron на jump-хосте).
 
 Порядок выбора бэкенда (для Grype / Trivy / osv-scanner CLI):
 
@@ -404,7 +411,7 @@ OSV-Scanner всегда запускается с `--experimental-plugins=direc
 2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE` / `OSV_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
 3. Иначе понятная ошибка в UI / логах
 
-Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется.
+Docker-сканеры монтируют `DOWNLOAD_ROOT` (ro), `REPORTS_ROOT` (rw) и кэш offline OSV DB (rw). Без privileged. Docker socket **не** монтируется.
 
 **Политика вердикта (строгая):** у каждого *участвующего* сканера любая уязвимость → `FAIL`. `SKIPPED` в aggregate не учитывается. В verified копируется только если итоговый вердикт `PASS`.
 

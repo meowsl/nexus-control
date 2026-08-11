@@ -118,9 +118,16 @@ class Settings(BaseSettings):
     osv_use_docker: ScannerDockerMode = "auto"
     osv_docker_image: str = "ghcr.io/google/osv-scanner:latest"
     osv_extra_args: str = ""
-    # NuGet .nupkg: прямой OSV API (ecosystem NuGet), без osv-scanner CLI.
-    osv_api_url: str = "https://api.osv.dev"
-    osv_api_timeout: float = Field(default=30.0, ge=1.0)
+    # Корень кэша offline DB (внутри: osv-scalibr/<Eco>/all.zip).
+    # Env: OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY (как у osv-scanner docs).
+    osv_local_db_cache_dir: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "osv_local_db_cache_dir",
+            "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY",
+            "OSV_LOCAL_DB_CACHE_DIR",
+        ),
+    )
 
     # Docker / skopeo
     docker_binary: str = "docker"
@@ -169,6 +176,13 @@ class Settings(BaseSettings):
     def _expand_paths(cls, value: object) -> Path:
         if value is None or value == "":
             raise ValueError("path value must not be empty")
+        return _expand_path(str(value))
+
+    @field_validator("osv_local_db_cache_dir", mode="before")
+    @classmethod
+    def _expand_optional_cache_dir(cls, value: object) -> Path | None:
+        if value is None or value == "":
+            return None
         return _expand_path(str(value))
 
     @field_validator("nexus_url", mode="before")
@@ -315,8 +329,6 @@ class Settings(BaseSettings):
             "trivy_use_docker": self.trivy_use_docker,
             "osv_binary": self.osv_binary,
             "osv_use_docker": self.osv_use_docker,
-            "osv_api_url": self.osv_api_url,
-            "osv_api_timeout": self.osv_api_timeout,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
         }

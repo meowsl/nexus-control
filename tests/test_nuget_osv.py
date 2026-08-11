@@ -1,4 +1,4 @@
-"""Тесты NuGet identity-скана (nuspec → OSV API)."""
+"""Тесты NuGet identity-скана (nuspec → osv-scanner lockfile)."""
 
 from __future__ import annotations
 
@@ -6,26 +6,28 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock
 from xml.sax.saxutils import escape
 
-import httpx
 import pytest
 
 from nexus_control.config import Settings
-from nexus_control.models import ScanResult, ScanStatus, Severity, Verdict
+from nexus_control.models import ScanResult, ScanStatus, Verdict
 from nexus_control.services.nuget_osv import (
     NugetOsvError,
+    NugetPackageIdentity,
+    build_nuget_osv_args,
     extract_nupkg_identity,
     is_nupkg_local_path,
-    query_osv_nuget,
-    scan_nupkg_via_osv_api,
-    vulns_to_findings,
+    write_nuget_identity_lockfile,
 )
+from nexus_control.services.osv_scanner import OsvScanner
 from nexus_control.services.pipeline import (
     _effective_scanners_for_asset,
     _is_nuget_scan_target,
 )
 from nexus_control.services.scan_common import aggregate_scan_results
+from nexus_control.utils.subprocess_runner import CommandResult
 
 
 def _make_nupkg(path: Path, package_id: str, version: str) -> Path:
@@ -45,6 +47,19 @@ def _make_nupkg(path: Path, package_id: str, version: str) -> Path:
         zf.writestr(f"lib/netstandard2.0/{package_id}.txt", b"ok\n")
     path.write_bytes(buf.getvalue())
     return path
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        nexus_url="http://localhost:8081",
+        nexus_username="u",
+        nexus_password="p",
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "reports",
+        verified_root=tmp_path / "verified",
+        archive_root=tmp_path / "archive",
+        log_file=tmp_path / "log.txt",
+    )
 
 
 def test_is_nupkg_local_path() -> None:
@@ -70,156 +85,106 @@ def test_extract_nupkg_identity_missing_nuspec(tmp_path: Path) -> None:
         extract_nupkg_identity(path)
 
 
-def test_vulns_to_findings_dedup_aliases() -> None:
-    raw = [
-        {
-            "id": "GHSA-aaaa-bbbb-cccc",
-            "aliases": ["CVE-2021-3121"],
-            "summary": "bad",
-            "database_specific": {"severity": "HIGH"},
-        },
-        {
-            "id": "CVE-2021-3121",
-            "summary": "same",
-            "database_specific": {"severity": "HIGH"},
-        },
-    ]
-    findings = vulns_to_findings(raw, package_id="Demo.Pkg", version="1.0.0")
-    assert len(findings) == 1
-    assert findings[0].id == "CVE-2021-3121"
-    assert findings[0].severity == Severity.HIGH
-    assert findings[0].package_name == "Demo.Pkg"
+def test_write_nuget_identity_lockfile(tmp_path: Path) -> None:
+    path = tmp_path / "osv-scanner.json"
+    write_nuget_identity_lockfile(
+        NugetPackageIdentity("Newtonsoft.Json", "12.0.1"),
+        path,
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    pkg = data["results"][0]["packages"][0]["package"]
+    assert pkg == {
+        "name": "Newtonsoft.Json",
+        "version": "12.0.1",
+        "ecosystem": "NuGet",
+    }
+    args = build_nuget_osv_args(path, ["--offline"])
+    assert args[:2] == ["scan", "source"]
+    assert args[2].startswith("--lockfile=osv-scanner:")
+    assert "--format=json" in args
+    assert "--offline" in args
 
 
-def test_query_osv_nuget_uses_mock_transport() -> None:
-    from nexus_control.services.nuget_osv import NugetPackageIdentity
+def test_scan_nupkg_via_osv_scanner_fail(tmp_path: Path) -> None:
+    nupkg = _make_nupkg(
+        tmp_path / "Newtonsoft.Json-12.0.1.nupkg",
+        "Newtonsoft.Json",
+        "12.0.1",
+    )
+    settings = _settings(tmp_path)
+    scanner = OsvScanner(settings)
+    scanner.resolve_backend = MagicMock(return_value="local")  # type: ignore[method-assign]
+    scanner.get_version = MagicMock(return_value="osv-scanner 2.5.0")  # type: ignore[method-assign]
 
-    identity = NugetPackageIdentity("Newtonsoft.Json", "12.0.1")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/v1/query")
-        body = json.loads(request.content)
-        assert body["package"]["ecosystem"] == "NuGet"
-        assert body["package"]["name"] == "Newtonsoft.Json"
-        assert body["version"] == "12.0.1"
-        return httpx.Response(
-            200,
-            json={
-                "vulns": [
+    fake_json = {
+        "results": [
+            {
+                "packages": [
                     {
-                        "id": "GHSA-5crp-9r3c-p9vr",
-                        "aliases": ["CVE-2024-21907"],
-                        "summary": "DoS",
-                        "database_specific": {"severity": "HIGH"},
+                        "package": {
+                            "name": "Newtonsoft.Json",
+                            "version": "12.0.1",
+                            "ecosystem": "NuGet",
+                        },
+                        "vulnerabilities": [
+                            {
+                                "id": "CVE-2024-21907",
+                                "summary": "DoS",
+                                "database_specific": {"severity": "HIGH"},
+                            }
+                        ],
                     }
                 ]
-            },
+            }
+        ]
+    }
+
+    def fake_run_scan(osv_args: list[str], json_report_path: Path) -> CommandResult:
+        assert any(a.startswith("--lockfile=osv-scanner:") for a in osv_args)
+        return CommandResult(
+            returncode=0,
+            stdout=json.dumps(fake_json),
+            stderr="",
+            argv=["osv-scanner", *osv_args],
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    vulns = query_osv_nuget(
-        identity,
-        api_url="https://api.osv.dev",
-        timeout=5.0,
-        client=client,
+    scanner._run_scan = fake_run_scan  # type: ignore[method-assign]
+    result = scanner.scan_path(
+        repository="test-nuget",
+        asset_path="Newtonsoft.Json/12.0.1/Newtonsoft.Json-12.0.1.nupkg",
+        local_path=nupkg,
     )
-    assert len(vulns) == 1
-    assert vulns[0]["id"] == "GHSA-5crp-9r3c-p9vr"
-
-
-def test_scan_nupkg_via_osv_api_fail(tmp_path: Path) -> None:
-    nupkg = _make_nupkg(tmp_path / "Newtonsoft.Json-12.0.1.nupkg", "Newtonsoft.Json", "12.0.1")
-    settings = Settings(
-        nexus_url="http://localhost:8081",
-        nexus_username="u",
-        nexus_password="p",
-        download_root=tmp_path / "dl",
-        reports_root=tmp_path / "reports",
-        verified_root=tmp_path / "verified",
-        archive_root=tmp_path / "archive",
-        log_file=tmp_path / "log.txt",
-        osv_api_url="https://osv.test",
-    )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "vulns": [
-                    {
-                        "id": "CVE-2024-21907",
-                        "summary": "DoS in Newtonsoft.Json",
-                        "database_specific": {"severity": "HIGH"},
-                    }
-                ]
-            },
-        )
-
-    # monkeypatch query via transport by patching httpx.Client used inside
-    import nexus_control.services.nuget_osv as mod
-
-    real_query = mod.query_osv_nuget
-
-    def fake_query(identity, *, api_url, timeout, client=None):
-        return real_query(
-            identity,
-            api_url=api_url,
-            timeout=timeout,
-            client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-
-    mod.query_osv_nuget = fake_query  # type: ignore[assignment]
-    try:
-        result = scan_nupkg_via_osv_api(
-            settings=settings,
-            repository="test-nuget",
-            asset_path="Newtonsoft.Json/12.0.1/Newtonsoft.Json-12.0.1.nupkg",
-            local_path=nupkg,
-        )
-    finally:
-        mod.query_osv_nuget = real_query  # type: ignore[assignment]
-
     assert result.verdict == Verdict.FAIL
     assert result.scanner == "osv"
     assert result.vulnerability_count == 1
+    assert result.vulnerabilities[0].id == "CVE-2024-21907"
     assert result.json_report_path is not None
-    assert result.json_report_path.is_file()
     raw = json.loads(result.json_report_path.read_text(encoding="utf-8"))
-    assert raw["mode"] == "nuget-osv-api"
+    assert raw["mode"] == "nuget-osv-scanner"
     assert raw["package"]["name"] == "Newtonsoft.Json"
 
 
-def test_scan_nupkg_via_osv_api_pass(tmp_path: Path) -> None:
+def test_scan_nupkg_via_osv_scanner_pass(tmp_path: Path) -> None:
     nupkg = _make_nupkg(tmp_path / "Clean.Pkg-1.0.0.nupkg", "Clean.Pkg", "1.0.0")
-    settings = Settings(
-        nexus_url="http://localhost:8081",
-        nexus_username="u",
-        nexus_password="p",
-        download_root=tmp_path / "dl",
-        reports_root=tmp_path / "reports",
-        verified_root=tmp_path / "verified",
-        archive_root=tmp_path / "archive",
-        log_file=tmp_path / "log.txt",
-    )
+    settings = _settings(tmp_path)
+    scanner = OsvScanner(settings)
+    scanner.resolve_backend = MagicMock(return_value="local")  # type: ignore[method-assign]
+    scanner.get_version = MagicMock(return_value="osv-scanner 2.5.0")  # type: ignore[method-assign]
 
-    import nexus_control.services.nuget_osv as mod
-
-    real_query = mod.query_osv_nuget
-
-    def fake_query(*_a, **_k):
-        return []
-
-    mod.query_osv_nuget = fake_query  # type: ignore[assignment]
-    try:
-        result = scan_nupkg_via_osv_api(
-            settings=settings,
-            repository="test-nuget",
-            asset_path="Clean.Pkg/1.0.0/Clean.Pkg-1.0.0.nupkg",
-            local_path=nupkg,
+    def fake_run_scan(osv_args: list[str], json_report_path: Path) -> CommandResult:
+        return CommandResult(
+            returncode=0,
+            stdout='{"results": []}\n',
+            stderr="",
+            argv=["osv-scanner", *osv_args],
         )
-    finally:
-        mod.query_osv_nuget = real_query  # type: ignore[assignment]
 
+    scanner._run_scan = fake_run_scan  # type: ignore[method-assign]
+    result = scanner.scan_path(
+        repository="test-nuget",
+        asset_path="Clean.Pkg/1.0.0/Clean.Pkg-1.0.0.nupkg",
+        local_path=nupkg,
+    )
     assert result.verdict == Verdict.PASS
     assert result.status == ScanStatus.SUCCESS
     assert result.vulnerability_count == 0

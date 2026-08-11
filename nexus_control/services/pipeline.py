@@ -38,10 +38,7 @@ from nexus_control.services.scan_common import (
 from nexus_control.services.trivy_scanner import TrivyScanner
 from nexus_control.services.verifier import Verifier, apply_verify_for_result
 from nexus_control.nexus.uploads import is_nuget_package_path, is_scan_package_asset
-from nexus_control.services.nuget_osv import (
-    NUGET_OSV_SCANNER_VERSION,
-    is_nupkg_local_path,
-)
+from nexus_control.services.nuget_osv import is_nupkg_local_path
 
 logger = logging.getLogger(__name__)
 
@@ -585,9 +582,11 @@ class PipelineService:
                 name: scanner_versions.get(name)
                 for name in ck_scanners
             }
-            if ck_scanners == ["osv"]:
-                # Стабильная метка: NuGet идёт через API, не через osv-scanner CLI.
-                ck_versions["osv"] = NUGET_OSV_SCANNER_VERSION
+            if "osv" in ck_scanners and ck_versions.get("osv") is None:
+                try:
+                    ck_versions["osv"] = self.osv.get_version()
+                except Exception:  # noqa: BLE001
+                    ck_versions["osv"] = None
             write_pass_checkpoint(
                 settings=self.settings,
                 asset=item,
@@ -655,12 +654,12 @@ class PipelineService:
                         status=ScanStatus.SKIPPED,
                         verdict=Verdict.SKIPPED,
                         scanner=name,
-                        error="NuGet packages use OSV identity scan (nuspec → api.osv.dev)",
+                        error="NuGet packages use osv-scanner identity scan (nuspec → lockfile)",
                     )
             if "osv" not in run_names:
                 run_names.append("osv")
             logger.info(
-                "NuGet package %s: OSV identity scan (skipping %s)",
+                "NuGet package %s: osv-scanner identity scan (skipping %s)",
                 asset_path,
                 ", ".join(sorted(skipped)) or "none",
             )
