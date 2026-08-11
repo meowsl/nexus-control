@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     osv_use_docker: ScannerDockerMode = "auto"
     osv_docker_image: str = "ghcr.io/google/osv-scanner:latest"
     osv_extra_args: str = ""
+    # NuGet .nupkg: прямой OSV API (ecosystem NuGet), без osv-scanner CLI.
+    osv_api_url: str = "https://api.osv.dev"
+    osv_api_timeout: float = Field(default=30.0, ge=1.0)
 
     # Docker / skopeo
     docker_binary: str = "docker"
@@ -312,6 +315,8 @@ class Settings(BaseSettings):
             "trivy_use_docker": self.trivy_use_docker,
             "osv_binary": self.osv_binary,
             "osv_use_docker": self.osv_use_docker,
+            "osv_api_url": self.osv_api_url,
+            "osv_api_timeout": self.osv_api_timeout,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
         }

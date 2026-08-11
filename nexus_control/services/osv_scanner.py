@@ -108,6 +108,28 @@ class OsvScanner:
         target_scheme: str | None = None,
     ) -> ScanResult:
         """Сканировать локальный файл/каталог/архив и сохранить JSON + TXT отчёты."""
+        if not local_path.exists():
+            return ScanResult(
+                status=ScanStatus.ERROR,
+                verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
+                error=f"Scan target does not exist: {local_path}",
+            )
+
+        # .nupkg: osv-scanner CLI не видит NuGet identity → OSV API.
+        from nexus_control.services.nuget_osv import (
+            is_nupkg_local_path,
+            scan_nupkg_via_osv_api,
+        )
+
+        if is_nupkg_local_path(local_path):
+            return scan_nupkg_via_osv_api(
+                settings=self.settings,
+                repository=repository,
+                asset_path=asset_path,
+                local_path=local_path,
+            )
+
         try:
             self.resolve_backend()
         except OsvError as exc:
@@ -116,14 +138,6 @@ class OsvScanner:
                 verdict=Verdict.ERROR,
                 scanner=SCANNER_NAME,
                 error=str(exc),
-            )
-
-        if not local_path.exists():
-            return ScanResult(
-                status=ScanStatus.ERROR,
-                verdict=Verdict.ERROR,
-                scanner=SCANNER_NAME,
-                error=f"Scan target does not exist: {local_path}",
             )
 
         scheme = target_scheme or _infer_scheme(local_path)
