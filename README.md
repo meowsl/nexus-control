@@ -261,7 +261,8 @@ nexus-control
 |-------------------|----------|
 | `nexus_url` / `NEXUS_URL` | Базовый URL Nexus, например `http://localhost:8081` |
 
-При отсутствии URL и наличии TTY запускается first-run wizard.
+При отсутствии URL и наличии TTY запускается first-run wizard
+(язык → Nexus URL → TLS → сканеры → **опционально DefectDojo**).
 
 ### Учётные данные
 
@@ -286,6 +287,9 @@ nexus-control
 | `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*` / `osv_*`) |
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
 | `SCANNERS` | `grype` | Через запятую: `grype`, `trivy`, `osv` (в TUI — клавиша `s`) |
+| `DEFECTDOJO_ENABLED` | `false` | После verify пушить FAIL findings в DefectDojo |
+| `DEFECTDOJO_URL` | _(пусто)_ | Базовый URL, например `http://localhost:8080` |
+| `DEFECTDOJO_API_KEY` | _(пусто)_ | API token (или encrypted vault) |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
 | `TRIVY_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
@@ -403,7 +407,9 @@ OSV-Scanner всегда запускается с `--experimental-plugins=direc
 
 **NuGet (`.nupkg`):** сырой archive osv-scanner не разбирает. Для nuget-ассетов nexus-control делает **identity-скан**: читает `.nuspec` → временный custom lockfile → `osv-scanner --lockfile osv-scanner:…`. Grype/Trivy для таких ассетов помечаются `SKIPPED` (не влияют на aggregate). Нужен локальный `osv-scanner` (или Docker-fallback).
 
-**OSV offline DB preflight:** если нужен osv (`--scanners osv` или nuget-репо), перед verify проверяется локальная offline DB (`~/.cache/osv-scalibr/<Eco>/all.zip`). Если DB нет — в TTY предложит скачать; отказ / non-interactive → **сканирование отменяется** (без remote OSV API). После успеха прогон идёт с `--offline --offline-vulnerabilities`. Обновление DB: `nexus-control-cli osv-db update --ecosystem NuGet` (cron на jump-хосте).
+**npm (`.tgz` / `.tar.gz`):** сырой tarball Trivy/Grype не видят как пакет (`trivy fs file.tgz` → 0 language files). Перед сканом читается `package/package.json` из архива и пишется временный `package-lock.json` (identity) — Trivy/Grype сканируют его и находят CVE пакета.
+
+**OSV offline DB preflight:** если нужен osv (`--scanners osv` или nuget-репо), перед verify проверяется локальная offline DB под **ecosystem формата репо** (`pypi→PyPI`, `npm→npm`, `maven2→Maven`, `nuget→NuGet`, `rubygems→RubyGems`, `go→Go`, `apt→Debian`, `yum→Red Hat`). Путь: `~/.cache/osv-scalibr/<Eco>/all.zip`. Если DB нет — в TTY предложит скачать **только нужный** ecosystem; отказ / non-interactive → **сканирование отменяется** (без remote OSV API). raw/docker/helm/huggingface без package-ecosystem — preflight не блокирует. После успеха: `--offline --offline-vulnerabilities`. Обновление: `nexus-control-cli osv-db update --ecosystem PyPI`.
 
 Порядок выбора бэкенда (для Grype / Trivy / osv-scanner CLI):
 
@@ -414,6 +420,19 @@ OSV-Scanner всегда запускается с `--experimental-plugins=direc
 Docker-сканеры монтируют `DOWNLOAD_ROOT` (ro), `REPORTS_ROOT` (rw) и кэш offline OSV DB (rw). Без privileged. Docker socket **не** монтируется.
 
 **Политика вердикта (строгая):** у каждого *участвующего* сканера любая уязвимость → `FAIL`. `SKIPPED` в aggregate не учитывается. В verified копируется только если итоговый вердикт `PASS`.
+
+---
+
+## DefectDojo
+
+Опционально: после каждого verify (TUI / CLI / scheduler) findings с **FAIL**-ассетов уходят в DefectDojo как **Generic Findings Import** (`POST /api/v2/reimport-scan/`, `auto_create_context`).
+
+- First-run wizard: «Включить DefectDojo?» → URL + API-ключ (ключ в `NEXUS_CACHE_DIR/defectdojo.vault`, не в TOML).
+- Уже настроенный инстанс: `nexus-control-cli defectdojo configure` / `status` / `disable [--clear-vault]`.
+- Env: `DEFECTDOJO_ENABLED`, `DEFECTDOJO_URL`, `DEFECTDOJO_API_KEY` (и опционально product/engagement names).
+- Product по умолчанию `nexus-control`, engagement = имя Nexus-репозитория. Ошибка push не роняет verify (warning в лог).
+
+API-ключ: в UI DefectDojo → профиль → **API Key**.
 
 ---
 
@@ -515,9 +534,13 @@ nexus-control/
     │   ├── cmd_upload.py        # upload локального *-verified без сканера
     │   ├── cmd_schedule.py      # интерактивное меню планировщика
     │   ├── cmd_history.py       # list/show scan history
+    │   ├── cmd_osv_db.py        # offline OSV DB status/update
+    │   ├── cmd_defectdojo.py    # DefectDojo configure/status/disable
     │   ├── assets.py            # listing / cache / inspect / checkpoints
     │   ├── progress.py
     │   └── bootstrap.py
+    ├── integrations/            # DefectDojo push и др.
+    │   └── defectdojo.py
     ├── scheduler/               # schedule.toml + daemon (pidfile/cron loop)
     │   ├── models.py / store.py / cronutil.py
     │   ├── daemon.py / jobs.py / pidfile.py / state.py
