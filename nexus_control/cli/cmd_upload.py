@@ -34,35 +34,94 @@ from nexus_control.services.verified_uploader import VerifiedUploader
 logger = logging.getLogger(__name__)
 console = Console(stderr=True)
 
+MANIFEST_NAME = "verified-manifest.json"
+
+
+def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
+    """Пути PASS из последнего ``verified-manifest.json`` (нормализованные).
+
+    Raises:
+        FileNotFoundError: нет manifest.
+        ValueError: битый / пустой manifest.
+    """
+    path = verified_dir / MANIFEST_NAME
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {MANIFEST_NAME}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{MANIFEST_NAME} root must be an object")
+    raw = data.get("passed_assets")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{MANIFEST_NAME} has no passed_assets (run verify first)")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("asset_path") or "").replace("\\", "/").lstrip("/")
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        out.append(rel)
+    if not out:
+        raise ValueError(f"{MANIFEST_NAME} has no usable passed_assets paths")
+    return out
+
 
 def _summary_from_verified_dir(
     settings: Settings,
     repository: str,
     *,
     fmt: str,
-) -> PipelineSummary:
-    """Собрать PipelineSummary из локального ``<repo>-verified`` для upload."""
+) -> tuple[PipelineSummary, int]:
+    """Собрать PipelineSummary только из PASS последнего verify (manifest).
+
+    Returns:
+        ``(summary, skipped_not_in_manifest)`` — файлы на диске вне manifest.
+    """
     root = settings.verified_repo_dir(repository)
     if not root.is_dir():
         raise SystemExit(f"Local verified directory not found: {root}")
 
+    try:
+        allowed = set(load_manifest_passed_paths(root))
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            f"No {MANIFEST_NAME} in {root}. Run verify first, then upload."
+        ) from exc
+    except ValueError as exc:
+        raise SystemExit(f"{exc}. Run verify first, then upload.") from exc
+
     summary = PipelineSummary(repository=repository, scanners=["cli"])
     skipped_non_package = 0
+    skipped_not_in_manifest = 0
+
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
         if is_verified_local_sidecar(rel):
             continue
-        # Report JSON / manifest at verified root
         name = Path(rel).name
         if name.endswith("_report.json") or name in {
-            "verified-manifest.json",
+            MANIFEST_NAME,
             "unverified_assets.txt",
         }:
             continue
         if not is_uploadable_asset(fmt, rel):
             skipped_non_package += 1
+            continue
+        key = rel.replace("\\", "/").lstrip("/")
+        if key not in allowed:
+            skipped_not_in_manifest += 1
+            logger.info(
+                "Skip upload %s: not in last %s (stale or failed last verify)",
+                rel,
+                MANIFEST_NAME,
+            )
             continue
         summary.results.append(
             AssetPipelineResult(
@@ -85,6 +144,17 @@ def _summary_from_verified_dir(
                 ),
             )
         )
+
+    uploaded_keys = {
+        r.asset_path.replace("\\", "/").lstrip("/") for r in summary.results
+    }
+    for rel in sorted(allowed - uploaded_keys):
+        logger.warning(
+            "Manifest lists %s but file missing under %s — skip",
+            rel,
+            root,
+        )
+
     if skipped_non_package:
         logger.info(
             "Ignored %d non-package file(s) under %s for format=%s",
@@ -92,7 +162,14 @@ def _summary_from_verified_dir(
             root,
             fmt,
         )
-    return summary
+    if skipped_not_in_manifest:
+        logger.info(
+            "Skipped %d file(s) not in last %s under %s",
+            skipped_not_in_manifest,
+            MANIFEST_NAME,
+            root,
+        )
+    return summary, skipped_not_in_manifest
 
 
 def run_upload(args: Namespace) -> int:
@@ -104,9 +181,14 @@ def run_upload(args: Namespace) -> int:
             return 2
         require_non_docker_repo(repo)
 
-        summary = _summary_from_verified_dir(
+        summary, skipped_stale = _summary_from_verified_dir(
             ctx.settings, repo_name, fmt=repo.format
         )
+        if skipped_stale:
+            console.print(
+                f"[dim]Skipped {skipped_stale} local file(s) not in last "
+                f"{MANIFEST_NAME} (stale or failed last verify).[/dim]"
+            )
         if not summary.results:
             console.print(
                 f"[yellow]No uploadable packages under verified dir for "
@@ -139,6 +221,7 @@ def run_upload(args: Namespace) -> int:
             "format": up.source_format,
             "uploaded": up.uploaded,
             "skipped": up.skipped,
+            "skipped_not_in_manifest": skipped_stale,
             "failed": up.failed,
             "created_repository": up.created_repository,
         }

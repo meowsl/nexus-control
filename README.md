@@ -76,6 +76,7 @@ nexus-control-cli repos
 nexus-control-cli verify --repo maven-hosted --upload
 
 # Только upload локального *-verified
+# (только пути из последнего verified-manifest.json / PASS; stale на диске пропускаются)
 nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
@@ -458,7 +459,7 @@ API-ключ: в UI DefectDojo → профиль → **API Key**.
 
 ## Ограничения текущей версии
 
-- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются
+- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются только ассеты из последнего `verified-manifest.json` (PASS), stale-файлы в локальном `*-verified` не грузятся
 - Нет delete и произвольного admin write в Nexus
 - Для docker нужны skopeo или docker CLI
 - Очень большие репозитории загружают все ассеты в память для построения дерева (пагинация используется на проводе)
