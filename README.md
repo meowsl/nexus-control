@@ -133,6 +133,15 @@ upload finished → downloads упаковываются в `archive_root` (`*.t
 возобновляется. Критический порог `disk_critical_watermark` (95%) —
 ошибка без бесконечного цикла. Отключение: `disk_reclaim_enabled = false`.
 
+**Verified без удвоения места:** по умолчанию `verified_link_mode=auto` —
+PASS кладётся в `*-verified` через **hardlink** на том же volume (download и
+verified — один inode). Перекачка через `.partial`+`replace` не портит
+уже linked verified. Если hardlink невозможен (другой FS) — обычный copy.
+Уже существующие полные копии не конвертируются сами: один раз
+`OVERWRITE_VERIFIED=true` или удалить `*-verified` и перепрогнать verify.
+При disk-pressure reclaim unlink download у hardlink'нутого PASS **не
+освобождает** байты, пока жив путь в verified (nlink > 1) — это ожидаемо.
+
 Жёсткий потолок снаружи процесса (рекомендуется для daemon):
 
 ```ini
@@ -287,6 +296,7 @@ nexus-control
 | `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
 | `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*` / `osv_*`) |
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
+| `VERIFIED_LINK_MODE` | `auto` | `auto`: hardlink download→verified на том же volume (без удвоения байт), иначе copy; `copy`: всегда полная копия |
 | `SCANNERS` | `grype` | Через запятую: `grype`, `trivy`, `osv` (в TUI — клавиша `s`) |
 | `DEFECTDOJO_ENABLED` | `false` | После verify пушить FAIL findings в DefectDojo |
 | `DEFECTDOJO_URL` | _(пусто)_ | Базовый URL, например `http://localhost:8080` |

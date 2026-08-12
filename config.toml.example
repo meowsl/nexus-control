@@ -48,6 +48,8 @@ locale = "ru"
 # download_root = "~/nexus-control/downloads"
 # reports_root = "~/nexus-control/reports"
 # verified_root = "~/nexus-control"
+# PASS → *-verified: auto = hardlink (same FS) else copy; copy = всегда copy2.
+# verified_link_mode = "auto"
 # log_file = "~/nexus-control/logs/nexus-control.log"
 
 # grype_use_docker = "auto"

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 ScannerDockerMode = Literal["auto", "true", "false"]
 GrypeDockerMode = ScannerDockerMode  # совместимость
+VerifiedLinkMode = Literal["auto", "copy"]
 
 # Путь TOML для settings_customise_sources (задаётся в load_settings).
 _active_toml_path: Path | None = None
@@ -157,6 +158,14 @@ class Settings(BaseSettings):
     # Перезапись
     overwrite_downloads: bool = False
     overwrite_verified: bool = False
+    # PASS → *-verified: auto = hardlink (same FS) else copy; copy = всегда copy2.
+    verified_link_mode: VerifiedLinkMode = Field(
+        default="auto",
+        validation_alias=AliasChoices(
+            "verified_link_mode",
+            "VERIFIED_LINK_MODE",
+        ),
+    )
 
     @classmethod
     def settings_customise_sources(
@@ -270,6 +279,14 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid LOG_LEVEL: {value}")
         return level
 
+    @field_validator("verified_link_mode", mode="before")
+    @classmethod
+    def _normalize_verified_link_mode(cls, value: object) -> str:
+        text = str(value if value is not None else "auto").strip().lower()
+        if text not in {"auto", "copy"}:
+            raise ValueError("verified_link_mode must be auto or copy")
+        return text
+
     @model_validator(mode="after")
     def _post_init_dirs(self) -> Settings:
         if self.disk_low_watermark >= self.disk_high_watermark:
@@ -372,6 +389,9 @@ class Settings(BaseSettings):
             "defectdojo_product_name": self.defectdojo_product_name,
             "defectdojo_engagement_name": self.defectdojo_engagement_name,
             "defectdojo_product_type_name": self.defectdojo_product_type_name,
+            "overwrite_downloads": self.overwrite_downloads,
+            "overwrite_verified": self.overwrite_verified,
+            "verified_link_mode": self.verified_link_mode,
         }
 
 

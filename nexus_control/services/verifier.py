@@ -16,11 +16,11 @@ from nexus_control.models import (
     VerifyResult,
 )
 from nexus_control.utils.fs import (
-    copy_file,
     ensure_dir,
+    link_or_copy_file,
     prepare_asset_destination,
     read_json,
-    write_json
+    write_json,
 )
 from nexus_control.utils.safe_path import (
     UnsafePathError,
@@ -71,10 +71,11 @@ class Verifier:
 
         dest = prepare_asset_destination(dest)
         try:
-            copied, skipped = copy_file(
+            copied, skipped = link_or_copy_file(
                 local_path,
                 dest,
                 overwrite=self.settings.overwrite_verified,
+                mode=self.settings.verified_link_mode,
             )
         except OSError as exc:
             logger.error("Failed to copy to verified: %s", exc)
@@ -89,7 +90,7 @@ class Verifier:
                 skipped_existing=True,
                 verified_path=dest,
             )
-        logger.info("Verified copy: %s -> %s", local_path, dest)
+        logger.info("Verified link/copy: %s -> %s", local_path, dest)
         return VerifyResult(copied=True, verified_path=dest)
 
     def _copy_companion_sidecars(self, local_path: Path, dest: Path) -> None:
@@ -106,21 +107,22 @@ class Verifier:
         for side_src in iter_local_companion_sidecars(local_path):
             side_dest = prepare_asset_destination(dest.parent / side_src.name)
             try:
-                copied, skipped = copy_file(
+                copied, skipped = link_or_copy_file(
                     side_src,
                     side_dest,
                     overwrite=self.settings.overwrite_verified,
+                    mode=self.settings.verified_link_mode,
                 )
             except OSError as exc:
                 logger.warning(
-                    "Failed to copy sidecar %s -> %s: %s",
+                    "Failed to link/copy sidecar %s -> %s: %s",
                     side_src,
                     side_dest,
                     exc,
                 )
                 continue
             if copied:
-                logger.info("Verified sidecar copy: %s -> %s", side_src, side_dest)
+                logger.info("Verified sidecar link/copy: %s -> %s", side_src, side_dest)
             elif skipped:
                 logger.debug("Verified sidecar already present: %s", side_dest)
 

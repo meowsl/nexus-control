@@ -9,11 +9,14 @@ import shutil
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from nexus_control.utils.safe_path import ASSET_META_LEAF, resolve_storage_path
 
 logger = logging.getLogger(__name__)
+
+# verified PASS: hardlink when same filesystem, else full copy.
+VerifiedLinkMode = Literal["auto", "copy"]
 
 
 def ensure_dir(path: Path, mode: int | None = None) -> Path:
@@ -140,18 +143,68 @@ def _json_default(obj: Any) -> Any:
 
 
 def copy_file(src: Path, dst: Path, overwrite: bool = False) -> tuple[bool, bool]:
-    """Скопировать ``src`` в ``dst``.
+    """Скопировать ``src`` в ``dst`` (всегда полный copy).
 
     Возвращает ``(copied, skipped_existing)``.
     """
+    return link_or_copy_file(src, dst, overwrite=overwrite, mode="copy")
+
+
+def link_or_copy_file(
+    src: Path,
+    dst: Path,
+    *,
+    overwrite: bool = False,
+    mode: VerifiedLinkMode = "auto",
+) -> tuple[bool, bool]:
+    """Поместить ``src`` в ``dst``: hardlink (``auto``) или ``copy2``.
+
+    При ``mode="auto"`` сначала ``os.link`` (один inode, без удвоения места на
+    том же volume). Если hardlink невозможен (другой FS, ``EPERM``, …) —
+    fallback на ``shutil.copy2``.
+
+    Перекачка download через ``.partial`` + ``replace`` не портит уже
+    hardlink'нутый verified: replace отвязывает старый inode от download-пути.
+
+    Returns:
+        ``(placed, skipped_existing)``.
+    """
     ensure_parent_dir(dst)
-    if dst.exists() and not overwrite:
-        return False, True
-    # Отказ следовать symlink-назначениям, выходящим за пределы (вызывающий должен проверить).
-    if dst.is_symlink():
+    if not src.is_file():
+        raise FileNotFoundError(f"Source is not a file: {src}")
+
+    if dst.exists() or dst.is_symlink():
+        if not overwrite:
+            if _same_file(src, dst):
+                return False, True
+            return False, True
+        if _same_file(src, dst):
+            return False, True
         dst.unlink()
+
+    if mode == "auto":
+        try:
+            os.link(src, dst)
+            logger.debug("Hardlinked %s -> %s", src, dst)
+            return True, False
+        except OSError as exc:
+            logger.debug(
+                "Hardlink unavailable for %s -> %s (%s); copying",
+                src,
+                dst,
+                exc,
+            )
+
     shutil.copy2(src, dst)
     return True, False
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """True, если оба пути существуют и указывают на один inode."""
+    try:
+        return a.exists() and b.exists() and os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def utc_now_iso() -> str:
