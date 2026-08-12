@@ -272,6 +272,61 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "Сканеры (grype, trivy, osv — через запятую) [grype]"
         ),
         "Wrote {path}": "Записано {path}",
+        (
+            "DefectDojo can receive vulnerability findings after each verify "
+            "(FAIL assets → Generic Findings Import)."
+        ): (
+            "DefectDojo может принимать findings по уязвимостям после каждого "
+            "verify (FAIL-ассеты → Generic Findings Import)."
+        ),
+        "Enable DefectDojo integration?": "Включить интеграцию с DefectDojo?",
+        "DefectDojo URL [{default}]": "DefectDojo URL [{default}]",
+        "Verify DefectDojo TLS certificates? [Y/n]": (
+            "Проверять TLS-сертификаты DefectDojo? [Y/n]"
+        ),
+        (
+            "API key: DefectDojo → profile (top right) → API Key "
+            "(or create a dedicated user + token)."
+        ): (
+            "API-ключ: DefectDojo → профиль (справа сверху) → API Key "
+            "(или отдельный пользователь + токен)."
+        ),
+        "DefectDojo API key: ": "API-ключ DefectDojo: ",
+        "API key is required": "Требуется API-ключ",
+        "DefectDojo API key saved (encrypted) under {path}": (
+            "API-ключ DefectDojo сохранён (encrypted) в {path}"
+        ),
+        "DefectDojo setup": "Настройка DefectDojo",
+        "DefectDojo enabled. Config: {path}; API key vault: {vault}": (
+            "DefectDojo включён. Конфиг: {path}; vault API-ключа: {vault}"
+        ),
+        "DefectDojo disabled": "DefectDojo выключен",
+        "Missing OSV offline DB for: {ecosystems}": (
+            "Нет локальной OSV offline DB для: {ecosystems}"
+        ),
+        "No OSV offline databases found under {path}": (
+            "Нет локальных OSV offline DB в {path}"
+        ),
+        "Remote OSV API is disabled: a local offline DB is required.": (
+            "Удалённый OSV API отключён: нужна локальная offline DB."
+        ),
+        "If you decline, verify will be cancelled.": (
+            "При отказе verify будет отменён."
+        ),
+        "Download the offline database now?": "Скачать offline DB сейчас?",
+        "OSV offline database": "OSV offline DB",
+        "Downloading OSV offline DB…": "Скачивание OSV offline DB…",
+        "OSV offline DB error": "Ошибка OSV offline DB",
+        "Failed to download OSV offline DB: {error}": (
+            "Не удалось скачать OSV offline DB: {error}"
+        ),
+        (
+            "Scanning cancelled: local OSV offline DB is required "
+            "(remote OSV API is disabled). Download declined."
+        ): (
+            "Сканирование отменено: нужна локальная OSV offline DB "
+            "(удалённый OSV API отключён). Скачивание отклонено."
+        ),
         "Nexus authentication": "Аутентификация Nexus",
         (
             "Credentials are stored encrypted until the Nexus session expires "

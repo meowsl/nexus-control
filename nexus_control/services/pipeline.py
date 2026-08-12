@@ -385,6 +385,18 @@ class PipelineService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Scan history recording failed: %s", exc)
 
+        if verify and getattr(self.settings, "defectdojo_enabled", False):
+            try:
+                from nexus_control.integrations.defectdojo import push_pipeline_findings
+
+                result = push_pipeline_findings(self.settings, summary)
+                if result.error:
+                    logger.warning(
+                        "DefectDojo push incomplete: %s", result.error
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("DefectDojo push failed: %s", exc)
+
     def _process_item(
         self,
         *,
@@ -641,7 +653,7 @@ class PipelineService:
             asset_path=asset_path,
             local_path=local_path,
         )
-        # NuGet: Grype/Trivy дают ложный empty PASS — пропускаем, гоняем только OSV API.
+        # NuGet: Grype/Trivy дают ложный empty PASS — пропускаем, гоняем только osv-scanner (offline).
         run_names = list(enabled)
         skipped: dict[str, ScanResult] = {}
         if nuget:

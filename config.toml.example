@@ -19,6 +19,14 @@ locale = "ru"
 # assets_cache_ttl = 86400
 
 # scanners = "grype"          # или "trivy", "osv", или "grype,trivy,osv"
+# DefectDojo: после verify FAIL-ассеты → Generic Findings Import (reimport-scan).
+# API-ключ НЕ в TOML — vault (wizard / defectdojo configure) или DEFECTDOJO_API_KEY.
+# defectdojo_enabled = false
+# defectdojo_url = "http://localhost:8080"
+# defectdojo_verify_ssl = true
+# defectdojo_product_name = "nexus-control"
+# defectdojo_engagement_name = ""   # пусто → имя Nexus-репозитория
+# defectdojo_product_type_name = "Nexus"
 # Параллельная обработка ассетов (download/scan/verify). 0 = auto (CPU/RAM).
 # CLI: --workers N. Явное значение перекрывает auto.
 # pipeline_workers = 0

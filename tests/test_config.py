@@ -165,6 +165,7 @@ def test_wizard_writes_config(
             "http://wizard:8081",
             "n",
             "trivy",
+            "n",  # skip DefectDojo
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
@@ -178,7 +179,9 @@ def test_wizard_writes_config(
     assert data["nexus_url"] == "http://wizard:8081"
     assert data["nexus_verify_ssl"] is False
     assert data["scanners"] == "trivy"
+    assert data.get("defectdojo_enabled") is False
     assert "nexus_password" not in data
+    assert "defectdojo_api_key" not in data
 
 
 def test_wizard_non_tty_raises(xdg_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
