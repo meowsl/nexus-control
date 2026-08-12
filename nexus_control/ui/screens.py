@@ -34,7 +34,6 @@ from nexus_control.nexus.asset_cache import load_cached_assets, save_cached_asse
 from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_control.nexus.errors import is_ssl_certificate_error
 from nexus_control.services.osv_offline_db import (
-    DEFAULT_UPDATE_ECOSYSTEMS,
     download_offline_databases,
     ecosystems_required_for_verify,
     missing_osv_ecosystems,
@@ -1369,13 +1368,15 @@ class AssetsScreen(Screen[None]):
                 f"{preferred_ecosystem_db_path(cache_root, missing[0])}"
             )
         else:
+            # Unmapped format: should not reach here (offline_db_ready([]) is True).
             detail = _(
                 "No OSV offline databases found under {path}",
                 path=f"{cache_root}/osv-scalibr/",
             )
         body = (
             f"{detail}\n\n"
-            f"{_('Without a local DB, osv-scanner would use the remote OSV API.')}\n"
+            f"{_('Remote OSV API is disabled: a local offline DB is required.')}\n"
+            f"{_('If you decline, verify will be cancelled.')}\n"
             f"{_('Download the offline database now?')}"
         )
 
@@ -1385,7 +1386,8 @@ class AssetsScreen(Screen[None]):
                     MessageModal(
                         _("Scanning cancelled"),
                         _(
-                            "Scanning cancelled: OSV offline database download declined."
+                            "Scanning cancelled: local OSV offline DB is required "
+                            "(remote OSV API is disabled). Download declined."
                         ),
                     )
                 )
@@ -1425,11 +1427,9 @@ class AssetsScreen(Screen[None]):
                 self.repository.format,
                 list(self._enabled_scanners),
             )
-            ecosystems = (
-                list(required)
-                if required
-                else list(DEFAULT_UPDATE_ECOSYSTEMS)
-            )
+            ecosystems = list(required or [])
+            if not ecosystems:
+                raise RuntimeError("No OSV ecosystems mapped for this repository format")
             download_offline_databases(app.settings, ecosystems=ecosystems)
             self._pipeline_settings = with_osv_offline_flags(app.settings)
 

@@ -19,10 +19,25 @@ logger = logging.getLogger(__name__)
 
 OSV_VULNS_BASE = "https://osv-vulnerabilities.storage.googleapis.com"
 OFFLINE_FLAGS = ("--offline", "--offline-vulnerabilities")
-# Типичные ecosystem для nexus-control (полный список — ``fetch_ecosystems_list``).
+# Типичные ecosystem для ``osv-db update`` без --ecosystem (не для preflight по репо).
 DEFAULT_UPDATE_ECOSYSTEMS = ("NuGet", "Maven", "npm", "PyPI", "Go")
 # osv-scanner 2.x (scalibr) + legacy docs layout
 _DB_LAYOUTS = ("osv-scalibr", "osv-scanner")
+
+# Nexus repository ``format`` → OSV ecosystem name(s) for ``all.zip``.
+# Имена должны совпадать с https://osv-vulnerabilities.storage.googleapis.com/ecosystems.txt
+_NEXUS_FORMAT_OSV_ECOSYSTEMS: dict[str, tuple[str, ...]] = {
+    "maven2": ("Maven",),
+    "npm": ("npm",),
+    "pypi": ("PyPI",),
+    "nuget": ("NuGet",),
+    "rubygems": ("RubyGems",),
+    "go": ("Go",),
+    # OS-пакетные репо: один основной ecosystem (полные списки огромны).
+    "apt": ("Debian",),
+    "yum": ("Red Hat",),
+}
+# raw / docker / helm / huggingface — нет выделенного package-ecosystem в OSV.
 
 
 class OsvOfflineDbError(RuntimeError):
@@ -96,23 +111,44 @@ def osv_is_needed(repo_format: str | None, enabled_scanners: list[str]) -> bool:
     return (repo_format or "").lower().strip() == "nuget"
 
 
+def ecosystems_for_nexus_format(repo_format: str | None) -> list[str] | None:
+    """OSV ecosystem(s) для format Nexus.
+
+    Returns:
+        Список имён ecosystem, или ``None`` если у format нет OSV offline DB
+        (raw / docker / helm / huggingface / неизвестный).
+    """
+    fmt = (repo_format or "").lower().strip()
+    if not fmt:
+        return None
+    ecos = _NEXUS_FORMAT_OSV_ECOSYSTEMS.get(fmt)
+    if ecos is None:
+        return None
+    return list(ecos)
+
+
 def ecosystems_required_for_verify(
     repo_format: str | None,
     enabled_scanners: list[str],
 ) -> list[str] | None:
-    """``None`` — osv не нужен; иначе список обязательных ecosystem (может быть пустым = any)."""
+    """``None`` — osv/offline-preflight не нужен; иначе список обязательных ecosystem.
+
+    Пустой список: osv включён, но у format нет package-ecosystem — offline DB
+    не блокирует verify (скан всё равно может идти с ``--offline``).
+    """
     if not osv_is_needed(repo_format, enabled_scanners):
         return None
-    if (repo_format or "").lower().strip() == "nuget":
-        return ["NuGet"]
-    # Общий osv: достаточно любого all.zip; пустой список = «any ecosystem».
+    mapped = ecosystems_for_nexus_format(repo_format)
+    if mapped is not None:
+        return mapped
     return []
 
 
 def offline_db_ready(cache_root: Path, required: list[str]) -> bool:
-    if required:
-        return not missing_osv_ecosystems(cache_root, required)
-    return bool(list_installed_ecosystems(cache_root))
+    """True, если все ``required`` ecosystem установлены (пустой required → True)."""
+    if not required:
+        return True
+    return not missing_osv_ecosystems(cache_root, required)
 
 
 def with_osv_offline_flags(settings: Settings) -> Settings:
@@ -235,20 +271,12 @@ def ensure_osv_offline_db(
             settings=updated,
         )
 
-    if required:
-        missing = missing_osv_ecosystems(cache_root, required)
-        detail = (
-            f"Missing OSV offline DB for: {', '.join(missing)}\n"
-            f"Expected e.g. {preferred_ecosystem_db_path(cache_root, missing[0])}"
-        )
-        to_download = list(missing)
-    else:
-        detail = (
-            f"No OSV offline databases found under {cache_root}/osv-scalibr/\n"
-            "Need at least one <ecosystem>/all.zip for osv-scanner --offline."
-        )
-        # Не тянем все 40+ ecosystem в интерактиве — типичный набор.
-        to_download = list(DEFAULT_UPDATE_ECOSYSTEMS)
+    missing = missing_osv_ecosystems(cache_root, required)
+    detail = (
+        f"Missing OSV offline DB for: {', '.join(missing)}\n"
+        f"Expected e.g. {preferred_ecosystem_db_path(cache_root, missing[0])}"
+    )
+    to_download = list(missing)
 
     if not interactive:
         return EnsureResult(
@@ -256,20 +284,26 @@ def ensure_osv_offline_db(
             message=(
                 f"{detail}\n"
                 "Scanning cancelled: local OSV offline DB is required. "
-                "Run `nexus-control-cli osv-db update` on a networked host "
+                "Run `nexus-control-cli osv-db update --ecosystem "
+                f"{missing[0]}` on a networked host "
                 "(or answer yes to the download prompt in an interactive TTY)."
             ),
         )
 
     ask_fn = ask or (
         lambda: prompt_download_offline_db(
-            f"{detail}\nWithout a local DB, osv-scanner would use remote OSV API."
+            f"{detail}\n"
+            "Remote OSV API is disabled: a local offline DB is required.\n"
+            "If you decline, verify will be cancelled."
         )
     )
     if not ask_fn():
         return EnsureResult(
             status=EnsureStatus.CANCELLED,
-            message="Scanning cancelled: OSV offline database download declined.",
+            message=(
+                "Scanning cancelled: local OSV offline DB is required "
+                "(remote OSV API is disabled). Download declined."
+            ),
         )
 
     download_fn = download or (

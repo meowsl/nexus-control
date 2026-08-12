@@ -31,10 +31,33 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_ecosystems_required_nuget() -> None:
+def test_ecosystems_required_by_format() -> None:
     assert ecosystems_required_for_verify("nuget", ["grype"]) == ["NuGet"]
-    assert ecosystems_required_for_verify("maven2", ["osv"]) == []
+    assert ecosystems_required_for_verify("pypi", ["trivy", "grype", "osv"]) == ["PyPI"]
+    assert ecosystems_required_for_verify("npm", ["osv"]) == ["npm"]
+    assert ecosystems_required_for_verify("maven2", ["osv"]) == ["Maven"]
+    assert ecosystems_required_for_verify("rubygems", ["osv"]) == ["RubyGems"]
+    assert ecosystems_required_for_verify("go", ["osv"]) == ["Go"]
+    assert ecosystems_required_for_verify("apt", ["osv"]) == ["Debian"]
+    assert ecosystems_required_for_verify("yum", ["osv"]) == ["Red Hat"]
+    # osv включён, но у raw нет OSV ecosystem → пустой список (не блокируем).
+    assert ecosystems_required_for_verify("raw", ["osv"]) == []
     assert ecosystems_required_for_verify("maven2", ["grype"]) is None
+
+
+def test_ecosystems_for_nexus_format() -> None:
+    from nexus_control.services.osv_offline_db import ecosystems_for_nexus_format
+
+    assert ecosystems_for_nexus_format("pypi") == ["PyPI"]
+    assert ecosystems_for_nexus_format("docker") is None
+    assert ecosystems_for_nexus_format("helm") is None
+
+
+def test_offline_db_ready_empty_required(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    root = osv_db_cache_root(settings)
+    # Пустой required: не нужна никакая DB (unmapped format).
+    assert offline_db_ready(root, []) is True
 
 
 def test_offline_db_ready_nuget(tmp_path: Path) -> None:
@@ -109,6 +132,39 @@ def test_ensure_cancelled_when_user_declines(tmp_path: Path) -> None:
     )
     assert result.status == EnsureStatus.CANCELLED
     assert "declined" in result.message.lower()
+    assert "required" in result.message.lower() or "disabled" in result.message.lower()
+
+
+def test_ensure_pypi_requires_pypi_db(tmp_path: Path) -> None:
+    """Наличие NuGet DB не должно удовлетворять preflight для pypi."""
+    settings = _settings(tmp_path)
+    root = osv_db_cache_root(settings)
+    nuget = preferred_ecosystem_db_path(root, "NuGet")
+    nuget.parent.mkdir(parents=True)
+    nuget.write_bytes(b"fake")
+    result = ensure_osv_offline_db(
+        settings,
+        repo_format="pypi",
+        enabled_scanners=["trivy", "grype", "osv"],
+        interactive=False,
+    )
+    assert result.status == EnsureStatus.CANCELLED
+    assert "PyPI" in result.message
+
+
+def test_ensure_pypi_ok_when_pypi_present(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    root = osv_db_cache_root(settings)
+    path = preferred_ecosystem_db_path(root, "PyPI")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"fake")
+    result = ensure_osv_offline_db(
+        settings,
+        repo_format="pypi",
+        enabled_scanners=["osv"],
+        interactive=False,
+    )
+    assert result.status == EnsureStatus.OK
 
 
 def test_ensure_downloads_when_accepted(tmp_path: Path) -> None:
