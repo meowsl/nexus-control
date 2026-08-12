@@ -112,7 +112,39 @@ class TrivyScanner:
                 error=f"Scan target does not exist: {local_path}",
             )
 
+        from nexus_control.services.npm_identity import (
+            NpmIdentityError,
+            is_npm_package_tarball,
+            npm_staging_dir,
+            prepare_npm_identity_staging,
+        )
+
+        scan_path = local_path
         scheme = target_scheme or _infer_scheme(local_path)
+        # npm .tgz: сырой архив Trivy не видит — identity via package-lock staging.
+        if is_npm_package_tarball(local_path) and (
+            target_scheme is None or scheme == "file"
+        ):
+            try:
+                staging = npm_staging_dir(
+                    self.settings.reports_root, repository, asset_path
+                )
+                identity, staging = prepare_npm_identity_staging(local_path, staging)
+                scan_path = staging
+                scheme = "dir"
+                logger.info(
+                    "Trivy npm identity scan %s → %s@%s",
+                    asset_path,
+                    identity.name,
+                    identity.version,
+                )
+            except (NpmIdentityError, OSError, ValueError) as exc:
+                logger.warning(
+                    "npm identity staging failed for %s: %s — scanning tarball as-is",
+                    asset_path,
+                    exc,
+                )
+
         json_path, txt_path = report_paths(
             self.settings.reports_root,
             repository,
@@ -122,7 +154,7 @@ class TrivyScanner:
         ensure_parent_dir(json_path)
         version = self.get_version()
         trivy_args = _build_trivy_args(
-            local_path.resolve(),
+            scan_path.resolve(),
             scheme,
             list(self.settings.trivy_extra_args_list),
         )
