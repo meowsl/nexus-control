@@ -16,7 +16,9 @@ from nexus_control.utils.fs import ensure_dir
 logger = logging.getLogger(__name__)
 
 # Секреты не должны попадать в config.toml из wizard.
-SECRET_KEYS = frozenset({"nexus_password", "nexus_username"})
+SECRET_KEYS = frozenset(
+    {"nexus_password", "nexus_username", "defectdojo_api_key"}
+)
 
 
 def read_toml(path: Path) -> dict[str, Any]:

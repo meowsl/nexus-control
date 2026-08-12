@@ -182,6 +182,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_schedule.set_defaults(_handler="schedule")
 
+    p_dd = sub.add_parser(
+        "defectdojo",
+        help="Configure or show DefectDojo integration (push FAIL findings)",
+    )
+    p_dd.add_argument(
+        "defectdojo_action",
+        nargs="?",
+        default="status",
+        choices=["status", "configure", "disable"],
+        help="status (default), configure, or disable",
+    )
+    p_dd.add_argument(
+        "--clear-vault",
+        dest="clear_vault",
+        action="store_true",
+        help="With disable: also delete encrypted API key vault",
+    )
+    p_dd.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout (status)",
+    )
+    p_dd.set_defaults(_handler="defectdojo")
+
     p_osv_db = sub.add_parser(
         "osv-db",
         help="Show or update local osv-scanner offline vulnerability DB",
@@ -277,6 +301,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_osv_db import run_osv_db
 
             code = run_osv_db(args)
+        elif args._handler == "defectdojo":
+            from nexus_control.cli.cmd_defectdojo import run_defectdojo
+
+            code = run_defectdojo(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return

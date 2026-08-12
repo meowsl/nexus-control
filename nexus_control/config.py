@@ -137,6 +137,23 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file: Path = Path("~/nexus-control/logs/nexus-control.log")
 
+    # DefectDojo (опционально). API-ключ — только env / vault, не TOML.
+    defectdojo_enabled: bool = False
+    defectdojo_url: str = ""
+    defectdojo_api_key: str = Field(
+        default="",
+        description="DefectDojo API token (env DEFECTDOJO_API_KEY or vault)",
+        validation_alias=AliasChoices(
+            "defectdojo_api_key",
+            "DEFECTDOJO_API_KEY",
+        ),
+    )
+    defectdojo_verify_ssl: bool = True
+    defectdojo_product_name: str = "nexus-control"
+    # Пусто → engagement = имя репозитория Nexus.
+    defectdojo_engagement_name: str = ""
+    defectdojo_product_type_name: str = "Nexus"
+
     # Перезапись
     overwrite_downloads: bool = False
     overwrite_verified: bool = False
@@ -192,12 +209,29 @@ class Settings(BaseSettings):
             raise ValueError("NEXUS_URL is required")
         return str(value).strip().rstrip("/")
 
-    @field_validator("nexus_username", "nexus_password", mode="before")
+    @field_validator(
+        "nexus_username", "nexus_password", "defectdojo_api_key", mode="before"
+    )
     @classmethod
     def _coerce_optional_secret(cls, value: object) -> str:
         if value is None:
             return ""
         return str(value)
+
+    @field_validator("defectdojo_url", mode="before")
+    @classmethod
+    def _normalize_defectdojo_url(cls, value: object) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().rstrip("/")
+        if not text:
+            return ""
+        if "://" not in text:
+            raise ValueError(
+                f"Invalid DEFECTDOJO_URL {text!r}: expected scheme, "
+                "e.g. http://localhost:8080"
+            )
+        return text
 
     @field_validator(
         "grype_use_docker", "trivy_use_docker", "osv_use_docker", mode="before"
@@ -331,6 +365,13 @@ class Settings(BaseSettings):
             "osv_use_docker": self.osv_use_docker,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
+            "defectdojo_enabled": self.defectdojo_enabled,
+            "defectdojo_url": self.defectdojo_url,
+            "defectdojo_api_key": "***" if self.defectdojo_api_key else "",
+            "defectdojo_verify_ssl": self.defectdojo_verify_ssl,
+            "defectdojo_product_name": self.defectdojo_product_name,
+            "defectdojo_engagement_name": self.defectdojo_engagement_name,
+            "defectdojo_product_type_name": self.defectdojo_product_type_name,
         }
 
 

@@ -124,15 +124,91 @@ def run_first_run_wizard(
     ).strip()
     scanners = scanners_raw or "grype"
 
+    dd_enabled, dd_url, dd_api_key, dd_verify_ssl = _prompt_defectdojo()
+
     data: dict[str, object] = {
         "locale": locale,
         "nexus_url": url,
         "nexus_verify_ssl": verify_ssl,
         "scanners": scanners,
+        "defectdojo_enabled": dd_enabled,
     }
+    if dd_enabled:
+        data["defectdojo_url"] = dd_url
+        data["defectdojo_verify_ssl"] = dd_verify_ssl
+
     write_toml_atomic(path, data)
+    if dd_enabled and dd_api_key:
+        _save_defectdojo_vault(url=dd_url, api_key=dd_api_key)
     print(_("Wrote {path}", path=path), file=sys.stderr)
     return path
+
+
+def _prompt_yes_no(prompt: str, *, default_yes: bool = False) -> bool:
+    hint = "[Y/n]" if default_yes else "[y/N]"
+    raw = input(f"{prompt} {hint}: ").strip().lower()
+    if not raw:
+        return default_yes
+    return raw in {"y", "yes", "1", "true", "on", "д", "да"}
+
+
+def _prompt_defectdojo() -> tuple[bool, str, str, bool]:
+    """Спросить про DefectDojo. Возвращает (enabled, url, api_key, verify_ssl)."""
+    import getpass
+
+    print("", file=sys.stderr)
+    print(
+        _(
+            "DefectDojo can receive vulnerability findings after each verify "
+            "(FAIL assets → Generic Findings Import)."
+        ),
+        file=sys.stderr,
+    )
+    if not _prompt_yes_no(_("Enable DefectDojo integration?"), default_yes=False):
+        return False, "", "", True
+
+    while True:
+        raw = input(
+            _("DefectDojo URL [{default}]", default="http://localhost:8080") + ": "
+        ).strip()
+        if not raw:
+            raw = "http://localhost:8080"
+        try:
+            dd_url = normalize_nexus_url(raw)
+            break
+        except Exception as exc:  # ConfigError
+            print(f"  {exc}", file=sys.stderr)
+
+    verify_raw = input(_("Verify DefectDojo TLS certificates? [Y/n]") + ": ").strip().lower()
+    dd_verify_ssl = verify_raw not in {"n", "no", "0", "false", "off", "н", "нет"}
+
+    print(
+        _(
+            "API key: DefectDojo → profile (top right) → API Key "
+            "(or create a dedicated user + token)."
+        ),
+        file=sys.stderr,
+    )
+    while True:
+        api_key = getpass.getpass(_("DefectDojo API key: "))
+        if api_key.strip():
+            break
+        print(_("API key is required"), file=sys.stderr)
+
+    return True, dd_url, api_key.strip(), dd_verify_ssl
+
+
+def _save_defectdojo_vault(*, url: str, api_key: str) -> None:
+    """Сохранить API-ключ в vault (каталог кэша по умолчанию / из env)."""
+    from nexus_control.integrations.defectdojo import DefectDojoVault
+
+    cache_raw = (os.environ.get("NEXUS_CACHE_DIR") or "~/.cache/nexus-control").strip()
+    cache_dir = Path(cache_raw).expanduser().resolve()
+    DefectDojoVault(cache_dir).save(url=url, api_key=api_key)
+    print(
+        _("DefectDojo API key saved (encrypted) under {path}", path=cache_dir),
+        file=sys.stderr,
+    )
 
 
 def ensure_configured(
