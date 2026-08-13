@@ -5,7 +5,10 @@
 # local = timezone машины (/etc/timezone, $TZ). Можно задать IANA явно.
 timezone = "local"
 # If a previous job is still running: skip | queue | overlap
-overlap = "skip"
+# queue (default) = run due jobs one-by-one ASAP after the current finishes
+# skip = drop a due slot if another job is still marked busy
+# overlap = reserved (v1 still sequential, same as queue)
+overlap = "queue"
 
 [[rules]]
 id = "nightly-core"

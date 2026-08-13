@@ -189,7 +189,7 @@ nexus-control-cli schedule run nightly-core
 ```toml
 [scheduler]
 timezone = "local"   # timezone машины; или IANA, напр. Europe/Moscow
-overlap = "skip"   # skip | queue | overlap
+overlap = "queue"   # skip | queue | overlap (default: sequential catch-up queue)
 
 [[rules]]
 id = "nightly-core"
@@ -216,6 +216,11 @@ Timezone по умолчанию — **локальный TZ машины** (`ti
 `/etc/timezone`, `/etc/localtime`). Явный IANA в `schedule.toml` перекрывает его.
 `SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова
 (`schedule start` или внешний `@reboot`).
+
+По умолчанию `overlap = "queue"`: если слот правила уже наступил, а демон занят
+другим job, правило встаёт в очередь и стартует сразу после текущего (последовательно).
+Обработанные cron-слоты пишутся в `scheduler-state.json` (`last_fires`), поэтому
+долгий скан в 02:00 не «съедает» задачу на 02:05.
 
 Для daemon / `schedule start|run` **нет интерактивного prompt**. Задайте креды одним из способов:
 

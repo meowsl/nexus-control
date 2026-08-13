@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 # Внутренний флаг для detached child: run foreground loop.
 ENV_DAEMON_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_FOREGROUND"
 
+# При старте/reload слоты старше grace помечаются handled без запуска
+# (чтобы не гонять вчерашние cron). Слоты внутри grace — в очередь.
+_STARTUP_GRACE_SECONDS = 90.0
+
 
 @dataclass(slots=True)
 class DaemonStatus:
@@ -330,7 +334,10 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
         lock.release()
         return 2
 
-    last_fire_keys: set[str] = set()
+    # Persist handled cron slots across restarts so catch-up queue works
+    # after a long job without replaying ancient fires on cold start.
+    _seed_past_fires(config, state, grace_seconds=_STARTUP_GRACE_SECONDS)
+    save_state(state_file, state)
     _refresh_next_fires(config, state, state_file)
 
     while not stop_flag:
@@ -339,7 +346,9 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
             try:
                 config = load_schedule(schedule_path)
                 state.last_reload_at = iso_now()
-                last_fire_keys.clear()
+                # Не сбрасываем last_fires — иначе сегодняшние слоты уйдут
+                # в очередь повторно. Только досеиваем «старые» для новых rules.
+                _seed_past_fires(config, state, grace_seconds=_STARTUP_GRACE_SECONDS)
                 _refresh_next_fires(config, state, state_file)
                 logger.info(
                     "Reloaded schedule (%d rules, tz=%s→%s, overlap=%s)",
@@ -351,7 +360,7 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
             except ScheduleStoreError as exc:
                 logger.error("Reload failed: %s", exc)
 
-        due = _due_rules(config, last_fire_keys)
+        due = _due_rules(config, state.last_fires)
         if due:
             for rule, fire_at, fire_key in due:
                 if stop_flag:
@@ -370,13 +379,14 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
                         message=f"skipped: busy with {state.current_rule}",
                         skipped=True,
                     )
-                    last_fire_keys.add(fire_key)
+                    _mark_fire_handled(state, rule.id, fire_key)
                     save_state(state_file, state)
                     continue
-                # queue/overlap: v1 трактует queue как последовательный wait
-                # (мы и так последовательны); overlap — тоже sequential в одном
-                # процессе (честный parallel overlap отложен).
-                _execute_rule(rule, fire_at, fire_key, state, state_file, last_fire_keys)
+                # queue (default) / overlap: последовательная очередь.
+                # Слот, чьё время уже наступило, ждёт окончания текущего job
+                # и стартует следом (catch-up без окна 90с).
+                # Честный parallel overlap отложен.
+                _execute_rule(rule, fire_at, fire_key, state, state_file)
             _refresh_next_fires(config, state, state_file)
             continue
 
@@ -398,7 +408,6 @@ def _execute_rule(
     fire_key: str,
     state: SchedulerState,
     state_file: Path,
-    last_fire_keys: set[str],
 ) -> None:
     from nexus_control.scheduler.progress import StateProgressSink
 
@@ -442,42 +451,114 @@ def _execute_rule(
             message=message,
             skipped=False,
         )
-        last_fire_keys.add(fire_key)
+        _mark_fire_handled(state, rule.id, fire_key)
         save_state(state_file, state)
+
+
+def _fire_stamp(fire_at: datetime) -> str:
+    return fire_at.strftime("%Y%m%d%H%M")
+
+
+def _fire_key(rule_id: str, fire_at: datetime) -> str:
+    return f"{rule_id}:{_fire_stamp(fire_at)}"
+
+
+def _mark_fire_handled(state: SchedulerState, rule_id: str, fire_key: str) -> None:
+    stamp = fire_key.split(":", 1)[-1]
+    prev = state.last_fires.get(rule_id)
+    if prev is None or stamp > prev:
+        state.last_fires[rule_id] = stamp
+
+
+def _is_fire_handled(last_fires: dict[str, str], rule_id: str, fire_at: datetime) -> bool:
+    last = last_fires.get(rule_id)
+    if last is None:
+        return False
+    return last >= _fire_stamp(fire_at)
+
+
+def _previous_slot(
+    rule: ScheduleRule,
+    config: ScheduleConfig,
+    *,
+    now: datetime | None = None,
+) -> tuple[datetime, str] | None:
+    """Последний cron-слот правила ≤ now и его fire_key."""
+    from croniter import croniter
+    from nexus_control.scheduler.cronutil import resolve_tz, validate_cron
+
+    when = now or datetime.now(timezone.utc)
+    tz = resolve_tz(config.timezone)
+    local_now = when.astimezone(tz)
+    expr = validate_cron(rule.cron)
+    itr = croniter(expr, local_now)
+    prev = itr.get_prev(datetime)
+    if prev.tzinfo is None:
+        prev = prev.replace(tzinfo=tz)
+    else:
+        prev = prev.astimezone(tz)
+    return prev, _fire_key(rule.id, prev)
+
+
+def _seed_past_fires(
+    config: ScheduleConfig,
+    state: SchedulerState,
+    *,
+    grace_seconds: float = _STARTUP_GRACE_SECONDS,
+) -> None:
+    """Baseline для правил без истории в ``last_fires``.
+
+    Если правило уже отслеживалось — не трогаем: пропущенные слоты
+    (демон был занят или перезапущен) подхватит очередь ``_due_rules``.
+    Для нового правила помечаем устаревший prev как handled, чтобы не
+    гонять «вчерашний» cron; свежий слот (age < grace) оставляем в очереди.
+    """
+    now = datetime.now(timezone.utc)
+    for rule in config.rules:
+        if not rule.enabled:
+            continue
+        if rule.id in state.last_fires:
+            continue
+        try:
+            slot = _previous_slot(rule, config, now=now)
+            if slot is None:
+                continue
+            prev, fire_key = slot
+            age = (now.astimezone(prev.tzinfo) - prev).total_seconds()
+            if age >= grace_seconds:
+                logger.info(
+                    "Seeding baseline slot as handled (new rule): %s age=%.0fs",
+                    fire_key,
+                    age,
+                )
+                _mark_fire_handled(state, rule.id, fire_key)
+        except (CronError, ValueError, KeyError) as exc:
+            logger.error("Cannot seed rule %s: %s", rule.id, exc)
 
 
 def _due_rules(
     config: ScheduleConfig,
-    last_fire_keys: set[str],
+    last_fires: dict[str, str],
 ) -> list[tuple[ScheduleRule, datetime, str]]:
-    """Правила, у которых next_fire <= now (и ещё не отмечены в этом слоте)."""
+    """Правила с наступившим и ещё не обработанным cron-слотом.
+
+    Берётся только последний слот каждого правила (get_prev). Если демон был
+    занят долгим job, слот остаётся в очереди до выполнения — без окна 90с.
+    """
     now = datetime.now(timezone.utc)
     due: list[tuple[ScheduleRule, datetime, str]] = []
     for rule in config.rules:
         if not rule.enabled:
             continue
         try:
-            # next_fire after (now - 60s) then check if <= now
-            # Better: get previous fire? croniter get_prev
-            from croniter import croniter
-            from nexus_control.scheduler.cronutil import resolve_tz, validate_cron
-
-            tz = resolve_tz(config.timezone)
-            local_now = now.astimezone(tz)
-            expr = validate_cron(rule.cron)
-            itr = croniter(expr, local_now)
-            prev = itr.get_prev(datetime)
-            if prev.tzinfo is None:
-                prev = prev.replace(tzinfo=tz)
-            else:
-                prev = prev.astimezone(tz)
-            # Fire if previous slot is within the last 90 seconds (catch window)
-            # or if we're past it and haven't recorded this minute key yet.
-            fire_key = f"{rule.id}:{prev.strftime('%Y%m%d%H%M')}"
-            if fire_key in last_fire_keys:
+            slot = _previous_slot(rule, config, now=now)
+            if slot is None:
                 continue
-            age = (local_now - prev).total_seconds()
-            if 0 <= age < 90:
+            prev, fire_key = slot
+            if _is_fire_handled(last_fires, rule.id, prev):
+                continue
+            age = (now.astimezone(prev.tzinfo) - prev).total_seconds()
+            if age >= 0:
                 due.append((rule, prev, fire_key))
         except (CronError, ValueError, KeyError) as exc:
             logger.error("Cannot evaluate rule %s: %s", rule.id, exc)

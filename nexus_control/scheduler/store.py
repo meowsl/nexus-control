@@ -70,7 +70,7 @@ def parse_schedule_dict(data: dict[str, Any]) -> ScheduleConfig:
     except CronError as exc:
         raise ScheduleStoreError(str(exc)) from exc
 
-    overlap_raw = str(sched.get("overlap") or "skip").strip().lower()
+    overlap_raw = str(sched.get("overlap") or "queue").strip().lower()
     if overlap_raw not in VALID_OVERLAP:
         raise ScheduleStoreError(
             f"Invalid overlap={overlap_raw!r}; expected one of {sorted(VALID_OVERLAP)}"
