@@ -162,7 +162,7 @@ def test_empty_schedule_missing_file(tmp_path: Path) -> None:
     missing = tmp_path / "missing.toml"
     config = load_schedule(missing)
     assert config.rules == []
-    assert config.overlap == "skip"
+    assert config.overlap == "queue"
     assert config.timezone == LOCAL_TIMEZONE
 
 
@@ -278,11 +278,91 @@ def test_due_rules_marks_recent_slot(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         ],
     )
-    due = _due_rules(config, last_fire_keys=set())
+    # Baseline like daemon seed: only the just-fired nightly slot is open.
+    baseline = {"later": "202608091500"}
+    due = _due_rules(config, last_fires=baseline)
     assert [r.id for r, _, _ in due] == ["nightly"]
-    fire_key = due[0][2]
-    due2 = _due_rules(config, last_fire_keys={fire_key})
+    due2 = _due_rules(
+        config,
+        last_fires={**baseline, "nightly": "202608100300"},
+    )
     assert due2 == []
+
+
+def test_due_rules_queues_missed_slot_after_long_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """02:05 still due at 02:20 if the 02:00 job ran long (catch-up queue)."""
+    tz = ZoneInfo("UTC")
+    frozen = datetime(2026, 8, 10, 2, 20, 0, tzinfo=tz)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is None:
+                return frozen.replace(tzinfo=None)
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr("nexus_control.scheduler.daemon.datetime", _FrozenDateTime)
+
+    config = ScheduleConfig(
+        timezone="UTC",
+        rules=[
+            ScheduleRule(
+                id="early",
+                cron="0 2 * * *",
+                repos=["maven-hosted"],
+                enabled=True,
+            ),
+            ScheduleRule(
+                id="five-past",
+                cron="5 2 * * *",
+                repos=["npm-hosted"],
+                enabled=True,
+            ),
+        ],
+    )
+    # early already finished its 02:00 slot; five-past was blocked during that run.
+    last_fires = {"early": "202608100200"}
+    due = _due_rules(config, last_fires=last_fires)
+    assert [r.id for r, _, _ in due] == ["five-past"]
+    assert due[0][1].hour == 2 and due[0][1].minute == 5
+
+
+def test_seed_past_fires_skips_stale_but_keeps_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus_control.scheduler.daemon import _seed_past_fires
+
+    tz = ZoneInfo("UTC")
+    frozen = datetime(2026, 8, 10, 10, 0, 0, tzinfo=tz)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is None:
+                return frozen.replace(tzinfo=None)
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr("nexus_control.scheduler.daemon.datetime", _FrozenDateTime)
+
+    config = ScheduleConfig(
+        timezone="UTC",
+        rules=[
+            ScheduleRule(id="morning", cron="0 3 * * *", repos=["r"], enabled=True),
+        ],
+    )
+    state = SchedulerState()
+    _seed_past_fires(config, state, grace_seconds=90)
+    assert state.last_fires["morning"] == "202608100300"
+    assert _due_rules(config, state.last_fires) == []
+
+    # Already-tracked rules must not be re-seeded (catch-up after downtime).
+    state2 = SchedulerState(last_fires={"morning": "202608090300"})
+    _seed_past_fires(config, state2, grace_seconds=90)
+    assert state2.last_fires["morning"] == "202608090300"
+    due = _due_rules(config, state2.last_fires)
+    assert [r.id for r, _, _ in due] == ["morning"]
 
 
 def test_run_rule_calls_verify_per_repo() -> None:
@@ -406,16 +486,15 @@ def test_overlap_skip_records_skipped(tmp_path: Path) -> None:
     # _execute_rule still runs when called (overlap check is in loop)
     rule = ScheduleRule(id="x", cron="0 0 * * *", repos=["r"])
     with patch("nexus_control.scheduler.daemon.run_rule", return_value=0):
-        keys: set[str] = set()
+        st = SchedulerState()
         _execute_rule(
             rule,
             datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
             "x:202601010000",
-            SchedulerState(),
+            st,
             state_file,
-            keys,
         )
-    assert "x:202601010000" in keys
+    assert st.last_fires["x"] == "202601010000"
 
 
 def test_menu_status_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

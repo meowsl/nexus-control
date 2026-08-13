@@ -62,7 +62,7 @@ class ScheduleRule:
 @dataclass(slots=True)
 class ScheduleConfig:
     timezone: str = LOCAL_TIMEZONE
-    overlap: OverlapPolicy = "skip"
+    overlap: OverlapPolicy = "queue"
     rules: list[ScheduleRule] = field(default_factory=list)
 
     def resolved_timezone(self) -> str:

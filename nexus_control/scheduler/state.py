@@ -38,6 +38,8 @@ class SchedulerState:
     current_repo: str | None = None
     last_runs: dict[str, RuleRunRecord] = field(default_factory=dict)
     next_fires: dict[str, str] = field(default_factory=dict)
+    # rule_id → YYYYMMDDHHMM of last handled cron slot (run or skipped).
+    last_fires: dict[str, str] = field(default_factory=dict)
     # Live progress for ``schedule status --monitor`` (daemon jobs).
     progress_pct: float | None = None
     progress_stage: str = ""
@@ -65,6 +67,7 @@ class SchedulerState:
                 key: asdict(value) for key, value in self.last_runs.items()
             },
             "next_fires": dict(self.next_fires),
+            "last_fires": dict(self.last_fires),
             "progress_pct": self.progress_pct,
             "progress_stage": self.progress_stage,
             "progress_asset": self.progress_asset,
@@ -91,6 +94,14 @@ class SchedulerState:
         next_fires = data.get("next_fires") or {}
         if not isinstance(next_fires, dict):
             next_fires = {}
+        last_fires_raw = data.get("last_fires") or {}
+        if not isinstance(last_fires_raw, dict):
+            last_fires_raw = {}
+        last_fires = {
+            str(k): str(v)
+            for k, v in last_fires_raw.items()
+            if str(v).strip()
+        }
         pct_raw = data.get("progress_pct")
         progress_pct: float | None
         try:
@@ -106,6 +117,7 @@ class SchedulerState:
             current_repo=data.get("current_repo"),
             last_runs=last_runs,
             next_fires={str(k): str(v) for k, v in next_fires.items()},
+            last_fires=last_fires,
             progress_pct=progress_pct,
             progress_stage=str(data.get("progress_stage") or ""),
             progress_asset=str(data.get("progress_asset") or ""),
