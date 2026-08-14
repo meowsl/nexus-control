@@ -53,8 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_verify.add_argument(
         "--path-prefix",
+        action="append",
         default=None,
-        help="Only assets whose path starts with this prefix",
+        dest="path_prefix",
+        help=(
+            "Only assets whose path starts with this prefix; "
+            "repeat the flag for several prefixes (OR)"
+        ),
     )
     p_verify.add_argument(
         "--limit",

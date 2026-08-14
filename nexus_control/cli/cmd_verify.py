@@ -23,6 +23,7 @@ from nexus_control.services.pipeline import PipelineService
 from nexus_control.services.resource_governor import DiskPressureError, resolve_limits
 from nexus_control.services.resource_pipeline import run_resourced_pipeline
 from nexus_control.services.scan_common import parse_scanner_names
+from nexus_control.utils.path_prefixes import format_path_prefixes
 from nexus_control.services.scan_history import record_scan_run
 from nexus_control.services.verified_uploader import VerifiedUploader
 
@@ -218,7 +219,7 @@ def run_verify(args: Namespace) -> int:
                 do_upload=do_upload if args.upload else None,
                 history_source=getattr(args, "history_source", None) or "cli",
                 history_rule_id=getattr(args, "history_rule_id", None),
-                history_path_prefix=args.path_prefix,
+                history_path_prefix=format_path_prefixes(args.path_prefix),
                 history_checkpoint_skipped=selection.checkpoint_skipped,
             )
         except DiskPressureError as exc:
