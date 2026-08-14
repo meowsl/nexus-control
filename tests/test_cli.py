@@ -79,6 +79,21 @@ def test_parser_schedule_flags() -> None:
     assert start.schedule_file == "/tmp/s.toml"
 
 
+def test_parser_vk_teams_flags() -> None:
+    parser = build_parser()
+    status = parser.parse_args(["vk-teams", "status", "--json"])
+    assert status._handler == "vk_teams"
+    assert status.vk_action == "status"
+    assert status.json is True
+    disable = parser.parse_args(["vk-teams", "disable", "--clear-vault"])
+    assert disable.vk_action == "disable"
+    assert disable.clear_vault is True
+    configure = parser.parse_args(["vk-teams", "configure"])
+    assert configure.vk_action == "configure"
+    test = parser.parse_args(["vk-teams", "test"])
+    assert test.vk_action == "test"
+
+
 def test_filter_path_prefix_and_limit() -> None:
     assets = [
         _asset("com/a/1.0/a.jar"),
