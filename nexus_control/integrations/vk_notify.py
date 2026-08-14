@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+import threading
 import time
 import uuid
 from argparse import Namespace
@@ -15,6 +16,7 @@ from nexus_control.config import Settings
 from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
+    apply_vk_teams_vault,
     upload_keyboard,
 )
 from nexus_control.scheduler.models import ScheduleRule
@@ -27,6 +29,10 @@ PENDING_TTL_SEC = 24 * 3600
 CALLBACK_PREFIX = "up:"
 LAST_EVENT_FILENAME = "last_event_id"
 PENDING_FILENAME = "pending.json"
+
+_upload_lock = threading.Lock()
+_upload_busy = False
+_upload_thread: threading.Thread | None = None
 
 
 @dataclass(slots=True)
@@ -152,20 +158,34 @@ class PendingUploadStore:
 
 
 def vk_teams_configured(settings: Settings) -> bool:
-    return bool(
-        settings.vk_teams_token.strip()
-        and settings.vk_teams_chat_id.strip()
-        and settings.vk_teams_notify != "off"
-    )
+    cfg = apply_vk_teams_vault(settings)
+    token = str(getattr(cfg, "vk_teams_token", "") or "").strip()
+    chat_id = str(getattr(cfg, "vk_teams_chat_id", "") or "").strip()
+    notify = str(getattr(cfg, "vk_teams_notify", "off") or "off")
+    return bool(token and chat_id and notify != "off")
 
 
 def vk_teams_should_poll(settings: Settings) -> bool:
     """Long-poll events when Upload buttons may be pending."""
-    return bool(
-        settings.vk_teams_token.strip()
-        and settings.vk_teams_chat_id.strip()
-        and settings.vk_teams_upload_button
-    )
+    cfg = apply_vk_teams_vault(settings)
+    token = str(getattr(cfg, "vk_teams_token", "") or "").strip()
+    chat_id = str(getattr(cfg, "vk_teams_chat_id", "") or "").strip()
+    upload_button = bool(getattr(cfg, "vk_teams_upload_button", False))
+    return bool(token and chat_id and upload_button)
+
+
+def upload_in_flight() -> bool:
+    with _upload_lock:
+        return _upload_busy
+
+
+def wait_upload_idle(timeout: float | None = None) -> bool:
+    """Дождаться фонового Upload (для тестов / shutdown)."""
+    thread = _upload_thread
+    if thread is None:
+        return True
+    thread.join(timeout=timeout)
+    return not thread.is_alive()
 
 
 def should_notify(
@@ -228,6 +248,7 @@ def notify_rule_finished(
     client: VkTeamsClient | None = None,
 ) -> None:
     """Best-effort notify after a scheduler rule completes."""
+    settings = apply_vk_teams_vault(settings)
     if not vk_teams_configured(settings):
         return
 
@@ -307,7 +328,8 @@ def handle_callback(
     client: VkTeamsClient | None = None,
     run_upload_fn: Any | None = None,
 ) -> None:
-    """Обработать callback Upload: загрузить все repos pending-токена."""
+    """Принять callback Upload: сразу ответить и гонять upload в фоне."""
+    settings = apply_vk_teams_vault(settings)
     bot = client or VkTeamsClient.from_settings(settings)
     data = (callback_data or "").strip()
     if not data.startswith(CALLBACK_PREFIX):
@@ -319,7 +341,27 @@ def handle_callback(
 
     token = data[len(CALLBACK_PREFIX):].strip()
     store = PendingUploadStore.load(settings)
-    pending = store.pop(token)
+
+    global _upload_busy, _upload_thread
+    with _upload_lock:
+        already_busy = _upload_busy
+        pending: PendingUpload | None = None
+        if not already_busy:
+            pending = store.pop(token)
+            if pending is not None:
+                _upload_busy = True
+
+    if already_busy:
+        try:
+            bot.answer_callback_query(
+                query_id,
+                text="Upload already running",
+                show_alert=True,
+            )
+        except VkTeamsError as exc:
+            logger.debug("answerCallbackQuery failed: %s", exc)
+        return
+
     if pending is None:
         try:
             bot.answer_callback_query(
@@ -339,6 +381,38 @@ def handle_callback(
     if run_upload_fn is None:
         from nexus_control.cli.cmd_upload import run_upload as run_upload_fn
 
+    def _job() -> None:
+        global _upload_busy
+        try:
+            _perform_pending_upload(
+                settings,
+                pending,
+                bot,
+                run_upload_fn,
+            )
+        finally:
+            with _upload_lock:
+                _upload_busy = False
+
+    try:
+        _upload_thread = threading.Thread(
+            target=_job,
+            name="vk-teams-upload",
+            daemon=True,
+        )
+        _upload_thread.start()
+    except Exception:
+        with _upload_lock:
+            _upload_busy = False
+        raise
+
+
+def _perform_pending_upload(
+    settings: Settings,
+    pending: PendingUpload,
+    bot: VkTeamsClient,
+    run_upload_fn: Any,
+) -> None:
     lines = [
         f"<b>Upload</b> for rule <code>{html.escape(pending.rule_id)}</code>",
         "",
@@ -408,6 +482,7 @@ def poll_and_handle_events(
     client: VkTeamsClient | None = None,
 ) -> int:
     """Long-poll Bot API events; handle Upload callbacks. Returns lastEventId."""
+    settings = apply_vk_teams_vault(settings)
     if not settings.vk_teams_token.strip():
         return _load_last_event_id(settings)
 

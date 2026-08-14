@@ -6,10 +6,13 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from nexus_control.cli.bootstrap import load_cli_settings
 from nexus_control.config import ConfigError, Settings
@@ -48,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 # Внутренний флаг для detached child: run foreground loop.
 ENV_DAEMON_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_FOREGROUND"
+# Short long-poll while a rule is running so Upload still works.
+VK_BUSY_POLL_TIME = 2
 
 
 @dataclass(slots=True)
@@ -328,6 +333,38 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
     return 0
 
 
+@contextmanager
+def _vk_poll_during_job(settings: Settings) -> Iterator[None]:
+    """Short-poll VK Teams while a rule runs so Upload stays responsive."""
+    if not vk_teams_should_poll(settings):
+        yield
+        return
+    stop = threading.Event()
+
+    def _run() -> None:
+        while not stop.is_set():
+            try:
+                poll_and_handle_events(settings, poll_time=VK_BUSY_POLL_TIME)
+            except Exception:  # noqa: BLE001
+                logger.exception("VK Teams event poll failed (busy)")
+                if stop.wait(1.0):
+                    return
+            if stop.wait(0.05):
+                return
+
+    thread = threading.Thread(
+        target=_run,
+        name="vk-teams-poll",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=float(VK_BUSY_POLL_TIME + 3))
+
+
 def _execute_rule(
     settings: Settings,
     rule: ScheduleRule,
@@ -350,7 +387,8 @@ def _execute_rule(
     code = 1
     message = ""
     try:
-        code = run_rule(rule)
+        with _vk_poll_during_job(settings):
+            code = run_rule(rule)
         message = f"exit={code}"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Rule %s failed: %s", rule.id, exc)
