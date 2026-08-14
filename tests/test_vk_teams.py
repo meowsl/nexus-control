@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from argparse import Namespace
 from pathlib import Path
+from threading import Event
 from unittest.mock import MagicMock, patch
+import json
 import time
 
 import pytest
@@ -18,13 +20,18 @@ from nexus_control.integrations.vk_notify import (
     handle_callback,
     notify_rule_finished,
     should_notify,
+    upload_in_flight,
     vk_teams_configured,
     vk_teams_should_poll,
+    wait_upload_idle,
 )
 from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
+    VkTeamsVault,
+    apply_vk_teams_vault,
     upload_keyboard,
+    vk_teams_token_source,
 )
 from nexus_control.scheduler.models import ScheduleRule
 from nexus_control.services.scan_history import ScanRunMeta, ScanRunTotals
@@ -97,6 +104,39 @@ def test_vk_teams_configured_helpers(tmp_path: Path) -> None:
     assert vk_teams_configured(s3) is False
     s4 = _settings(tmp_path, vk_teams_upload_button=False)
     assert vk_teams_should_poll(s4) is False
+
+
+def test_vault_roundtrip_and_not_plaintext(tmp_path: Path) -> None:
+    vault = VkTeamsVault(tmp_path / "cache")
+    vault.save(token="super-secret-token", chat_id="chat-vault")
+    loaded = vault.load()
+    assert loaded is not None
+    assert loaded.token == "super-secret-token"
+    assert loaded.chat_id == "chat-vault"
+    raw = vault.vault_path.read_bytes()
+    assert b"super-secret-token" not in raw
+    assert vault.exists() is True
+    vault.clear()
+    assert vault.load() is None
+    assert vault.key_path.is_file()
+
+
+def test_apply_vault_fills_empty_settings(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, vk_teams_token="", vk_teams_chat_id="")
+    VkTeamsVault(settings.nexus_cache_dir).save(token="vault-tok", chat_id="vault-chat")
+    filled = apply_vk_teams_vault(settings)
+    assert filled.vk_teams_token == "vault-tok"
+    assert filled.vk_teams_chat_id == "vault-chat"
+    assert vk_teams_configured(settings) is True
+    assert vk_teams_token_source(settings) == "vault"
+
+
+def test_settings_token_wins_over_vault(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, vk_teams_token="env-tok")
+    VkTeamsVault(settings.nexus_cache_dir).save(token="vault-tok", chat_id="ignored")
+    filled = apply_vk_teams_vault(settings)
+    assert filled.vk_teams_token == "env-tok"
+    assert vk_teams_token_source(settings) == "config"
 
 
 def test_build_rule_message_verify_only() -> None:
@@ -250,6 +290,7 @@ def test_handle_callback_uploads(tmp_path: Path) -> None:
         client=client,
         run_upload_fn=fake_upload,
     )
+    assert wait_upload_idle(timeout=2.0)
     assert uploads == ["a", "b"]
     client.answer_callback_query.assert_called()
     client.edit_text.assert_called_once()
@@ -346,3 +387,245 @@ def test_client_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
     bot = VkTeamsClient(token="t", api_url="https://example.test/bot/v1")
     with pytest.raises(VkTeamsError, match="boom"):
         bot.send_text("c", "x")
+
+
+def _put_pending(
+    settings: Settings,
+    *,
+    token: str,
+    repos: list[str] | None = None,
+) -> None:
+    store = PendingUploadStore.load(settings)
+    store.put(
+        PendingUpload(
+            token=token,
+            rule_id="nightly",
+            repos=repos or ["a"],
+            targets={r: f"{r}-v" for r in (repos or ["a"])},
+            created_at=time.time(),
+            chat_id="chat-1",
+            msg_id="77",
+        )
+    )
+
+
+def test_handle_callback_does_not_block_poll(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _put_pending(settings, token="tok-slow", repos=["a"])
+    client = MagicMock(spec=VkTeamsClient)
+    started = Event()
+    release = Event()
+
+    def fake_upload(args: Namespace) -> int:
+        started.set()
+        assert release.wait(timeout=5)
+        return 0
+
+    handle_callback(
+        settings,
+        f"{CALLBACK_PREFIX}tok-slow",
+        "q-slow",
+        client=client,
+        run_upload_fn=fake_upload,
+    )
+    try:
+        assert started.wait(timeout=2)
+        assert upload_in_flight() is True
+        client.answer_callback_query.assert_called()
+        text = client.answer_callback_query.call_args[1].get("text")
+        assert text == "Uploading…"
+        client.edit_text.assert_not_called()
+    finally:
+        release.set()
+        assert wait_upload_idle(timeout=2.0)
+    client.edit_text.assert_called_once()
+
+
+def test_handle_callback_already_running_keeps_pending(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _put_pending(settings, token="tok-a", repos=["a"])
+    _put_pending(settings, token="tok-b", repos=["b"])
+    client = MagicMock(spec=VkTeamsClient)
+    release = Event()
+
+    def fake_upload(args: Namespace) -> int:
+        assert release.wait(timeout=5)
+        return 0
+
+    handle_callback(
+        settings,
+        f"{CALLBACK_PREFIX}tok-a",
+        "q-a",
+        client=client,
+        run_upload_fn=fake_upload,
+    )
+    handle_callback(
+        settings,
+        f"{CALLBACK_PREFIX}tok-b",
+        "q-b",
+        client=client,
+        run_upload_fn=fake_upload,
+    )
+    try:
+        alerts = [
+            c
+            for c in client.answer_callback_query.call_args_list
+            if c[1].get("show_alert")
+        ]
+        assert alerts
+        assert "already running" in str(alerts[-1][1].get("text", "")).lower()
+        assert PendingUploadStore.load(settings).get("tok-b") is not None
+    finally:
+        release.set()
+        assert wait_upload_idle(timeout=2.0)
+
+
+def test_execute_rule_polls_vk_while_busy(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    from nexus_control.scheduler.daemon import _execute_rule
+    from nexus_control.scheduler.models import ScheduleRule
+    from nexus_control.scheduler.state import SchedulerState
+
+    settings = _settings(tmp_path)
+    rule = ScheduleRule(id="x", cron="0 0 * * *", repos=["r"])
+    polls: list[int] = []
+
+    def fake_poll(_settings: object, *, poll_time: int = 25, client: object = None) -> int:
+        polls.append(poll_time)
+        time.sleep(0.05)
+        return 0
+
+    def fake_run(_rule: object) -> int:
+        time.sleep(0.2)
+        return 0
+
+    with patch(
+        "nexus_control.scheduler.daemon.poll_and_handle_events",
+        side_effect=fake_poll,
+    ):
+        with patch("nexus_control.scheduler.daemon.run_rule", side_effect=fake_run):
+            with patch("nexus_control.scheduler.daemon.notify_rule_finished"):
+                _execute_rule(
+                    settings,
+                    rule,
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    "x:202601010000",
+                    SchedulerState(),
+                    tmp_path / "state.json",
+                    set(),
+                )
+    assert polls
+    assert all(p <= 3 for p in polls)
+
+
+def test_vk_teams_cli_configure_status_disable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from argparse import Namespace
+
+    from nexus_control.cli.cmd_vk_teams import run_vk_teams
+    from nexus_control.config import Settings as Cfg
+    from nexus_control.config_io import read_toml, write_toml_atomic
+
+    cfg_path = tmp_path / "config.toml"
+    write_toml_atomic(
+        cfg_path,
+        {"nexus_url": "http://localhost:8081", "vk_teams_notify": "off"},
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    settings = Cfg(
+        nexus_url="http://localhost:8081",
+        nexus_cache_dir=cache,
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "reports",
+        verified_root=tmp_path / "verified",
+        log_file=tmp_path / "logs" / "app.log",
+        vk_teams_token="",
+        vk_teams_chat_id="",
+        vk_teams_notify="off",
+    )
+    monkeypatch.setenv("NEXUS_CONTROL_CONFIG", str(cfg_path))
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.load_settings",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.resolve_config_path",
+        lambda: cfg_path,
+    )
+    answers = iter(
+        [
+            "https://example.test/bot/v1",
+            "chat-cli",
+            "always",
+            "y",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.getpass.getpass",
+        lambda _p="": "cli-secret-token",
+    )
+
+    assert run_vk_teams(Namespace(vk_action="configure")) == 0
+    data = read_toml(cfg_path)
+    assert data["vk_teams_chat_id"] == "chat-cli"
+    assert data["vk_teams_notify"] == "always"
+    assert data["vk_teams_upload_button"] is True
+    assert "vk_teams_token" not in data
+    vault = VkTeamsVault(cache)
+    stored = vault.load()
+    assert stored is not None
+    assert stored.token == "cli-secret-token"
+
+    filled = apply_vk_teams_vault(
+        settings.model_copy(
+            update={
+                "vk_teams_chat_id": "chat-cli",
+                "vk_teams_notify": "always",
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.load_settings",
+        lambda: filled,
+    )
+    code = run_vk_teams(Namespace(vk_action="status", json=True))
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["configured"] is True
+    assert payload["token_present"] is True
+    assert payload["chat_id"] == "chat-cli"
+
+    assert run_vk_teams(Namespace(vk_action="disable", clear_vault=True)) == 0
+    data = read_toml(cfg_path)
+    assert data["vk_teams_notify"] == "off"
+    assert vault.load() is None
+
+
+def test_vk_teams_cli_test_sends_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argparse import Namespace
+
+    from nexus_control.cli.cmd_vk_teams import run_vk_teams
+
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.load_settings",
+        lambda: settings,
+    )
+    client = MagicMock(spec=VkTeamsClient)
+    client.send_text.return_value = {"ok": True, "msgId": "1"}
+    monkeypatch.setattr(
+        "nexus_control.cli.cmd_vk_teams.VkTeamsClient.from_settings",
+        lambda _s: client,
+    )
+    assert run_vk_teams(Namespace(vk_action="test")) == 0
+    client.send_text.assert_called_once()
+    assert "connectivity test" in client.send_text.call_args[0][1]

@@ -31,8 +31,9 @@ locale = "ru"
 
 # --- VK Teams (VK Workspace Bot API) -----------------------------------------
 # Уведомления только от scheduler после завершения правила.
-# Бот: @Metabot → /newbot → token. API URL — у админов / Metabot /start.
-# vk_teams_token = ""
+# Бот: @Metabot → /newbot → token. API URL — у админов / Metabot /start
+# (часто https://myteam.mail.ru/bot/v1; on-prem — свой).
+# Токен НЕ кладите сюда: nexus-control-cli vk-teams configure → vk-teams.vault
 # vk_teams_api_url = "https://myteam.mail.ru/bot/v1"
 # vk_teams_chat_id = ""
 # vk_teams_notify = "off"          # off | always | failures
