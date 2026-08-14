@@ -397,6 +397,16 @@ class PipelineService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("DefectDojo push failed: %s", exc)
 
+        if verify and getattr(self.settings, "webhook_enabled", False):
+            try:
+                from nexus_control.integrations.webhook import push_pipeline_results
+
+                result = push_pipeline_results(self.settings, summary)
+                if result.error:
+                    logger.warning("Webhook push incomplete: %s", result.error)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Webhook push failed: %s", exc)
+
     def _process_item(
         self,
         *,

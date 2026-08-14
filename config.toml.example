@@ -27,6 +27,14 @@ locale = "ru"
 # defectdojo_product_name = "nexus-control"
 # defectdojo_engagement_name = ""   # пусто → имя Nexus-репозитория
 # defectdojo_product_type_name = "Nexus"
+# Webhook: POST compact JSON after each verify. Secrets NOT in TOML —
+# vault (wizard / webhook configure) or WEBHOOK_TOKEN / WEBHOOK_USERNAME+PASSWORD.
+# webhook_enabled = false
+# webhook_url = "https://hooks.example.com/scan"
+# webhook_auth = "none"   # none | bearer | basic | header
+# webhook_header_name = "X-Api-Key"   # only for auth=header
+# webhook_verify_ssl = true
+# webhook_timeout = 15.0
 # Параллельная обработка ассетов (download/scan/verify). 0 = auto (CPU/RAM).
 # CLI: --workers N. Явное значение перекрывает auto.
 # pipeline_workers = 0

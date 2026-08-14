@@ -166,6 +166,7 @@ def test_wizard_writes_config(
             "n",
             "trivy",
             "n",  # skip DefectDojo
+            "n",  # skip webhook
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))

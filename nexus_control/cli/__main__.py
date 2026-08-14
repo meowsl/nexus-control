@@ -206,6 +206,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_dd.set_defaults(_handler="defectdojo")
 
+    p_wh = sub.add_parser(
+        "webhook",
+        help="Configure or show scan-result webhook (POST JSON after verify)",
+    )
+    p_wh.add_argument(
+        "webhook_action",
+        nargs="?",
+        default="status",
+        choices=["status", "configure", "disable", "test"],
+        help="status (default), configure, disable, or test",
+    )
+    p_wh.add_argument(
+        "--clear-vault",
+        dest="clear_vault",
+        action="store_true",
+        help="With disable: also delete encrypted webhook secrets vault",
+    )
+    p_wh.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout (status / test)",
+    )
+    p_wh.set_defaults(_handler="webhook")
+
     p_osv_db = sub.add_parser(
         "osv-db",
         help="Show or update local osv-scanner offline vulnerability DB",
@@ -305,6 +329,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_defectdojo import run_defectdojo
 
             code = run_defectdojo(args)
+        elif args._handler == "webhook":
+            from nexus_control.cli.cmd_webhook import run_webhook
+
+            code = run_webhook(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return

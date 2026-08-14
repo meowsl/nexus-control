@@ -245,6 +245,7 @@ def test_wizard_defectdojo_yes(
             "y",
             "http://localhost:8080",
             "n",
+            "n",  # skip webhook
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
