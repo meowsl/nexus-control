@@ -1,8 +1,14 @@
 """Интерактивный ввод и шифрованное хранение учётных данных Nexus.
 
-Пароль **не** пишется в ``session.json``. Пока активна Nexus-сессия (тот же TTL),
-учётные данные лежат в ``credentials.vault`` (Fernet, файл ``0o600``), ключ —
-в ``.vault_key`` (``0o600``). После истечения / invalidate vault очищается.
+Пароль **не** пишется в ``session.json``.
+
+Два vault'а (Fernet, файлы ``0o600``, общий ключ ``.vault_key``):
+
+* ``credentials.vault`` — session vault, TTL = Nexus-сессия; очищается
+  при logout / expire / invalidate.
+* ``credentials.scheduler.vault`` — долгоживущий vault для scheduler /
+  non-interactive CLI; не привязан к session TTL; пишется через
+  ``nexus-control-cli schedule login``, сброс — ``schedule logout``.
 """
 
 from __future__ import annotations
@@ -25,7 +31,14 @@ from nexus_control.utils.fs import ensure_dir
 logger = logging.getLogger(__name__)
 
 VAULT_FILENAME = "credentials.vault"
+SCHEDULER_VAULT_FILENAME = "credentials.scheduler.vault"
 KEY_FILENAME = ".vault_key"
+
+NON_INTERACTIVE_CREDS_HINT = (
+    "Nexus username/password are required for non-interactive use. "
+    "Set NEXUS_USERNAME and NEXUS_PASSWORD in the environment or .env, "
+    "or run: nexus-control-cli schedule login"
+)
 
 
 def _now() -> datetime:
@@ -70,12 +83,22 @@ class StoredCredentials:
 
 
 class CredentialVault:
-    """Шифрованное хранилище username/password на время Nexus-сессии."""
+    """Шифрованное хранилище username/password.
 
-    def __init__(self, cache_dir: Path) -> None:
+    По умолчанию — session vault (с TTL). Для scheduler передайте
+    ``filename=SCHEDULER_VAULT_FILENAME`` и ``persistent=True`` при save.
+    """
+
+    def __init__(
+        self,
+        cache_dir: Path,
+        *,
+        filename: str = VAULT_FILENAME,
+    ) -> None:
         self.cache_dir = cache_dir
-        self.vault_path = cache_dir / VAULT_FILENAME
+        self.vault_path = cache_dir / filename
         self.key_path = cache_dir / KEY_FILENAME
+        self._persistent_file = filename == SCHEDULER_VAULT_FILENAME
 
     def save(
         self,
@@ -83,25 +106,37 @@ class CredentialVault:
         nexus_url: str,
         username: str,
         password: str,
-        expires_at: str,
+        expires_at: str = "",
+        persistent: bool | None = None,
     ) -> None:
         ensure_dir(self.cache_dir, mode=0o700)
+        is_persistent = (
+            self._persistent_file if persistent is None else bool(persistent)
+        )
         payload = {
             "nexus_url": nexus_url.rstrip("/"),
             "username": username,
             "password": password,
             "expires_at": expires_at,
             "config_hash": config_fingerprint(nexus_url, username),
+            "persistent": is_persistent,
         }
         token = self._fernet().encrypt(
             json.dumps(payload, ensure_ascii=False).encode("utf-8")
         )
         self._write_bytes(self.vault_path, token)
-        logger.info(
-            "Encrypted credentials saved until %s (user=%s)",
-            expires_at,
-            username,
-        )
+        if is_persistent:
+            logger.info(
+                "Encrypted scheduler credentials saved (user=%s, file=%s)",
+                username,
+                self.vault_path.name,
+            )
+        else:
+            logger.info(
+                "Encrypted credentials saved until %s (user=%s)",
+                expires_at,
+                username,
+            )
 
     def load(self) -> StoredCredentials | None:
         if not self.vault_path.is_file() or not self.key_path.is_file():
@@ -126,7 +161,8 @@ class CredentialVault:
             expires_at=str(data.get("expires_at") or ""),
             config_hash=str(data.get("config_hash") or ""),
         )
-        if creds.is_expired():
+        is_persistent = bool(data.get("persistent")) or self._persistent_file
+        if not is_persistent and creds.is_expired():
             logger.info("Credential vault expired; clearing")
             self.clear()
             return None
@@ -142,7 +178,7 @@ class CredentialVault:
                 logger.warning("Failed to remove %s: %s", path, exc)
 
     def clear_all(self) -> None:
-        """Удалить vault и локальный ключ шифрования."""
+        """Удалить этот vault и локальный ключ шифрования."""
         self.clear()
         try:
             if self.key_path.exists():
@@ -178,6 +214,11 @@ class CredentialVault:
                 pass
         finally:
             os.close(fd)
+
+
+def scheduler_vault(cache_dir: Path) -> CredentialVault:
+    """Долгоживущий vault для scheduler / non-interactive CLI."""
+    return CredentialVault(cache_dir, filename=SCHEDULER_VAULT_FILENAME)
 
 
 def prompt_nexus_credentials(default_username: str = "") -> tuple[str, str]:
@@ -216,9 +257,10 @@ def resolve_runtime_credentials(
     """Вернуть Settings с заполненными username/password.
 
     Порядок:
-    1. Активная Nexus-сессия + неистёкший encrypted vault
+    1. Активная Nexus-сессия + неистёкший session vault
     2. ``NEXUS_USERNAME`` + ``NEXUS_PASSWORD`` из env / .env (CI)
-    3. Интерактивный prompt (TTY), если ``allow_prompt``
+    3. Долгоживущий scheduler vault (``credentials.scheduler.vault``)
+    4. Интерактивный prompt (TTY), если ``allow_prompt``
     """
     vault = CredentialVault(settings.nexus_cache_dir)
     store = SessionStore(settings.nexus_cache_dir)
@@ -265,13 +307,52 @@ def resolve_runtime_credentials(
             update={"nexus_username": env_user, "nexus_password": env_password}
         )
 
-    if not allow_prompt:
-        raise ConfigError(
-            "Nexus username/password are required for non-interactive use. "
-            "Set NEXUS_USERNAME/NEXUS_PASSWORD or run once in a TTY to populate the vault."
+    persistent = scheduler_vault(settings.nexus_cache_dir).load()
+    if persistent is not None and persistent.matches(
+        settings.nexus_url,
+        env_user or None,
+    ):
+        logger.info(
+            "Restored credentials from scheduler vault (user=%s)",
+            persistent.username,
         )
+        return settings.model_copy(
+            update={
+                "nexus_username": persistent.username,
+                "nexus_password": persistent.password,
+            }
+        )
+
+    if not allow_prompt:
+        raise ConfigError(NON_INTERACTIVE_CREDS_HINT)
 
     username, password = prompt_nexus_credentials(default_username=env_user)
     return settings.model_copy(
         update={"nexus_username": username, "nexus_password": password}
     )
+
+
+def save_scheduler_credentials(
+    settings: Settings,
+    *,
+    username: str,
+    password: str,
+) -> Path:
+    """Сохранить долгоживущие креды для scheduler (без session TTL)."""
+    vault = scheduler_vault(settings.nexus_cache_dir)
+    vault.save(
+        nexus_url=settings.nexus_url,
+        username=username,
+        password=password,
+        expires_at="",
+        persistent=True,
+    )
+    return vault.vault_path
+
+
+def clear_scheduler_credentials(settings: Settings) -> bool:
+    """Удалить scheduler vault. True если файл был."""
+    vault = scheduler_vault(settings.nexus_cache_dir)
+    existed = vault.vault_path.is_file()
+    vault.clear()
+    return existed

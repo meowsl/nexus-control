@@ -112,6 +112,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
                 "path_prefix": "com/example",
                 "workers": 2,
                 "limit": 10,
+                "scan_limit": 5,
             },
         ],
     }
@@ -121,6 +122,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert config.rules[0].wants_upload()
     assert config.rules[1].wants_verify()
     assert config.rules[1].wants_upload()
+    assert config.rules[1].scan_limit == 5
     assert config.get_rule("weekend") is not None
 
     path = tmp_path / "schedule.toml"
@@ -130,6 +132,7 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     assert [r.id for r in loaded.rules] == ["nightly-core", "weekend"]
     assert loaded.rules[1].path_prefix == "com/example"
     assert loaded.rules[1].workers == 2
+    assert loaded.rules[1].scan_limit == 5
 
 
 def test_parse_rejects_duplicate_ids() -> None:
@@ -159,7 +162,7 @@ def test_empty_schedule_missing_file(tmp_path: Path) -> None:
     missing = tmp_path / "missing.toml"
     config = load_schedule(missing)
     assert config.rules == []
-    assert config.overlap == "skip"
+    assert config.overlap == "queue"
     assert config.timezone == LOCAL_TIMEZONE
 
 
@@ -198,11 +201,50 @@ def test_state_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "scheduler-state.json"
     state = SchedulerState(started_at="t0", pid=123, busy=True, current_rule="r1")
     state.next_fires["r1"] = "2026-01-01T00:00:00+00:00"
+    state.current_repo = "maven-hosted"
+    state.progress_pct = 0.42
+    state.progress_stage = "scan"
+    state.progress_asset = "a.jar"
+    state.progress_message = "scan: a.jar"
+    state.progress_updated_at = "t1"
     save_state(path, state)
     loaded = load_state(path)
     assert loaded.pid == 123
     assert loaded.busy is True
     assert loaded.next_fires["r1"].startswith("2026")
+    assert loaded.current_repo == "maven-hosted"
+    assert loaded.progress_pct == 0.42
+    assert loaded.progress_stage == "scan"
+    assert loaded.progress_asset == "a.jar"
+    loaded.clear_progress()
+    assert loaded.progress_pct is None
+    assert loaded.current_repo is None
+
+
+def test_state_progress_sink_throttled(tmp_path: Path) -> None:
+    from nexus_control.scheduler.progress import StateProgressSink
+
+    path = tmp_path / "scheduler-state.json"
+    state = SchedulerState(busy=True, current_rule="r1")
+    save_state(path, state)
+    sink = StateProgressSink(path, state, min_interval=10.0)
+    sink("pkg.jar", 0.1, "download")
+    first = load_state(path)
+    assert first.progress_pct == 0.1
+    assert first.progress_stage == "download"
+    # throttled — second call within interval should not overwrite
+    sink("other.jar", 0.2, "download")
+    second = load_state(path)
+    assert second.progress_asset == "pkg.jar"
+    # completion always writes
+    sink("other.jar", 1.0, "scan")
+    done = load_state(path)
+    assert done.progress_pct == 1.0
+    assert done.progress_asset.endswith("other.jar")
+    sink.status("Selecting assets…")
+    # status may be throttled after completion write; force via final
+    sink.status("Selecting done", final=True)
+    assert load_state(path).progress_message == "Selecting done"
 
 
 def test_due_rules_marks_recent_slot(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,11 +278,91 @@ def test_due_rules_marks_recent_slot(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         ],
     )
-    due = _due_rules(config, last_fire_keys=set())
+    # Baseline like daemon seed: only the just-fired nightly slot is open.
+    baseline = {"later": "202608091500"}
+    due = _due_rules(config, last_fires=baseline)
     assert [r.id for r, _, _ in due] == ["nightly"]
-    fire_key = due[0][2]
-    due2 = _due_rules(config, last_fire_keys={fire_key})
+    due2 = _due_rules(
+        config,
+        last_fires={**baseline, "nightly": "202608100300"},
+    )
     assert due2 == []
+
+
+def test_due_rules_queues_missed_slot_after_long_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """02:05 still due at 02:20 if the 02:00 job ran long (catch-up queue)."""
+    tz = ZoneInfo("UTC")
+    frozen = datetime(2026, 8, 10, 2, 20, 0, tzinfo=tz)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is None:
+                return frozen.replace(tzinfo=None)
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr("nexus_control.scheduler.daemon.datetime", _FrozenDateTime)
+
+    config = ScheduleConfig(
+        timezone="UTC",
+        rules=[
+            ScheduleRule(
+                id="early",
+                cron="0 2 * * *",
+                repos=["maven-hosted"],
+                enabled=True,
+            ),
+            ScheduleRule(
+                id="five-past",
+                cron="5 2 * * *",
+                repos=["npm-hosted"],
+                enabled=True,
+            ),
+        ],
+    )
+    # early already finished its 02:00 slot; five-past was blocked during that run.
+    last_fires = {"early": "202608100200"}
+    due = _due_rules(config, last_fires=last_fires)
+    assert [r.id for r, _, _ in due] == ["five-past"]
+    assert due[0][1].hour == 2 and due[0][1].minute == 5
+
+
+def test_seed_past_fires_skips_stale_but_keeps_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus_control.scheduler.daemon import _seed_past_fires
+
+    tz = ZoneInfo("UTC")
+    frozen = datetime(2026, 8, 10, 10, 0, 0, tzinfo=tz)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is None:
+                return frozen.replace(tzinfo=None)
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr("nexus_control.scheduler.daemon.datetime", _FrozenDateTime)
+
+    config = ScheduleConfig(
+        timezone="UTC",
+        rules=[
+            ScheduleRule(id="morning", cron="0 3 * * *", repos=["r"], enabled=True),
+        ],
+    )
+    state = SchedulerState()
+    _seed_past_fires(config, state, grace_seconds=90)
+    assert state.last_fires["morning"] == "202608100300"
+    assert _due_rules(config, state.last_fires) == []
+
+    # Already-tracked rules must not be re-seeded (catch-up after downtime).
+    state2 = SchedulerState(last_fires={"morning": "202608090300"})
+    _seed_past_fires(config, state2, grace_seconds=90)
+    assert state2.last_fires["morning"] == "202608090300"
+    due = _due_rules(config, state2.last_fires)
+    assert [r.id for r, _, _ in due] == ["morning"]
 
 
 def test_run_rule_calls_verify_per_repo() -> None:
@@ -371,17 +493,75 @@ def test_overlap_skip_records_skipped(tmp_path: Path) -> None:
         with patch(
             "nexus_control.scheduler.daemon.notify_rule_finished"
         ):
-            keys: set[str] = set()
+            st = SchedulerState()
             _execute_rule(
                 settings,
                 rule,
                 datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
                 "x:202601010000",
-                SchedulerState(),
+                st,
                 state_file,
-                keys,
             )
-    assert "x:202601010000" in keys
+    assert st.last_fires["x"] == "202601010000"
+
+
+def test_run_rule_now_records_last_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Menu / schedule run пишет last_runs, но не last_fires."""
+    from nexus_control.scheduler.daemon import run_rule_now
+    from nexus_control.scheduler.models import ScheduleConfig, ScheduleRule
+
+    schedule_path = tmp_path / "schedule.toml"
+    save_schedule(
+        ScheduleConfig(
+            timezone="UTC",
+            rules=[
+                ScheduleRule(
+                    id="nightly",
+                    cron="0 3 * * *",
+                    repos=["maven-hosted"],
+                )
+            ],
+        ),
+        schedule_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    state_file = cache / "scheduler-state.json"
+    save_state(
+        state_file,
+        SchedulerState(last_fires={"nightly": "202608100300"}),
+    )
+
+    fake_settings = MagicMock()
+    fake_settings.nexus_cache_dir = cache
+    fake_settings.log_file = tmp_path / "logs" / "app.log"
+    fake_settings.nexus_password = None
+    fake_settings.vk_teams_token = ""
+    fake_settings.vk_teams_chat_id = ""
+    fake_settings.vk_teams_notify = "off"
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.load_cli_settings",
+        lambda allow_prompt=False: fake_settings,
+    )
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.running_pid",
+        lambda _path: None,
+    )
+
+    with patch("nexus_control.scheduler.daemon.run_rule", return_value=0) as run:
+        code = run_rule_now("nightly", schedule_file=schedule_path, foreground=True)
+
+    assert code == 0
+    run.assert_called_once()
+    loaded = load_state(state_file)
+    assert loaded.last_runs["nightly"].exit_code == 0
+    assert loaded.last_runs["nightly"].message.startswith("manual exit=")
+    assert loaded.last_fires["nightly"] == "202608100300"
+    assert loaded.busy is False
+    assert loaded.current_rule is None
 
 
 def test_menu_status_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

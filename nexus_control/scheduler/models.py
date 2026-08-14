@@ -31,6 +31,7 @@ class ScheduleRule:
     path_prefix: str | None = None
     workers: int | None = None
     limit: int | None = None
+    scan_limit: int | None = None
     refresh: bool = False
 
     def wants_verify(self) -> bool:
@@ -61,7 +62,7 @@ class ScheduleRule:
 @dataclass(slots=True)
 class ScheduleConfig:
     timezone: str = LOCAL_TIMEZONE
-    overlap: OverlapPolicy = "skip"
+    overlap: OverlapPolicy = "queue"
     rules: list[ScheduleRule] = field(default_factory=list)
 
     def resolved_timezone(self) -> str:

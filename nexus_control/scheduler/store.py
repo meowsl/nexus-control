@@ -70,7 +70,7 @@ def parse_schedule_dict(data: dict[str, Any]) -> ScheduleConfig:
     except CronError as exc:
         raise ScheduleStoreError(str(exc)) from exc
 
-    overlap_raw = str(sched.get("overlap") or "skip").strip().lower()
+    overlap_raw = str(sched.get("overlap") or "queue").strip().lower()
     if overlap_raw not in VALID_OVERLAP:
         raise ScheduleStoreError(
             f"Invalid overlap={overlap_raw!r}; expected one of {sorted(VALID_OVERLAP)}"
@@ -162,6 +162,12 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         if limit < 1:
             raise ScheduleStoreError(f"rules[{index}].limit must be >= 1")
 
+    scan_limit = item.get("scan_limit")
+    if scan_limit is not None:
+        scan_limit = int(scan_limit)
+        if scan_limit < 1:
+            raise ScheduleStoreError(f"rules[{index}].scan_limit must be >= 1")
+
     target = item.get("target")
     targets_raw = item.get("targets")
     scanners = item.get("scanners")
@@ -212,6 +218,7 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         path_prefix=str(path_prefix).strip() if path_prefix else None,
         workers=workers,
         limit=limit,
+        scan_limit=scan_limit,
         refresh=bool(item.get("refresh", False)),
     )
 
@@ -262,6 +269,8 @@ def _validate_rule(rule: ScheduleRule) -> None:
         raise ScheduleStoreError(f"rule {rule.id!r}: workers must be >= 1")
     if rule.limit is not None and rule.limit < 1:
         raise ScheduleStoreError(f"rule {rule.id!r}: limit must be >= 1")
+    if rule.scan_limit is not None and rule.scan_limit < 1:
+        raise ScheduleStoreError(f"rule {rule.id!r}: scan_limit must be >= 1")
     if rule.target and "," in rule.target:
         raise ScheduleStoreError(
             f"rule {rule.id!r}: 'target' must be a single name; use 'targets'"
@@ -300,4 +309,6 @@ def _rule_to_dict(rule: ScheduleRule) -> dict[str, Any]:
         data["workers"] = rule.workers
     if rule.limit is not None:
         data["limit"] = rule.limit
+    if rule.scan_limit is not None:
+        data["scan_limit"] = rule.scan_limit
     return data

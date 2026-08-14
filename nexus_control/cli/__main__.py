@@ -67,12 +67,32 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_verify.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max main assets to put into the verify pipeline (download + "
+            "scan-only); useful for debug on large repos. Independent of "
+            "--limit. Nexus listing stops when the scan-limit is reached"
+        ),
+    )
+    p_verify.add_argument(
         "--workers",
         type=int,
         default=None,
         help=(
             "Parallel asset workers for download/scan/verify "
-            "(default: config pipeline_workers, usually 4)"
+            "(default: config pipeline_workers, or auto from CPU/RAM when 0)"
+        ),
+    )
+    p_verify.add_argument(
+        "--max-scanner-procs",
+        type=int,
+        default=None,
+        dest="max_scanner_procs",
+        help=(
+            "Max concurrent scanner processes across all assets "
+            "(default: config max_scanner_procs, or auto from CPU/RAM when 0)"
         ),
     )
     p_verify.add_argument(
@@ -112,8 +132,21 @@ def build_parser() -> argparse.ArgumentParser:
         "schedule_action",
         nargs="?",
         default="menu",
-        choices=["menu", "start", "stop", "status", "run", "_daemon"],
-        help="menu (default) | start | stop | status | run",
+        choices=[
+            "menu",
+            "start",
+            "stop",
+            "status",
+            "run",
+            "login",
+            "logout",
+            "_daemon",
+            "_run",
+        ],
+        help=(
+            "menu (default) | start | stop | status | run | "
+            "login | logout"
+        ),
     )
     p_schedule.add_argument(
         "rule_id",
@@ -126,7 +159,111 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to schedule.toml (default: XDG config schedule.toml)",
     )
+    p_schedule.add_argument(
+        "-m",
+        "--monitor",
+        action="store_true",
+        help="With status: live-refresh daemon/job progress (Ctrl+C to stop)",
+    )
+    p_schedule.add_argument(
+        "--interval",
+        dest="monitor_interval",
+        type=float,
+        default=1.0,
+        help="Monitor refresh interval in seconds (default: 1.0)",
+    )
+    p_schedule.add_argument(
+        "--scan-limit",
+        type=int,
+        default=None,
+        help=(
+            "With run: override rule scan_limit — max main assets to verify "
+            "(debug). Also accepted on verify."
+        ),
+    )
+    p_schedule.add_argument(
+        "--foreground",
+        action="store_true",
+        help="With run: keep the job in this terminal (default: background)",
+    )
     p_schedule.set_defaults(_handler="schedule")
+
+    p_dd = sub.add_parser(
+        "defectdojo",
+        help="Configure or show DefectDojo integration (push FAIL findings)",
+    )
+    p_dd.add_argument(
+        "defectdojo_action",
+        nargs="?",
+        default="status",
+        choices=["status", "configure", "disable"],
+        help="status (default), configure, or disable",
+    )
+    p_dd.add_argument(
+        "--clear-vault",
+        dest="clear_vault",
+        action="store_true",
+        help="With disable: also delete encrypted API key vault",
+    )
+    p_dd.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout (status)",
+    )
+    p_dd.set_defaults(_handler="defectdojo")
+
+    p_wh = sub.add_parser(
+        "webhook",
+        help="Configure or show scan-result webhook (POST JSON after verify)",
+    )
+    p_wh.add_argument(
+        "webhook_action",
+        nargs="?",
+        default="status",
+        choices=["status", "configure", "disable", "test"],
+        help="status (default), configure, disable, or test",
+    )
+    p_wh.add_argument(
+        "--clear-vault",
+        dest="clear_vault",
+        action="store_true",
+        help="With disable: also delete encrypted webhook secrets vault",
+    )
+    p_wh.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout (status / test)",
+    )
+    p_wh.set_defaults(_handler="webhook")
+
+    p_osv_db = sub.add_parser(
+        "osv-db",
+        help="Show or update local osv-scanner offline vulnerability DB",
+    )
+    p_osv_db.add_argument(
+        "osv_db_action",
+        nargs="?",
+        default="status",
+        choices=["status", "update"],
+        help="status (default) or update",
+    )
+    p_osv_db.add_argument(
+        "--ecosystem",
+        default=None,
+        help="With update: download only this ecosystem (e.g. NuGet)",
+    )
+    p_osv_db.add_argument(
+        "--all",
+        dest="all_ecosystems",
+        action="store_true",
+        help="With update: download every ecosystem (large)",
+    )
+    p_osv_db.add_argument(
+        "--json",
+        action="store_true",
+        help="Print JSON to stdout",
+    )
+    p_osv_db.set_defaults(_handler="osv_db")
 
     p_history = sub.add_parser(
         "history",
@@ -211,6 +348,18 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_history import run_history
 
             code = run_history(args)
+        elif args._handler == "osv_db":
+            from nexus_control.cli.cmd_osv_db import run_osv_db
+
+            code = run_osv_db(args)
+        elif args._handler == "defectdojo":
+            from nexus_control.cli.cmd_defectdojo import run_defectdojo
+
+            code = run_defectdojo(args)
+        elif args._handler == "webhook":
+            from nexus_control.cli.cmd_webhook import run_webhook
+
+            code = run_webhook(args)
         elif args._handler == "vk_teams":
             from nexus_control.cli.cmd_vk_teams import run_vk_teams
 

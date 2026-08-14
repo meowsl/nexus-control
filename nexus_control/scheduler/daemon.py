@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 
 # Внутренний флаг для detached child: run foreground loop.
 ENV_DAEMON_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_FOREGROUND"
+# Child of ``schedule run`` (already detached): execute the rule in-process.
+ENV_RUN_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_RUN_FOREGROUND"
+
+# При старте/reload слоты старше grace помечаются handled без запуска
+# (чтобы не гонять вчерашние cron). Слоты внутри grace — в очередь.
+_STARTUP_GRACE_SECONDS = 90.0
 # Short long-poll while a rule is running so Upload still works.
 VK_BUSY_POLL_TIME = 2
 
@@ -114,35 +120,125 @@ def start_daemon(
 
 
 def stop_daemon(settings: Settings | None = None, *, timeout: float = 30.0) -> int:
+    """Остановить демон: SIGTERM → wait → при необходимости SIGKILL.
+
+    Во время длинного ``_execute_rule`` флаг stop проверяется только после
+    окончания job, поэтому graceful stop может затянуться — тогда форсируем.
+    """
     cfg = settings or _settings_no_prompt()
     path = pid_path(cfg.nexus_cache_dir)
+    sp = state_path(cfg.nexus_cache_dir)
     pid = running_pid(path)
     if pid is None:
         print("Scheduler is not running.", file=sys.stderr)
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=None)
         return 0
+
+    st = load_state(sp)
+    if st.busy and st.current_rule:
+        print(
+            f"Scheduler pid={pid} is busy with rule {st.current_rule!r}; "
+            f"sending SIGTERM (will SIGKILL after {timeout:.0f}s if needed)…",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Stopping scheduler (pid={pid})…", file=sys.stderr)
+
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        path.unlink(missing_ok=True)
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
         print("Scheduler is not running.", file=sys.stderr)
         return 0
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not process_is_alive(pid):
-            print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
-            return 0
-        time.sleep(0.2)
+    if _wait_until_dead(pid, timeout):
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
+        return 0
+
     print(
-        f"Scheduler pid={pid} did not exit within {timeout:.0f}s; try kill -9",
+        f"Scheduler pid={pid} did not exit within {timeout:.0f}s; sending SIGKILL…",
+        file=sys.stderr,
+    )
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid})", file=sys.stderr)
+        return 0
+
+    if _wait_until_dead(pid, 5.0):
+        _cleanup_stale_scheduler_files(path, sp, expected_pid=pid)
+        print(f"Stopped scheduler (pid={pid}, forced)", file=sys.stderr)
+        return 0
+
+    print(
+        f"Scheduler pid={pid} still alive after SIGKILL; check process manually.",
         file=sys.stderr,
     )
     return 1
 
 
-def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
-    """Синхронный прогон правила (меню / schedule run)."""
-    settings = load_cli_settings(allow_prompt=sys.stdin.isatty())
+def _wait_until_dead(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not process_is_alive(pid):
+            return True
+        time.sleep(0.2)
+    return not process_is_alive(pid)
+
+
+def _cleanup_stale_scheduler_files(
+    pid_file: Path,
+    state_file: Path,
+    *,
+    expected_pid: int | None,
+) -> None:
+    """Убрать pidfile и сбросить busy в state после остановки."""
+    try:
+        if pid_file.is_file():
+            if expected_pid is None:
+                pid_file.unlink(missing_ok=True)
+            else:
+                try:
+                    current = int(pid_file.read_text(encoding="utf-8").strip())
+                except (OSError, ValueError):
+                    current = None
+                if current in {None, expected_pid}:
+                    pid_file.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        st = load_state(state_file)
+        if expected_pid is not None and st.pid not in {None, expected_pid}:
+            return
+        if st.busy or st.current_rule or st.pid is not None:
+            st.busy = False
+            st.current_rule = None
+            st.pid = None
+            st.clear_progress()
+            save_state(state_file, st)
+    except OSError:
+        pass
+
+
+def run_rule_now(
+    rule_id: str,
+    *,
+    schedule_file: Path | None = None,
+    scan_limit: int | None = None,
+    foreground: bool = False,
+) -> int:
+    """Прогон правила: по умолчанию в фоне, прогресс через ``schedule status -m``.
+
+    ``foreground=True`` / env ``NEXUS_CONTROL_SCHEDULER_RUN_FOREGROUND`` —
+    в текущем процессе (меню-тест, detached child).
+    Cron-слоты (``last_fires``) не трогает.
+    """
+    if os.environ.get(ENV_RUN_FOREGROUND) == "1":
+        foreground = True
+
+    settings = load_cli_settings(allow_prompt=False)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
@@ -151,8 +247,189 @@ def run_rule_now(rule_id: str, *, schedule_file: Path | None = None) -> int:
         return 2
     if not rule.enabled:
         print(f"Rule {rule_id!r} is disabled; running anyway.", file=sys.stderr)
-    print(f"Running rule {rule.id} for repos={rule.repos}", file=sys.stderr)
-    code = run_rule(rule)
+    if scan_limit is not None and scan_limit < 1:
+        print("--scan-limit must be >= 1", file=sys.stderr)
+        return 2
+
+    if not foreground:
+        return _spawn_rule_run(
+            rule.id,
+            schedule_path=schedule_path,
+            settings=settings,
+            scan_limit=scan_limit,
+        )
+    return _run_rule_foreground(
+        rule,
+        settings=settings,
+        scan_limit=scan_limit,
+    )
+
+
+def _active_manual_pid(state: SchedulerState) -> int | None:
+    pid = state.run_pid
+    if pid is None:
+        return None
+    if process_is_alive(pid):
+        return pid
+    return None
+
+
+def _spawn_rule_run(
+    rule_id: str,
+    *,
+    schedule_path: Path,
+    settings: Settings,
+    scan_limit: int | None,
+) -> int:
+    state_file = state_path(settings.nexus_cache_dir)
+    state = load_state(state_file)
+    daemon_pid = running_pid(pid_path(settings.nexus_cache_dir))
+    manual_pid = _active_manual_pid(state)
+
+    if manual_pid is not None:
+        print(
+            f"A manual run is already active (pid={manual_pid}, "
+            f"rule={state.current_rule!r}). "
+            "Watch: nexus-control-cli schedule status -m",
+            file=sys.stderr,
+        )
+        return 1
+    if daemon_pid is not None and state.busy:
+        print(
+            f"Scheduler daemon is busy with {state.current_rule!r} "
+            f"(pid={daemon_pid}). "
+            "Watch: nexus-control-cli schedule status -m",
+            file=sys.stderr,
+        )
+        return 1
+    if state.busy:
+        state.busy = False
+        state.current_rule = None
+        state.run_pid = None
+        state.clear_progress()
+        save_state(state_file, state)
+
+    env = os.environ.copy()
+    env[ENV_RUN_FOREGROUND] = "1"
+    cmd = [
+        sys.executable,
+        "-m",
+        "nexus_control.cli",
+        "schedule",
+        "_run",
+        rule_id,
+        "--schedule-file",
+        str(schedule_path),
+    ]
+    if scan_limit is not None:
+        cmd.extend(["--scan-limit", str(scan_limit)])
+    with open(os.devnull, "rb") as devnull_in, open(os.devnull, "ab") as devnull_out:
+        proc = __import__("subprocess").Popen(
+            cmd,
+            stdin=devnull_in,
+            stdout=devnull_out,
+            stderr=devnull_out,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+    time.sleep(0.4)
+    if proc.poll() is not None:
+        print(
+            f"Background run failed to start (exit={proc.returncode}). "
+            f"Check {settings.log_file}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"Started rule {rule_id!r} in background (pid={proc.pid}).\n"
+        f"Progress: nexus-control-cli schedule status -m\n"
+        f"Log: {settings.log_file}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _run_rule_foreground(
+    rule: ScheduleRule,
+    *,
+    settings: Settings,
+    scan_limit: int | None,
+) -> int:
+    effective = scan_limit if scan_limit is not None else rule.scan_limit
+    print(
+        f"Running rule {rule.id} for repos={rule.repos}"
+        + (f" scan_limit={effective}" if effective is not None else ""),
+        file=sys.stderr,
+    )
+
+    state_file = state_path(settings.nexus_cache_dir)
+    state = load_state(state_file)
+    daemon_pid = running_pid(pid_path(settings.nexus_cache_dir))
+    claim_busy = not (daemon_pid is not None and state.busy)
+
+    from nexus_control.scheduler.progress import StateProgressSink
+
+    started = iso_now()
+    sink = None
+    on_repo_start = None
+    if claim_busy:
+        state.busy = True
+        state.current_rule = rule.id
+        state.run_pid = os.getpid()
+        state.clear_progress()
+        save_state(state_file, state)
+        sink = StateProgressSink(state_file, state)
+
+        def _on_repo_start(repo: str) -> None:
+            state.current_repo = repo
+            state.progress_message = f"Starting repo {repo}"
+            state.progress_updated_at = iso_now()
+            save_state(state_file, state)
+
+        on_repo_start = _on_repo_start
+    else:
+        logger.info(
+            "Manual run of %s while daemon busy with %s; "
+            "last_runs will still be recorded",
+            rule.id,
+            state.current_rule,
+        )
+
+    code = 1
+    message = ""
+    try:
+        code = run_rule(
+            rule,
+            on_progress=sink,
+            on_repo_start=on_repo_start,
+            scan_limit=scan_limit,
+        )
+        message = f"manual exit={code}"
+    except KeyboardInterrupt:
+        logger.warning("Manual rule %s interrupted", rule.id)
+        code = 130
+        message = "manual interrupted"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Manual rule %s failed: %s", rule.id, exc)
+        code = 1
+        message = f"manual error: {exc}"
+    finally:
+        latest = load_state(state_file)
+        latest.last_runs[rule.id] = RuleRunRecord(
+            rule_id=rule.id,
+            started_at=started,
+            finished_at=iso_now(),
+            exit_code=code,
+            message=message,
+            skipped=False,
+        )
+        if claim_busy and latest.current_rule == rule.id:
+            latest.busy = False
+            latest.current_rule = None
+            latest.run_pid = None
+            latest.clear_progress()
+        save_state(state_file, latest)
     try:
         notify_rule_finished(settings, rule, code)
     except Exception:  # noqa: BLE001
@@ -253,7 +530,10 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
         lock.release()
         return 2
 
-    last_fire_keys: set[str] = set()
+    # Persist handled cron slots across restarts so catch-up queue works
+    # after a long job without replaying ancient fires on cold start.
+    _seed_past_fires(config, state, grace_seconds=_STARTUP_GRACE_SECONDS)
+    save_state(state_file, state)
     _refresh_next_fires(config, state, state_file)
 
     while not stop_flag:
@@ -262,7 +542,9 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
             try:
                 config = load_schedule(schedule_path)
                 state.last_reload_at = iso_now()
-                last_fire_keys.clear()
+                # Не сбрасываем last_fires — иначе сегодняшние слоты уйдут
+                # в очередь повторно. Только досеиваем «старые» для новых rules.
+                _seed_past_fires(config, state, grace_seconds=_STARTUP_GRACE_SECONDS)
                 _refresh_next_fires(config, state, state_file)
                 logger.info(
                     "Reloaded schedule (%d rules, tz=%s→%s, overlap=%s)",
@@ -274,7 +556,7 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
             except ScheduleStoreError as exc:
                 logger.error("Reload failed: %s", exc)
 
-        due = _due_rules(config, last_fire_keys)
+        due = _due_rules(config, state.last_fires)
         if due:
             for rule, fire_at, fire_key in due:
                 if stop_flag:
@@ -293,20 +575,15 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
                         message=f"skipped: busy with {state.current_rule}",
                         skipped=True,
                     )
-                    last_fire_keys.add(fire_key)
+                    _mark_fire_handled(state, rule.id, fire_key)
                     save_state(state_file, state)
                     continue
-                # queue/overlap: v1 трактует queue как последовательный wait
-                # (мы и так последовательны); overlap — тоже sequential в одном
-                # процессе (честный parallel overlap отложен).
+                # queue (default) / overlap: последовательная очередь.
+                # Слот, чьё время уже наступило, ждёт окончания текущего job
+                # и стартует следом (catch-up без окна 90с).
+                # Честный parallel overlap отложен.
                 _execute_rule(
-                    settings,
-                    rule,
-                    fire_at,
-                    fire_key,
-                    state,
-                    state_file,
-                    last_fire_keys,
+                    settings, rule, fire_at, fire_key, state, state_file
                 )
             _refresh_next_fires(config, state, state_file)
             continue
@@ -372,8 +649,9 @@ def _execute_rule(
     fire_key: str,
     state: SchedulerState,
     state_file: Path,
-    last_fire_keys: set[str],
 ) -> None:
+    from nexus_control.scheduler.progress import StateProgressSink
+
     logger.info(
         "Firing rule %s at %s repos=%s",
         rule.id,
@@ -382,13 +660,22 @@ def _execute_rule(
     )
     state.busy = True
     state.current_rule = rule.id
+    state.clear_progress()
     started = iso_now()
     save_state(state_file, state)
+    sink = StateProgressSink(state_file, state)
+
+    def _on_repo_start(repo: str) -> None:
+        state.current_repo = repo
+        state.progress_message = f"Starting repo {repo}"
+        state.progress_updated_at = iso_now()
+        save_state(state_file, state)
+
     code = 1
     message = ""
     try:
         with _vk_poll_during_job(settings):
-            code = run_rule(rule)
+            code = run_rule(rule, on_progress=sink, on_repo_start=_on_repo_start)
         message = f"exit={code}"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Rule %s failed: %s", rule.id, exc)
@@ -397,6 +684,7 @@ def _execute_rule(
     finally:
         state.busy = False
         state.current_rule = None
+        state.clear_progress()
         state.last_runs[rule.id] = RuleRunRecord(
             rule_id=rule.id,
             started_at=started,
@@ -405,7 +693,7 @@ def _execute_rule(
             message=message,
             skipped=False,
         )
-        last_fire_keys.add(fire_key)
+        _mark_fire_handled(state, rule.id, fire_key)
         save_state(state_file, state)
         try:
             notify_rule_finished(settings, rule, code)
@@ -413,38 +701,110 @@ def _execute_rule(
             logger.exception("VK Teams notify_rule_finished failed")
 
 
+def _fire_stamp(fire_at: datetime) -> str:
+    return fire_at.strftime("%Y%m%d%H%M")
+
+
+def _fire_key(rule_id: str, fire_at: datetime) -> str:
+    return f"{rule_id}:{_fire_stamp(fire_at)}"
+
+
+def _mark_fire_handled(state: SchedulerState, rule_id: str, fire_key: str) -> None:
+    stamp = fire_key.split(":", 1)[-1]
+    prev = state.last_fires.get(rule_id)
+    if prev is None or stamp > prev:
+        state.last_fires[rule_id] = stamp
+
+
+def _is_fire_handled(last_fires: dict[str, str], rule_id: str, fire_at: datetime) -> bool:
+    last = last_fires.get(rule_id)
+    if last is None:
+        return False
+    return last >= _fire_stamp(fire_at)
+
+
+def _previous_slot(
+    rule: ScheduleRule,
+    config: ScheduleConfig,
+    *,
+    now: datetime | None = None,
+) -> tuple[datetime, str] | None:
+    """Последний cron-слот правила ≤ now и его fire_key."""
+    from croniter import croniter
+    from nexus_control.scheduler.cronutil import resolve_tz, validate_cron
+
+    when = now or datetime.now(timezone.utc)
+    tz = resolve_tz(config.timezone)
+    local_now = when.astimezone(tz)
+    expr = validate_cron(rule.cron)
+    itr = croniter(expr, local_now)
+    prev = itr.get_prev(datetime)
+    if prev.tzinfo is None:
+        prev = prev.replace(tzinfo=tz)
+    else:
+        prev = prev.astimezone(tz)
+    return prev, _fire_key(rule.id, prev)
+
+
+def _seed_past_fires(
+    config: ScheduleConfig,
+    state: SchedulerState,
+    *,
+    grace_seconds: float = _STARTUP_GRACE_SECONDS,
+) -> None:
+    """Baseline для правил без истории в ``last_fires``.
+
+    Если правило уже отслеживалось — не трогаем: пропущенные слоты
+    (демон был занят или перезапущен) подхватит очередь ``_due_rules``.
+    Для нового правила помечаем устаревший prev как handled, чтобы не
+    гонять «вчерашний» cron; свежий слот (age < grace) оставляем в очереди.
+    """
+    now = datetime.now(timezone.utc)
+    for rule in config.rules:
+        if not rule.enabled:
+            continue
+        if rule.id in state.last_fires:
+            continue
+        try:
+            slot = _previous_slot(rule, config, now=now)
+            if slot is None:
+                continue
+            prev, fire_key = slot
+            age = (now.astimezone(prev.tzinfo) - prev).total_seconds()
+            if age >= grace_seconds:
+                logger.info(
+                    "Seeding baseline slot as handled (new rule): %s age=%.0fs",
+                    fire_key,
+                    age,
+                )
+                _mark_fire_handled(state, rule.id, fire_key)
+        except (CronError, ValueError, KeyError) as exc:
+            logger.error("Cannot seed rule %s: %s", rule.id, exc)
+
+
 def _due_rules(
     config: ScheduleConfig,
-    last_fire_keys: set[str],
+    last_fires: dict[str, str],
 ) -> list[tuple[ScheduleRule, datetime, str]]:
-    """Правила, у которых next_fire <= now (и ещё не отмечены в этом слоте)."""
+    """Правила с наступившим и ещё не обработанным cron-слотом.
+
+    Берётся только последний слот каждого правила (get_prev). Если демон был
+    занят долгим job, слот остаётся в очереди до выполнения — без окна 90с.
+    """
     now = datetime.now(timezone.utc)
     due: list[tuple[ScheduleRule, datetime, str]] = []
     for rule in config.rules:
         if not rule.enabled:
             continue
         try:
-            # next_fire after (now - 60s) then check if <= now
-            # Better: get previous fire? croniter get_prev
-            from croniter import croniter
-            from nexus_control.scheduler.cronutil import resolve_tz, validate_cron
-
-            tz = resolve_tz(config.timezone)
-            local_now = now.astimezone(tz)
-            expr = validate_cron(rule.cron)
-            itr = croniter(expr, local_now)
-            prev = itr.get_prev(datetime)
-            if prev.tzinfo is None:
-                prev = prev.replace(tzinfo=tz)
-            else:
-                prev = prev.astimezone(tz)
-            # Fire if previous slot is within the last 90 seconds (catch window)
-            # or if we're past it and haven't recorded this minute key yet.
-            fire_key = f"{rule.id}:{prev.strftime('%Y%m%d%H%M')}"
-            if fire_key in last_fire_keys:
+            slot = _previous_slot(rule, config, now=now)
+            if slot is None:
                 continue
-            age = (local_now - prev).total_seconds()
-            if 0 <= age < 90:
+            prev, fire_key = slot
+            if _is_fire_handled(last_fires, rule.id, prev):
+                continue
+            age = (now.astimezone(prev.tzinfo) - prev).total_seconds()
+            if age >= 0:
                 due.append((rule, prev, fire_key))
         except (CronError, ValueError, KeyError) as exc:
             logger.error("Cannot evaluate rule %s: %s", rule.id, exc)

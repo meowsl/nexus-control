@@ -33,6 +33,15 @@ from nexus_control.models import (
 from nexus_control.nexus.asset_cache import load_cached_assets, save_cached_assets
 from nexus_control.nexus.client import NexusAPIError, NexusAuthError, NexusNetworkError
 from nexus_control.nexus.errors import is_ssl_certificate_error
+from nexus_control.services.osv_offline_db import (
+    download_offline_databases,
+    ecosystems_required_for_verify,
+    missing_osv_ecosystems,
+    offline_db_ready,
+    osv_db_cache_root,
+    preferred_ecosystem_db_path,
+    with_osv_offline_flags,
+)
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.i18n import _
 from nexus_control.ui.history import HistoryModal, open_latest_report_or_message
@@ -485,6 +494,8 @@ class AssetsScreen(Screen[None]):
         self._marked: set[str] = set()
         # Включённые сканеры для verify (инициализируются в on_mount из settings)
         self._enabled_scanners: list[str] = ["grype"]
+        # Settings с offline OSV flags после preflight (None = app.settings)
+        self._pipeline_settings = None
         self._list_progress_last_ui = 0.0
         self._list_annotate_last = 0.0
         self._load_gen = 0
@@ -1310,11 +1321,139 @@ class AssetsScreen(Screen[None]):
 
         def _after(confirmed: bool | None) -> None:
             if confirmed is True:
-                self._start_pipeline(items, download=download, scan=scan, verify=verify)
+                if scan:
+                    self._preflight_osv_then_start(
+                        items, download=download, scan=scan, verify=verify
+                    )
+                else:
+                    self._pipeline_settings = None
+                    self._start_pipeline(
+                        items, download=download, scan=scan, verify=verify
+                    )
 
         self.app.push_screen(
             ConfirmModal(_("Confirm {action}", action=action), body),
             _after,
+        )
+
+    def _preflight_osv_then_start(
+        self,
+        items: list[NexusAsset | DockerTag],
+        *,
+        download: bool,
+        scan: bool,
+        verify: bool,
+    ) -> None:
+        """Проверить offline OSV DB; предложить скачать или отменить scan."""
+        settings = self.app.settings
+        required = ecosystems_required_for_verify(
+            self.repository.format,
+            list(self._enabled_scanners),
+        )
+        if required is None:
+            self._pipeline_settings = None
+            self._start_pipeline(items, download=download, scan=scan, verify=verify)
+            return
+
+        cache_root = osv_db_cache_root(settings)
+        if offline_db_ready(cache_root, required):
+            self._pipeline_settings = with_osv_offline_flags(settings)
+            self._start_pipeline(items, download=download, scan=scan, verify=verify)
+            return
+
+        if required:
+            missing = missing_osv_ecosystems(cache_root, required)
+            detail = (
+                f"{_('Missing OSV offline DB for: {ecosystems}', ecosystems=', '.join(missing))}\n"
+                f"{preferred_ecosystem_db_path(cache_root, missing[0])}"
+            )
+        else:
+            # Unmapped format: should not reach here (offline_db_ready([]) is True).
+            detail = _(
+                "No OSV offline databases found under {path}",
+                path=f"{cache_root}/osv-scalibr/",
+            )
+        body = (
+            f"{detail}\n\n"
+            f"{_('Remote OSV API is disabled: a local offline DB is required.')}\n"
+            f"{_('If you decline, verify will be cancelled.')}\n"
+            f"{_('Download the offline database now?')}"
+        )
+
+        def _after_ask(accepted: bool | None) -> None:
+            if accepted is not True:
+                self.app.push_screen(
+                    MessageModal(
+                        _("Scanning cancelled"),
+                        _(
+                            "Scanning cancelled: local OSV offline DB is required "
+                            "(remote OSV API is disabled). Download declined."
+                        ),
+                    )
+                )
+                return
+            self._download_osv_db_then_start(
+                items, download=download, scan=scan, verify=verify
+            )
+
+        self.app.push_screen(
+            ConfirmModal(
+                _("OSV offline database"),
+                body,
+                confirm_label=_("Download"),
+                cancel_label=_("Cancel"),
+            ),
+            _after_ask,
+        )
+
+    @work(thread=True)
+    def _download_osv_db_then_start(
+        self,
+        items: list[NexusAsset | DockerTag],
+        *,
+        download: bool,
+        scan: bool,
+        verify: bool,
+    ) -> None:
+        app = self.app
+        schedule_on_app(
+            app,
+            lambda: self.query_one("#job-label", Label).update(
+                _("Downloading OSV offline DB…")
+            ),
+        )
+        try:
+            required = ecosystems_required_for_verify(
+                self.repository.format,
+                list(self._enabled_scanners),
+            )
+            ecosystems = list(required or [])
+            if not ecosystems:
+                raise RuntimeError("No OSV ecosystems mapped for this repository format")
+            download_offline_databases(app.settings, ecosystems=ecosystems)
+            self._pipeline_settings = with_osv_offline_flags(app.settings)
+
+            def _start() -> None:
+                self._start_pipeline(
+                    items, download=download, scan=scan, verify=verify
+                )
+
+            schedule_on_app(app, _start)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("OSV offline DB download failed")
+            schedule_on_app(
+                app,
+                self._on_osv_db_download_failed,
+                str(exc),
+            )
+
+    def _on_osv_db_download_failed(self, message: str) -> None:
+        self._busy = False
+        self.app.push_screen(
+            MessageModal(
+                _("OSV offline DB error"),
+                _("Failed to download OSV offline DB: {error}", error=message),
+            )
         )
 
     def _start_pipeline(
@@ -1349,7 +1488,8 @@ class AssetsScreen(Screen[None]):
 
         try:
             app.ensure_client()
-            pipeline = PipelineService(app.settings, app.client)
+            settings = self._pipeline_settings or app.settings
+            pipeline = PipelineService(settings, app.client)
             summary = pipeline.run(
                 repository=self.repository.name,
                 items=items,

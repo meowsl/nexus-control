@@ -230,6 +230,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Verify entire repository": "Verify весь репозиторий",
         "Open last report": "Открыть последний отчёт",
         "Scanners (grype / trivy / both)": "Сканеры (grype / trivy / оба)",
+        "Scanners (grype / trivy / osv)": "Сканеры (grype / trivy / osv)",
+        "Enable one or more. Verify copies to *-verified only if all "
+        "enabled scanners PASS.": (
+            "Включите один или несколько. Verify копирует в *-verified "
+            "только если все включённые сканеры дали PASS."
+        ),
         "Space on file/image marks one asset": (
             "Space на файле / образе — отметить один ассет"
         ),
@@ -262,7 +268,104 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Scanners (grype, trivy, or both) [grype]": (
             "Сканеры (grype, trivy или оба) [grype]"
         ),
+        "Scanners (grype, trivy, osv — comma-separated) [grype]": (
+            "Сканеры (grype, trivy, osv — через запятую) [grype]"
+        ),
         "Wrote {path}": "Записано {path}",
+        (
+            "DefectDojo can receive vulnerability findings after each verify "
+            "(FAIL assets → Generic Findings Import)."
+        ): (
+            "DefectDojo может принимать findings по уязвимостям после каждого "
+            "verify (FAIL-ассеты → Generic Findings Import)."
+        ),
+        "Enable DefectDojo integration?": "Включить интеграцию с DefectDojo?",
+        "DefectDojo URL [{default}]": "DefectDojo URL [{default}]",
+        "Verify DefectDojo TLS certificates? [Y/n]": (
+            "Проверять TLS-сертификаты DefectDojo? [Y/n]"
+        ),
+        (
+            "API key: DefectDojo → profile (top right) → API Key "
+            "(or create a dedicated user + token)."
+        ): (
+            "API-ключ: DefectDojo → профиль (справа сверху) → API Key "
+            "(или отдельный пользователь + токен)."
+        ),
+        "DefectDojo API key: ": "API-ключ DefectDojo: ",
+        "API key is required": "Требуется API-ключ",
+        "DefectDojo API key saved (encrypted) under {path}": (
+            "API-ключ DefectDojo сохранён (encrypted) в {path}"
+        ),
+        "DefectDojo setup": "Настройка DefectDojo",
+        "DefectDojo enabled. Config: {path}; API key vault: {vault}": (
+            "DefectDojo включён. Конфиг: {path}; vault API-ключа: {vault}"
+        ),
+        "DefectDojo disabled": "DefectDojo выключен",
+        (
+            "A webhook can receive a JSON summary after each verify "
+            "(TUI / CLI / scheduler) for your own tooling."
+        ): (
+            "Вебхук может получать JSON-сводку после каждого verify "
+            "(TUI / CLI / планировщик) для вашей автоматизации."
+        ),
+        "Enable webhook integration?": "Включить интеграцию вебхука?",
+        "Webhook URL [{default}]": "URL вебхука [{default}]",
+        "Verify webhook TLS certificates? [Y/n]": (
+            "Проверять TLS-сертификаты вебхука? [Y/n]"
+        ),
+        (
+            "Auth: none (no credentials) | bearer (token) | "
+            "basic (login/password) | header (custom HTTP header)"
+        ): (
+            "Авторизация: none (без кред) | bearer (токен) | "
+            "basic (логин/пароль) | header (свой HTTP-заголовок)"
+        ),
+        "Webhook auth [{default}]": "Авторизация вебхука [{default}]",
+        "Choose: none, bearer, basic, or header": (
+            "Выберите: none, bearer, basic или header"
+        ),
+        "Webhook Bearer token: ": "Bearer-токен вебхука: ",
+        "Token is required": "Требуется токен",
+        "Webhook username: ": "Имя пользователя вебхука: ",
+        "Username is required": "Требуется имя пользователя",
+        "Webhook password: ": "Пароль вебхука: ",
+        "Custom header name [{default}]": "Имя заголовка [{default}]",
+        "Custom header value: ": "Значение заголовка: ",
+        "Header value is required": "Требуется значение заголовка",
+        "Webhook secrets saved (encrypted) under {path}": (
+            "Секреты вебхука сохранены (encrypted) в {path}"
+        ),
+        "Webhook setup": "Настройка вебхука",
+        "Webhook enabled. Config: {path}; secrets vault: {vault}": (
+            "Вебхук включён. Конфиг: {path}; vault секретов: {vault}"
+        ),
+        "Webhook disabled": "Вебхук выключен",
+        "Missing OSV offline DB for: {ecosystems}": (
+            "Нет локальной OSV offline DB для: {ecosystems}"
+        ),
+        "No OSV offline databases found under {path}": (
+            "Нет локальных OSV offline DB в {path}"
+        ),
+        "Remote OSV API is disabled: a local offline DB is required.": (
+            "Удалённый OSV API отключён: нужна локальная offline DB."
+        ),
+        "If you decline, verify will be cancelled.": (
+            "При отказе verify будет отменён."
+        ),
+        "Download the offline database now?": "Скачать offline DB сейчас?",
+        "OSV offline database": "OSV offline DB",
+        "Downloading OSV offline DB…": "Скачивание OSV offline DB…",
+        "OSV offline DB error": "Ошибка OSV offline DB",
+        "Failed to download OSV offline DB: {error}": (
+            "Не удалось скачать OSV offline DB: {error}"
+        ),
+        (
+            "Scanning cancelled: local OSV offline DB is required "
+            "(remote OSV API is disabled). Download declined."
+        ): (
+            "Сканирование отменено: нужна локальная OSV offline DB "
+            "(удалённый OSV API отключён). Скачивание отклонено."
+        ),
         "Nexus authentication": "Аутентификация Nexus",
         (
             "Credentials are stored encrypted until the Nexus session expires "

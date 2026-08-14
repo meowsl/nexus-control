@@ -82,12 +82,16 @@ def test_write_toml_strips_secrets(xdg_home: Path) -> None:
             "nexus_username": "admin",
             "nexus_password": "secret",
             "vk_teams_token": "bot-secret",
+            "defectdojo_api_key": "dd-secret",
+            "webhook_token": "wh-secret",
         },
     )
     data = read_toml(path)
     assert "nexus_password" not in data
     assert "nexus_username" not in data
     assert "vk_teams_token" not in data
+    assert "defectdojo_api_key" not in data
+    assert "webhook_token" not in data
 
 
 def test_peek_and_needs_setup(xdg_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,6 +171,8 @@ def test_wizard_writes_config(
             "http://wizard:8081",
             "n",
             "trivy",
+            "n",  # skip DefectDojo
+            "n",  # skip webhook
         ]
     )
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
@@ -180,7 +186,9 @@ def test_wizard_writes_config(
     assert data["nexus_url"] == "http://wizard:8081"
     assert data["nexus_verify_ssl"] is False
     assert data["scanners"] == "trivy"
+    assert data.get("defectdojo_enabled") is False
     assert "nexus_password" not in data
+    assert "defectdojo_api_key" not in data
 
 
 def test_wizard_non_tty_raises(xdg_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

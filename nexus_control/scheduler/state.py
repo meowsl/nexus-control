@@ -35,8 +35,27 @@ class SchedulerState:
     last_reload_at: str | None = None
     busy: bool = False
     current_rule: str | None = None
+    current_repo: str | None = None
     last_runs: dict[str, RuleRunRecord] = field(default_factory=dict)
     next_fires: dict[str, str] = field(default_factory=dict)
+    # rule_id → YYYYMMDDHHMM of last handled cron slot (run or skipped).
+    last_fires: dict[str, str] = field(default_factory=dict)
+    # Pid of a detached ``schedule run`` (not the cron daemon).
+    run_pid: int | None = None
+    # Live progress for ``schedule status --monitor`` (daemon / manual jobs).
+    progress_pct: float | None = None
+    progress_stage: str = ""
+    progress_asset: str = ""
+    progress_message: str = ""
+    progress_updated_at: str | None = None
+
+    def clear_progress(self) -> None:
+        self.current_repo = None
+        self.progress_pct = None
+        self.progress_stage = ""
+        self.progress_asset = ""
+        self.progress_message = ""
+        self.progress_updated_at = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,10 +64,18 @@ class SchedulerState:
             "last_reload_at": self.last_reload_at,
             "busy": self.busy,
             "current_rule": self.current_rule,
+            "current_repo": self.current_repo,
             "last_runs": {
                 key: asdict(value) for key, value in self.last_runs.items()
             },
             "next_fires": dict(self.next_fires),
+            "last_fires": dict(self.last_fires),
+            "run_pid": self.run_pid,
+            "progress_pct": self.progress_pct,
+            "progress_stage": self.progress_stage,
+            "progress_asset": self.progress_asset,
+            "progress_message": self.progress_message,
+            "progress_updated_at": self.progress_updated_at,
         }
 
     @classmethod
@@ -70,14 +97,42 @@ class SchedulerState:
         next_fires = data.get("next_fires") or {}
         if not isinstance(next_fires, dict):
             next_fires = {}
+        last_fires_raw = data.get("last_fires") or {}
+        if not isinstance(last_fires_raw, dict):
+            last_fires_raw = {}
+        last_fires = {
+            str(k): str(v)
+            for k, v in last_fires_raw.items()
+            if str(v).strip()
+        }
+        run_pid_raw = data.get("run_pid")
+        run_pid: int | None
+        try:
+            run_pid = int(run_pid_raw) if run_pid_raw is not None else None
+        except (TypeError, ValueError):
+            run_pid = None
+        pct_raw = data.get("progress_pct")
+        progress_pct: float | None
+        try:
+            progress_pct = float(pct_raw) if pct_raw is not None else None
+        except (TypeError, ValueError):
+            progress_pct = None
         return cls(
             started_at=data.get("started_at"),
             pid=data.get("pid"),
             last_reload_at=data.get("last_reload_at"),
             busy=bool(data.get("busy", False)),
             current_rule=data.get("current_rule"),
+            current_repo=data.get("current_repo"),
             last_runs=last_runs,
             next_fires={str(k): str(v) for k, v in next_fires.items()},
+            last_fires=last_fires,
+            run_pid=run_pid,
+            progress_pct=progress_pct,
+            progress_stage=str(data.get("progress_stage") or ""),
+            progress_asset=str(data.get("progress_asset") or ""),
+            progress_message=str(data.get("progress_message") or ""),
+            progress_updated_at=data.get("progress_updated_at"),
         )
 
 

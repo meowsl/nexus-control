@@ -16,6 +16,11 @@ from nexus_control.nexus.asset_cache import (
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
 from nexus_control.services.scan_checkpoint import checkpoint_is_valid
+from nexus_control.nexus.uploads import (
+    is_scan_package_asset,
+    looks_like_nuget_metadata_path,
+)
+from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
 
 logger = logging.getLogger(__name__)
@@ -88,16 +93,19 @@ def filter_assets_for_pipeline(
     *,
     path_prefix: str | None = None,
     limit: int | None = None,
+    scan_limit: int | None = None,
 ) -> list[NexusAsset]:
     """Отфильтровать ассеты для pipeline.
 
     Sidecar'ы (``.md5``/…) **оставляем** в списке — pipeline сам skip'ает scan
-    и копирует их вместе с PASS. ``limit`` считает только non-sidecar.
+    и копирует их вместе с PASS. ``limit`` / ``scan_limit`` считают только
+    non-sidecar.
     """
     selected, _total, _stats = _select_assets(
         assets,
         path_prefix=path_prefix,
         limit=limit,
+        scan_limit=scan_limit,
     )
     return selected
 
@@ -109,6 +117,7 @@ def select_assets_for_cli(
     *,
     path_prefix: str | None = None,
     limit: int | None = None,
+    scan_limit: int | None = None,
     refresh: bool = False,
     scanners: Sequence[str] | None = None,
     scanner_versions: Mapping[str, str | None] | None = None,
@@ -120,6 +129,10 @@ def select_assets_for_cli(
     При чтении Nexus и дискового кэша полный список не материализуется. Sidecar
     сохраняются только для выбранных main-артефактов, поэтому качество verify
     не меняется.
+
+    ``limit`` — max ассетов, которым нужен download/re-download.
+    ``scan_limit`` — max main-ассетов, попадающих в pipeline (download+scan-only);
+    удобно для дебага на большой выборке.
     """
     ttl = settings.assets_cache_ttl
     if not refresh and ttl > 0:
@@ -142,6 +155,7 @@ def select_assets_for_cli(
                 stream,
                 path_prefix=path_prefix,
                 limit=limit,
+                scan_limit=scan_limit,
                 settings=settings,
                 client=client,
                 scanners=scanners,
@@ -161,6 +175,7 @@ def select_assets_for_cli(
     selector = _AssetSelector(
         path_prefix=path_prefix,
         limit=limit,
+        scan_limit=scan_limit,
         settings=settings,
         client=client,
         scanners=scanners,
@@ -170,7 +185,7 @@ def select_assets_for_cli(
         progress_source="nexus",
     )
 
-    if limit is not None:
+    if limit is not None or scan_limit is not None:
         for page_number, page in enumerate(
             client.iter_asset_pages(repository),
             start=1,
@@ -188,9 +203,13 @@ def select_assets_for_cli(
             selector.emit_progress(force=True)
             if selector.limit_reached:
                 logger.info(
-                    "Stopped Nexus listing after download limit=%d (%d assets inspected)",
+                    "Stopped Nexus listing after limit/scan_limit "
+                    "(download_limit=%s scan_limit=%s, inspected=%d, "
+                    "selected_mains=%d)",
                     limit,
+                    scan_limit,
                     selector.total,
+                    len(selector._mains),
                 )
                 break
         # Частичный результат нельзя сохранять как полный asset-list cache.
@@ -229,6 +248,7 @@ def _select_assets(
     *,
     path_prefix: str | None,
     limit: int | None,
+    scan_limit: int | None = None,
     settings: Settings | None = None,
     client: NexusClient | None = None,
     scanners: Sequence[str] | None = None,
@@ -240,6 +260,7 @@ def _select_assets(
     selector = _AssetSelector(
         path_prefix=path_prefix,
         limit=limit,
+        scan_limit=scan_limit,
         settings=settings,
         client=client,
         scanners=scanners,
@@ -261,6 +282,7 @@ class _AssetSelector:
         *,
         path_prefix: str | None,
         limit: int | None,
+        scan_limit: int | None = None,
         settings: Settings | None = None,
         client: NexusClient | None = None,
         scanners: Sequence[str] | None = None,
@@ -272,6 +294,7 @@ class _AssetSelector:
     ) -> None:
         self.prefix = (path_prefix or "").strip().lstrip("/")
         self.limit = limit
+        self.scan_limit = scan_limit
         self.total = 0
         self.stats = AssetSelectionStats()
         self._mains: list[NexusAsset] = []
@@ -292,10 +315,11 @@ class _AssetSelector:
 
     @property
     def limit_reached(self) -> bool:
-        return (
-            self.limit is not None
-            and self.stats.download_needed >= self.limit
-        )
+        if self.limit is not None and self.stats.download_needed >= self.limit:
+            return True
+        if self.scan_limit is not None and len(self._mains) >= self.scan_limit:
+            return True
+        return False
 
     def emit_progress(self, *, force: bool = False) -> None:
         if self._on_progress is None:
@@ -315,6 +339,15 @@ class _AssetSelector:
             self._sidecars.setdefault(main_path, []).append(asset)
             self.emit_progress()
             return
+        # NuGet V3 registration/index и т.п. — не пакеты, в verify не берём.
+        if looks_like_nuget_metadata_path(path) or not is_scan_package_asset(
+            asset.format, path
+        ):
+            self.emit_progress()
+            return
+        if self.scan_limit is not None and len(self._mains) >= self.scan_limit:
+            self.emit_progress()
+            return
         if self._downloader is not None and self._settings is not None:
             inspection = self._downloader.inspect_asset(asset)
             if inspection.needs_download:
@@ -325,23 +358,28 @@ class _AssetSelector:
                     self.emit_progress()
                     return
                 self.stats.download_needed += 1
-            elif (
-                self._use_checkpoints
-                and inspection.local_path is not None
-                and checkpoint_is_valid(
+            elif self._use_checkpoints and inspection.local_path is not None:
+                ck_scanners = checkpoint_scanners_for_asset(
+                    self._scanners,
+                    asset_fmt=asset.format,
+                    asset_path=path,
+                    local_path=inspection.local_path,
+                )
+                if checkpoint_is_valid(
                     settings=self._settings,
                     asset=asset,
                     local_path=inspection.local_path,
-                    scanners=self._scanners,
+                    scanners=ck_scanners,
                     scanner_versions=self._scanner_versions,
-                )
-            ):
-                self.stats.checkpoint_skipped += 1
-                self.emit_progress()
-                return
+                ):
+                    self.stats.checkpoint_skipped += 1
+                    self.emit_progress()
+                    return
+                self.stats.scan_only += 1
             else:
                 self.stats.scan_only += 1
         elif self.limit is not None and len(self._mains) >= self.limit:
+            # Без downloader ``limit`` трактуем как max mains (legacy).
             self.emit_progress()
             return
         self._mains.append(asset)

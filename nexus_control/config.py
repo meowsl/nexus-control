@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 ScannerDockerMode = Literal["auto", "true", "false"]
 GrypeDockerMode = ScannerDockerMode  # совместимость
+VerifiedLinkMode = Literal["auto", "copy"]
+WebhookAuthMode = Literal["none", "bearer", "basic", "header"]
 
 # Путь TOML для settings_customise_sources (задаётся в load_settings).
 _active_toml_path: Path | None = None
@@ -79,11 +81,16 @@ class Settings(BaseSettings):
     reports_root: Path = Path("~/nexus-control/reports")
     verified_root: Path = Path("~/nexus-control")
 
-    # Сканеры (через запятую: grype, trivy). Можно менять в TUI (клавиша s).
+    # Сканеры (через запятую: grype, trivy, osv). Можно менять в TUI (клавиша s).
     scanners: str = "grype"
     # Параллельная обработка ассетов в pipeline (download/scan/verify).
-    # 1 = строго последовательно; 4–8 обычно оптимально для сети + I/O.
-    pipeline_workers: int = Field(default=4, ge=1)
+    # 0 = auto от CPU/RAM; 1 = строго последовательно; явные 2–8 — override.
+    pipeline_workers: int = Field(default=0, ge=0)
+    # Глобальный лимит одновременных процессов сканеров (все ассеты × сканеры).
+    # 0 = auto от CPU/RAM (формула в resource_governor).
+    max_scanner_procs: int = Field(default=0, ge=0)
+    # Stop new downloads if the data volume is this full (scan local only).
+    disk_critical_watermark: float = Field(default=0.95, ge=0.50, le=0.99)
     # PASS checkpoint для неизменённых локальных ассетов. После TTL скан
     # выполняется заново, чтобы учитывать обновления vulnerability DB.
     scan_checkpoint_ttl: int = Field(default=86400, ge=0)
@@ -145,6 +152,22 @@ class Settings(BaseSettings):
     trivy_docker_image: str = "aquasec/trivy:latest"
     trivy_extra_args: str = ""
 
+    # OSV-Scanner
+    osv_binary: str = "osv-scanner"
+    osv_use_docker: ScannerDockerMode = "auto"
+    osv_docker_image: str = "ghcr.io/google/osv-scanner:latest"
+    osv_extra_args: str = ""
+    # Корень кэша offline DB (внутри: osv-scalibr/<Eco>/all.zip).
+    # Env: OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY (как у osv-scanner docs).
+    osv_local_db_cache_dir: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "osv_local_db_cache_dir",
+            "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY",
+            "OSV_LOCAL_DB_CACHE_DIR",
+        ),
+    )
+
     # Docker / skopeo
     docker_binary: str = "docker"
     skopeo_binary: str = "skopeo"
@@ -153,9 +176,63 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file: Path = Path("~/nexus-control/logs/nexus-control.log")
 
+    # DefectDojo (опционально). API-ключ — только env / vault, не TOML.
+    defectdojo_enabled: bool = False
+    defectdojo_url: str = ""
+    defectdojo_api_key: str = Field(
+        default="",
+        description="DefectDojo API token (env DEFECTDOJO_API_KEY or vault)",
+        validation_alias=AliasChoices(
+            "defectdojo_api_key",
+            "DEFECTDOJO_API_KEY",
+        ),
+    )
+    defectdojo_verify_ssl: bool = True
+    defectdojo_product_name: str = "nexus-control"
+    # Пусто → engagement = имя репозитория Nexus.
+    defectdojo_engagement_name: str = ""
+    defectdojo_product_type_name: str = "Nexus"
+
+    # Generic webhook after verify (TUI / CLI / scheduler).
+    # Secrets (token / password / header value) — env or vault, not TOML.
+    webhook_enabled: bool = False
+    webhook_url: str = ""
+    webhook_auth: WebhookAuthMode = "none"
+    webhook_token: str = Field(
+        default="",
+        description="Bearer token (env WEBHOOK_TOKEN or vault)",
+        validation_alias=AliasChoices("webhook_token", "WEBHOOK_TOKEN"),
+    )
+    webhook_username: str = Field(
+        default="",
+        validation_alias=AliasChoices("webhook_username", "WEBHOOK_USERNAME"),
+    )
+    webhook_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("webhook_password", "WEBHOOK_PASSWORD"),
+    )
+    webhook_header_name: str = ""
+    webhook_header_value: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "webhook_header_value",
+            "WEBHOOK_HEADER_VALUE",
+        ),
+    )
+    webhook_verify_ssl: bool = True
+    webhook_timeout: float = Field(default=15.0, ge=1.0, le=120.0)
+
     # Перезапись
     overwrite_downloads: bool = False
     overwrite_verified: bool = False
+    # PASS → *-verified: auto = hardlink (same FS) else copy; copy = всегда copy2.
+    verified_link_mode: VerifiedLinkMode = Field(
+        default="auto",
+        validation_alias=AliasChoices(
+            "verified_link_mode",
+            "VERIFIED_LINK_MODE",
+        ),
+    )
 
     @classmethod
     def settings_customise_sources(
@@ -193,6 +270,13 @@ class Settings(BaseSettings):
             raise ValueError("path value must not be empty")
         return _expand_path(str(value))
 
+    @field_validator("osv_local_db_cache_dir", mode="before")
+    @classmethod
+    def _expand_optional_cache_dir(cls, value: object) -> Path | None:
+        if value is None or value == "":
+            return None
+        return _expand_path(str(value))
+
     @field_validator("nexus_url", mode="before")
     @classmethod
     def _normalize_url(cls, value: object) -> str:
@@ -200,14 +284,52 @@ class Settings(BaseSettings):
             raise ValueError("NEXUS_URL is required")
         return str(value).strip().rstrip("/")
 
-    @field_validator("nexus_username", "nexus_password", mode="before")
+    @field_validator(
+        "nexus_username",
+        "nexus_password",
+        "defectdojo_api_key",
+        "webhook_token",
+        "webhook_username",
+        "webhook_password",
+        "webhook_header_value",
+        mode="before",
+    )
     @classmethod
     def _coerce_optional_secret(cls, value: object) -> str:
         if value is None:
             return ""
         return str(value)
 
-    @field_validator("grype_use_docker", "trivy_use_docker", mode="before")
+    @field_validator("defectdojo_url", "webhook_url", mode="before")
+    @classmethod
+    def _normalize_optional_http_url(cls, value: object) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().rstrip("/")
+        if not text:
+            return ""
+        if "://" not in text:
+            raise ValueError(
+                f"Invalid URL {text!r}: expected scheme, "
+                "e.g. https://hooks.example.com/scan"
+            )
+        return text
+
+    @field_validator("webhook_auth", mode="before")
+    @classmethod
+    def _normalize_webhook_auth(cls, value: object) -> str:
+        text = str(value or "none").strip().lower()
+        if text in {"password", "login", "login-password", "userpass"}:
+            return "basic"
+        if text not in {"none", "bearer", "basic", "header"}:
+            raise ValueError(
+                f"Invalid webhook_auth={text!r}; expected none|bearer|basic|header"
+            )
+        return text
+
+    @field_validator(
+        "grype_use_docker", "trivy_use_docker", "osv_use_docker", mode="before"
+    )
     @classmethod
     def _normalize_scanner_docker(cls, value: object) -> str:
         text = str(value).strip().lower()
@@ -275,6 +397,14 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid LOG_LEVEL: {value}")
         return level
 
+    @field_validator("verified_link_mode", mode="before")
+    @classmethod
+    def _normalize_verified_link_mode(cls, value: object) -> str:
+        text = str(value if value is not None else "auto").strip().lower()
+        if text not in {"auto", "copy"}:
+            raise ValueError("verified_link_mode must be auto or copy")
+        return text
+
     @model_validator(mode="after")
     def _post_init_dirs(self) -> Settings:
         ensure_dir(self.download_root)
@@ -315,6 +445,13 @@ class Settings(BaseSettings):
             return []
         return shlex.split(self.trivy_extra_args)
 
+    @property
+    def osv_extra_args_list(self) -> list[str]:
+        """Безопасный разбор OSV_EXTRA_ARGS (без shell)."""
+        if not self.osv_extra_args.strip():
+            return []
+        return shlex.split(self.osv_extra_args)
+
     def verified_repo_dir(self, repository_name: str) -> Path:
         """Вернуть ``VERIFIED_ROOT/<repository>-verified``."""
         from nexus_control.utils.safe_path import sanitize_repo_name
@@ -338,6 +475,8 @@ class Settings(BaseSettings):
             "verified_root": str(self.verified_root),
             "scanners": self.scanners,
             "pipeline_workers": self.pipeline_workers,
+            "max_scanner_procs": self.max_scanner_procs,
+            "disk_critical_watermark": self.disk_critical_watermark,
             "scan_checkpoint_ttl": self.scan_checkpoint_ttl,
             "scan_history_keep": self.scan_history_keep,
             "vk_teams_notify": self.vk_teams_notify,
@@ -349,8 +488,30 @@ class Settings(BaseSettings):
             "grype_use_docker": self.grype_use_docker,
             "trivy_binary": self.trivy_binary,
             "trivy_use_docker": self.trivy_use_docker,
+            "osv_binary": self.osv_binary,
+            "osv_use_docker": self.osv_use_docker,
             "log_level": self.log_level,
             "log_file": str(self.log_file),
+            "defectdojo_enabled": self.defectdojo_enabled,
+            "defectdojo_url": self.defectdojo_url,
+            "defectdojo_api_key": "***" if self.defectdojo_api_key else "",
+            "defectdojo_verify_ssl": self.defectdojo_verify_ssl,
+            "defectdojo_product_name": self.defectdojo_product_name,
+            "defectdojo_engagement_name": self.defectdojo_engagement_name,
+            "defectdojo_product_type_name": self.defectdojo_product_type_name,
+            "webhook_enabled": self.webhook_enabled,
+            "webhook_url": self.webhook_url,
+            "webhook_auth": self.webhook_auth,
+            "webhook_token": "***" if self.webhook_token else "",
+            "webhook_username": self.webhook_username,
+            "webhook_password": "***" if self.webhook_password else "",
+            "webhook_header_name": self.webhook_header_name,
+            "webhook_header_value": "***" if self.webhook_header_value else "",
+            "webhook_verify_ssl": self.webhook_verify_ssl,
+            "webhook_timeout": self.webhook_timeout,
+            "overwrite_downloads": self.overwrite_downloads,
+            "overwrite_verified": self.overwrite_verified,
+            "verified_link_mode": self.verified_link_mode,
         }
 
 

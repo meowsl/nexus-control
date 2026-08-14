@@ -496,7 +496,7 @@ def test_execute_rule_polls_vk_while_busy(tmp_path: Path) -> None:
         time.sleep(0.05)
         return 0
 
-    def fake_run(_rule: object) -> int:
+    def fake_run(_rule: object, **_kwargs: object) -> int:
         time.sleep(0.2)
         return 0
 
@@ -513,7 +513,6 @@ def test_execute_rule_polls_vk_while_busy(tmp_path: Path) -> None:
                     "x:202601010000",
                     SchedulerState(),
                     tmp_path / "state.json",
-                    set(),
                 )
     assert polls
     assert all(p <= 3 for p in polls)

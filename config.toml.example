@@ -18,10 +18,31 @@ locale = "ru"
 # Refresh (r) всегда с сервера. По умолчанию 86400 (сутки).
 # assets_cache_ttl = 86400
 
-# scanners = "grype"          # или "trivy", или "grype,trivy"
-# Параллельная обработка ассетов (download/scan/verify). 1 = последовательно.
-# CLI: --workers N. Для чистой сети обычно 4–8; сканеры CPU-bound — не раздувайте.
-# pipeline_workers = 4
+# scanners = "grype"          # или "trivy", "osv", или "grype,trivy,osv"
+# DefectDojo: после verify FAIL-ассеты → Generic Findings Import (reimport-scan).
+# API-ключ НЕ в TOML — vault (wizard / defectdojo configure) или DEFECTDOJO_API_KEY.
+# defectdojo_enabled = false
+# defectdojo_url = "http://localhost:8080"
+# defectdojo_verify_ssl = true
+# defectdojo_product_name = "nexus-control"
+# defectdojo_engagement_name = ""   # пусто → имя Nexus-репозитория
+# defectdojo_product_type_name = "Nexus"
+# Webhook: POST compact JSON after each verify. Secrets NOT in TOML —
+# vault (wizard / webhook configure) or WEBHOOK_TOKEN / WEBHOOK_USERNAME+PASSWORD.
+# webhook_enabled = false
+# webhook_url = "https://hooks.example.com/scan"
+# webhook_auth = "none"   # none | bearer | basic | header
+# webhook_header_name = "X-Api-Key"   # only for auth=header
+# webhook_verify_ssl = true
+# webhook_timeout = 15.0
+# Параллельная обработка ассетов (download/scan/verify). 0 = auto (CPU/RAM).
+# CLI: --workers N. Явное значение перекрывает auto.
+# pipeline_workers = 0
+# Глобальный лимит процессов сканеров (все ассеты × scanners). 0 = auto.
+# CLI: --max-scanner-procs N
+# max_scanner_procs = 0
+# Stop new downloads if the data volume is this full (default 95%).
+# disk_critical_watermark = 0.95
 # Неизменённый PASS-ассет повторно не сканируется в пределах TTL.
 # После TTL checkpoint протухает, чтобы учитывать обновления vulnerability DB.
 # 0 = всегда сканировать. По умолчанию 86400 (сутки).
@@ -44,7 +65,12 @@ locale = "ru"
 # download_root = "~/nexus-control/downloads"
 # reports_root = "~/nexus-control/reports"
 # verified_root = "~/nexus-control"
+# PASS → *-verified: auto = hardlink (same FS) else copy; copy = всегда copy2.
+# verified_link_mode = "auto"
 # log_file = "~/nexus-control/logs/nexus-control.log"
 
 # grype_use_docker = "auto"
 # trivy_use_docker = "auto"
+# osv_use_docker = "auto"
+# osv_docker_image = "ghcr.io/google/osv-scanner:latest"
+# osv_extra_args = ""

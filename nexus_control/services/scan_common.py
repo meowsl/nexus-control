@@ -1,4 +1,4 @@
-"""Общие хелперы для сканеров уязвимостей (Grype / Trivy)."""
+"""Общие хелперы для сканеров уязвимостей (Grype / Trivy / OSV)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ SEVERITY_MAP = {
     "": Severity.UNKNOWN,
 }
 
-KNOWN_SCANNERS = ("grype", "trivy")
+KNOWN_SCANNERS = ("grype", "trivy", "osv")
 
 # Checksum / signature sidecars — CVE-сканеры не запускаем; в verified копируем
 # только вместе с PASS-артефактом (см. pipeline / verifier).
@@ -97,7 +97,10 @@ def format_text_report(
 
 
 def aggregate_scan_results(scans: dict[str, ScanResult]) -> ScanResult:
-    """Сводный результат: PASS только если все сканеры PASS."""
+    """Сводный результат: PASS только если все *участвующие* сканеры PASS.
+
+    ``SKIPPED`` не участвует в вердикте (например Grype/Trivy на NuGet).
+    """
     if not scans:
         return ScanResult(
             status=ScanStatus.SKIPPED,
@@ -105,7 +108,20 @@ def aggregate_scan_results(scans: dict[str, ScanResult]) -> ScanResult:
             scanner="aggregate",
         )
 
-    verdicts = [s.verdict for s in scans.values()]
+    active = {
+        name: sc
+        for name, sc in scans.items()
+        if sc.verdict != Verdict.SKIPPED
+    }
+    if not active:
+        return ScanResult(
+            status=ScanStatus.SKIPPED,
+            verdict=Verdict.SKIPPED,
+            scanner="aggregate",
+            raw={"scanners": list(scans)},
+        )
+
+    verdicts = [s.verdict for s in active.values()]
     if any(v == Verdict.ERROR for v in verdicts):
         verdict = Verdict.ERROR
         status = ScanStatus.ERROR
@@ -115,9 +131,6 @@ def aggregate_scan_results(scans: dict[str, ScanResult]) -> ScanResult:
     elif all(v == Verdict.PASS for v in verdicts):
         verdict = Verdict.PASS
         status = ScanStatus.SUCCESS
-    elif all(v == Verdict.SKIPPED for v in verdicts):
-        verdict = Verdict.SKIPPED
-        status = ScanStatus.SKIPPED
     elif any(v == Verdict.PENDING for v in verdicts):
         verdict = Verdict.PENDING
         status = ScanStatus.PENDING
@@ -128,7 +141,7 @@ def aggregate_scan_results(scans: dict[str, ScanResult]) -> ScanResult:
     counts = SeverityCounts()
     vulns = []
     errors: list[str] = []
-    for name, sc in scans.items():
+    for name, sc in active.items():
         for v in sc.vulnerabilities:
             vulns.append(v)
             counts.increment(v.severity)
@@ -137,7 +150,7 @@ def aggregate_scan_results(scans: dict[str, ScanResult]) -> ScanResult:
 
     versions = {
         name: sc.scanner_version or sc.grype_version
-        for name, sc in scans.items()
+        for name, sc in active.items()
         if sc.scanner_version or sc.grype_version
     }
     return ScanResult(
@@ -166,5 +179,7 @@ def parse_scanner_names(value: str) -> list[str]:
         if name not in seen:
             seen.append(name)
     if not seen:
-        raise ValueError("At least one scanner must be enabled (grype and/or trivy)")
+        raise ValueError(
+            "At least one scanner must be enabled (grype, trivy, and/or osv)"
+        )
     return seen

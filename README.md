@@ -1,6 +1,6 @@
 # nexus-control
 
-Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype** и/или **Trivy** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
+Production-ready **Textual** TUI для **Nexus Sonatype CE**: просмотр репозиториев и ассетов, скачивание артефактов, сканирование через **Grype**, **Trivy** и/или **OSV-Scanner** и копирование только чистых (без уязвимостей) результатов в локальную verified-директорию.
 
 ```bash
 python -m nexus_control
@@ -21,7 +21,7 @@ python -m nexus_control
 - Мультивыбор ассетов/папок (Space), затем download или verify; либо действие на весь репозиторий
 - Фоновые workers для сети, скачивания, сканеров и копирования (UI не блокируется)
 - Потоковое скачивание с защитой от path traversal
-- Grype и/или Trivy (локально или Docker-fallback); в TUI — клавиша `s`
+- Grype / Trivy / OSV-Scanner (локально или Docker-fallback); в TUI — клавиша `s`
 - Строгая политика verify: в `<repo>-verified` только если все включённые сканеры дали PASS
 - Ротация логов в файл + панель логов в TUI (секреты маскируются)
 
@@ -44,7 +44,7 @@ UI (Textual) / CLI / scheduler  →  services (pipeline, scanners, verifier)
 - **Python 3.13+** (или `uv`, который подтянет нужный Python)
 - Целевая среда — **Linux** (TUI + POSIX-права). На Windows возможны unit-тесты и ограниченный UI
 - Доступный **Nexus Repository CE** с REST API (`/service/rest/v1`)
-- **grype** и/или **trivy** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy`)
+- **grype** / **trivy** / **osv-scanner** в `PATH` **или** Docker (fallback `anchore/grype` / `aquasec/trivy` / `ghcr.io/google/osv-scanner`)
 - Опционально для docker-репозиториев: **skopeo** (предпочтительно) или **docker** CLI
 
 ---
@@ -76,13 +76,15 @@ nexus-control-cli repos
 nexus-control-cli verify --repo maven-hosted --upload
 
 # Только upload локального *-verified
+# (только пути из последнего verified-manifest.json / PASS; stale на диске пропускаются)
 nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
 nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
+nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max mains to verify
 
-# Параллельная загрузка/скан (по умолчанию pipeline_workers=4 в config)
-nexus-control-cli verify --repo maven-hosted --workers 8
+# Параллельная загрузка/скан (по умолчанию auto от CPU/RAM; или явный override)
+nexus-control-cli verify --repo maven-hosted --workers 8 --max-scanner-procs 4
 
 # История сканирований (последние verify из TUI / CLI / scheduler)
 nexus-control-cli history
@@ -95,6 +97,17 @@ nexus-control-cli vk-teams configure
 nexus-control-cli vk-teams status
 nexus-control-cli vk-teams test
 nexus-control-cli vk-teams disable --clear-vault
+
+# Offline OSV vulnerability DB (для osv / nuget verify без remote API)
+nexus-control-cli osv-db status
+nexus-control-cli osv-db update --ecosystem NuGet
+# cron example:
+# 0 3 * * * nexus-control-cli osv-db update --ecosystem NuGet
+
+# Webhook: POST JSON-сводки после verify (Bearer / Basic / custom header)
+nexus-control-cli webhook configure
+nexus-control-cli webhook status
+nexus-control-cli webhook test
 ```
 
 `--limit N` ограничивает только основные ассеты, которым действительно нужна
@@ -104,6 +117,46 @@ nexus-control-cli vk-teams disable --clear-vault
 список не сохраняется как полный asset cache. Companion sidecar'ы для PASS
 запрашиваются напрямую по стандартным суффиксам, поэтому дочитывать весь
 репозиторий ради них не требуется.
+
+`--scan-limit N` — отдельный дебаг-лимит: в verify попадает не больше `N`
+основных ассетов (с их sidecar'ами), независимо от того, нужна ли перезагрузка.
+Удобно на больших репозиториях, когда `--limit` почти ничего не режет, потому
+что локальный кэш уже заполнен. В scheduler: флаг `schedule run … --scan-limit`
+или поле `scan_limit` в `schedule.toml`.
+
+### Ресурсы (CPU / RAM / диск)
+
+По умолчанию `pipeline_workers = 0` и `max_scanner_procs = 0` означают **auto**:
+лимиты считаются от числа CPU и `MemAvailable` (~2 GiB на один concurrent
+scanner, потолок 8). Явные значения в config / `--workers` /
+`--max-scanner-procs` перекрывают auto. При старте verify печатается строка
+`Resource limits: …`.
+
+Глобальный семафор `max_scanner_procs` ограничивает одновременные процессы
+сканеров across всех asset-workers (иначе `workers × scanners` легко
+перегружает хост).
+
+**Диск:** если volume с downloads/reports/verified заполнен выше
+`disk_critical_watermark` (по умолчанию 95%), новые downloads не стартуют —
+сканируется только уже локальное, затем пишутся отчёты. Архивации downloads
+нет: tar.gz reclaim на том же диске не освобождал место (hardlink PASS) и
+обрывал большие прогоны.
+
+**Verified без удвоения места:** по умолчанию `verified_link_mode=auto` —
+PASS кладётся в `*-verified` через **hardlink** на том же volume (download и
+verified — один inode). Перекачка через `.partial`+`replace` не портит
+уже linked verified. Если hardlink невозможен (другой FS) — обычный copy.
+Уже существующие полные копии не конвертируются сами: один раз
+`OVERWRITE_VERIFIED=true` или удалить `*-verified` и перепрогнать verify.
+
+Жёсткий потолок снаружи процесса (рекомендуется для daemon):
+
+```ini
+# /etc/systemd/system/nexus-control-scheduler.service.d/override.conf
+[Service]
+MemoryMax=8G
+CPUQuota=200%
+```
 
 После полного PASS + verified copy рядом с локальным файлом сохраняется
 `*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки
@@ -123,11 +176,17 @@ in-memory отчёта открывает самый свежий disk-run дл�
 Интерактивное меню для правил и локального демона (без systemd):
 
 ```bash
-nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run
+nexus-control-cli schedule              # меню: list/add/edit/remove/start/stop/status/run/login
+nexus-control-cli schedule login        # сохранить зашифрованные креды для демона
+nexus-control-cli schedule logout       # очистить сохранённые scheduler-креды
 nexus-control-cli schedule start
 nexus-control-cli schedule stop
 nexus-control-cli schedule status
-nexus-control-cli schedule run nightly-core
+nexus-control-cli schedule status -m          # live progress (Ctrl+C)
+nexus-control-cli schedule status -m --interval 0.5
+nexus-control-cli schedule run nightly-core          # фон; прогресс: status -m
+nexus-control-cli schedule run nightly-core --foreground
+nexus-control-cli schedule status -m
 ```
 
 Правила хранятся в `~/.config/nexus-control/schedule.toml` (или `$NEXUS_CONTROL_SCHEDULE`).
@@ -139,7 +198,7 @@ nexus-control-cli schedule run nightly-core
 ```toml
 [scheduler]
 timezone = "local"   # timezone машины; или IANA, напр. Europe/Moscow
-overlap = "skip"   # skip | queue | overlap
+overlap = "queue"   # skip | queue | overlap (default: sequential catch-up queue)
 
 [[rules]]
 id = "nightly-core"
@@ -160,12 +219,24 @@ upload = true
 ```
 
 Демон: pidfile в `NEXUS_CACHE_DIR/scheduler.pid`, лог — `scheduler.log` рядом с `LOG_FILE`.
+Во время job демон пишет live-progress в `scheduler-state.json`; смотреть без логов:
+`schedule status -m` / `--monitor` (обновление раз в `--interval` сек, по умолчанию 1).
 Timezone по умолчанию — **локальный TZ машины** (`timezone = "local"`: `$TZ`,
 `/etc/timezone`, `/etc/localtime`). Явный IANA в `schedule.toml` перекрывает его.
 `SIGHUP` перечитывает `schedule.toml`. После reboot демон нужно стартовать снова
 (`schedule start` или внешний `@reboot`).
 
-Для daemon/CI задайте `NEXUS_USERNAME` / `NEXUS_PASSWORD` (или один раз прогрейте vault в TTY).
+По умолчанию `overlap = "queue"`: если слот правила уже наступил, а демон занят
+другим job, правило встаёт в очередь и стартует сразу после текущего (последовательно).
+Обработанные cron-слоты пишутся в `scheduler-state.json` (`last_fires`), поэтому
+долгий скан в 02:00 не «съедает» задачу на 02:05.
+
+Для daemon / `schedule start|run` **нет интерактивного prompt**. Задайте креды одним из способов:
+
+1. `NEXUS_USERNAME` / `NEXUS_PASSWORD` в env или `.env`
+2. Один раз: `nexus-control-cli schedule login` — пароль в `NEXUS_CACHE_DIR/credentials.scheduler.vault` (Fernet, `0o600`), без TTL сессии; сброс: `schedule logout`
+
+Session vault TUI (`credentials.vault`, TTL `NEXUS_SESSION_TTL`) для демона **не** считается долгоживущим источником.
 
 ### VK Teams (чат бота VK Workspace)
 
@@ -263,7 +334,8 @@ nexus-control
 |-------------------|----------|
 | `nexus_url` / `NEXUS_URL` | Базовый URL Nexus, например `http://localhost:8081` |
 
-При отсутствии URL и наличии TTY запускается first-run wizard.
+При отсутствии URL и наличии TTY запускается first-run wizard
+(язык → Nexus URL → TLS → сканеры → **опционально DefectDojo**).
 
 ### Учётные данные
 
@@ -271,7 +343,9 @@ nexus-control
 |------------|----------|
 | `NEXUS_USERNAME` / `NEXUS_PASSWORD` | Опционально. Если не заданы — prompt при старте (TTY). Для CI задайте в env. |
 
-После успешного логина пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+После успешного логина в TUI пароль хранится **зашифрованно** (Fernet) в `NEXUS_CACHE_DIR/credentials.vault` только до `expires_at` Nexus-сессии (`NEXUS_SESSION_TTL`). В `session.json` пароля нет. Сброс: клавиша `L` (Logout) или истечение TTL.
+
+Для планировщика отдельно: `schedule login` → `credentials.scheduler.vault` (без TTL сессии).
 
 ### Важные опциональные
 
@@ -283,13 +357,20 @@ nexus-control
 | `NEXUS_DOCKER_REGISTRY` | _(пусто)_ | Переопределение docker connector `host:port` |
 | `NEXUS_CONTROL_CONFIG` | `~/.config/nexus-control/config.toml` | Путь к TOML-конфигу |
 | `DOWNLOAD_ROOT` | `~/nexus-control/downloads` | Скачанные артефакты |
-| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*`) |
+| `REPORTS_ROOT` | `~/nexus-control/reports` | JSON/TXT отчёты (`grype_*` / `trivy_*` / `osv_*`) |
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
-| `SCANNERS` | `grype` | Через запятую: `grype`, `trivy` (в TUI — клавиша `s`) |
+| `VERIFIED_LINK_MODE` | `auto` | `auto`: hardlink download→verified на том же volume (без удвоения байт), иначе copy; `copy`: всегда полная копия |
+| `SCANNERS` | `grype` | Через запятую: `grype`, `trivy`, `osv` (в TUI — клавиша `s`) |
+| `DEFECTDOJO_ENABLED` | `false` | После verify пушить FAIL findings в DefectDojo |
+| `DEFECTDOJO_URL` | _(пусто)_ | Базовый URL, например `http://localhost:8080` |
+| `DEFECTDOJO_API_KEY` | _(пусто)_ | API token (или encrypted vault) |
 | `GRYPE_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `GRYPE_DOCKER_IMAGE` | `anchore/grype:latest` | Образ для docker-fallback |
 | `TRIVY_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
 | `TRIVY_DOCKER_IMAGE` | `aquasec/trivy:latest` | Образ для docker-fallback |
+| `OSV_USE_DOCKER` | `auto` | `auto` / `true` / `false` |
+| `OSV_DOCKER_IMAGE` | `ghcr.io/google/osv-scanner:latest` | Образ для docker-fallback |
+| `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` | `~/.cache` (XDG) | Корень offline DB (`osv-scalibr/<Eco>/all.zip`) |
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
@@ -321,7 +402,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. `s` — выбрать сканеры (grype / trivy / оба). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
+4. `s` — выбрать сканеры (grype / trivy / osv). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` / `h` — последний отчёт и история.
 
@@ -352,7 +433,7 @@ python main.py
 | `v` | Verify выбранного / отмеченного |
 | `D` | Скачать **весь** репозиторий |
 | `V` | Verify **всего** репозитория |
-| `s` | Сканеры (grype / trivy / оба) |
+| `s` | Сканеры (grype / trivy / osv) |
 | `o` | Последний отчёт (память или disk history) |
 | `h` | История сканирований (текущий репо) |
 | `?` | Справка |
@@ -372,7 +453,7 @@ python main.py
 | Тип | Путь |
 |-----|------|
 | Downloads | `/home/alice/nexus-control/downloads/my-repo/...` |
-| Reports | `/home/alice/nexus-control/reports/my-repo/grype_....json` / `trivy_....json` |
+| Reports | `/home/alice/nexus-control/reports/my-repo/grype_....json` / `trivy_....json` / `osv_....json` |
 | Verified | `/home/alice/nexus-control/my-repo-verified/...` |
 | Manifest | `/home/alice/nexus-control/my-repo-verified/verified-manifest.json` |
 | Logs | `/home/alice/nexus-control/logs/nexus-control.log` |
@@ -397,19 +478,63 @@ Docker-образы сохраняются как:
 
 ---
 
-## Сканеры (Grype / Trivy) и Docker-fallback
+## Сканеры (Grype / Trivy / OSV) и Docker-fallback
 
-Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify оба могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`.
+Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify включённые сканеры могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`, `osv_<asset>.json|txt`.
 
-Порядок выбора бэкенда (для каждого сканера отдельно):
+OSV-Scanner всегда запускается с `--experimental-plugins=directory,artifact` (presets для directory + artifact extractors). Доп. флаги — через `OSV_EXTRA_ARGS`.
+
+**NuGet (`.nupkg`):** сырой archive osv-scanner не разбирает. Для nuget-ассетов nexus-control делает **identity-скан**: читает `.nuspec` → временный custom lockfile → `osv-scanner --lockfile osv-scanner:…`. Grype/Trivy для таких ассетов помечаются `SKIPPED` (не влияют на aggregate). Нужен локальный `osv-scanner` (или Docker-fallback).
+
+**npm (`.tgz` / `.tar.gz`):** сырой tarball Trivy/Grype не видят как пакет (`trivy fs file.tgz` → 0 language files). Перед сканом читается `package/package.json` из архива и пишется временный `package-lock.json` (identity) — Trivy/Grype сканируют его и находят CVE пакета.
+
+**OSV offline DB preflight:** если нужен osv (`--scanners osv` или nuget-репо), перед verify проверяется локальная offline DB под **ecosystem формата репо** (`pypi→PyPI`, `npm→npm`, `maven2→Maven`, `nuget→NuGet`, `rubygems→RubyGems`, `go→Go`, `apt→Debian`, `yum→Red Hat`). Путь: `~/.cache/osv-scalibr/<Eco>/all.zip`. Если DB нет — в TTY предложит скачать **только нужный** ecosystem; отказ / non-interactive → **сканирование отменяется** (без remote OSV API). raw/docker/helm/huggingface без package-ecosystem — preflight не блокирует. После успеха: `--offline --offline-vulnerabilities`. Обновление: `nexus-control-cli osv-db update --ecosystem PyPI`.
+
+Порядок выбора бэкенда (для Grype / Trivy / osv-scanner CLI):
 
 1. Локальный бинарник, если найден и `*_USE_DOCKER` не принудительно `true`
-2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
+2. Иначе `docker run` образа (`GRYPE_DOCKER_IMAGE` / `TRIVY_DOCKER_IMAGE` / `OSV_DOCKER_IMAGE`), если режим `auto`/`true` и docker доступен
 3. Иначе понятная ошибка в UI / логах
 
-Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `REPORTS_ROOT` (rw) — не весь home. Без privileged. Docker socket **не** монтируется.
+Docker-сканеры монтируют `DOWNLOAD_ROOT` (ro), `REPORTS_ROOT` (rw) и кэш offline OSV DB (rw). Без privileged. Docker socket **не** монтируется.
 
-**Политика вердикта (строгая):** у каждого сканера любая уязвимость → `FAIL`. В verified копируется только если **все** включённые сканеры дали `PASS`.
+**Политика вердикта (строгая):** у каждого *участвующего* сканера любая уязвимость → `FAIL`. `SKIPPED` в aggregate не учитывается. В verified копируется только если итоговый вердикт `PASS`.
+
+---
+
+## DefectDojo
+
+Опционально: после каждого verify (TUI / CLI / scheduler) findings с **FAIL**-ассетов уходят в DefectDojo как **Generic Findings Import** (`POST /api/v2/reimport-scan/`, `auto_create_context`).
+
+- First-run wizard: «Включить DefectDojo?» → URL + API-ключ (ключ в `NEXUS_CACHE_DIR/defectdojo.vault`, не в TOML).
+- Уже настроенный инстанс: `nexus-control-cli defectdojo configure` / `status` / `disable [--clear-vault]`.
+- Env: `DEFECTDOJO_ENABLED`, `DEFECTDOJO_URL`, `DEFECTDOJO_API_KEY` (и опционально product/engagement names).
+- Product по умолчанию `nexus-control`, engagement = имя Nexus-репозитория. Ошибка push не роняет verify (warning в лог).
+
+API-ключ: в UI DefectDojo → профиль → **API Key**.
+
+---
+
+## Webhook
+
+Опционально: после каждого verify (TUI / CLI / scheduler) nexus-control шлёт
+**POST JSON** на ваш URL — сводка репозитория, totals, ассеты и уязвимости
+(без native dumps сканеров). Ошибка доставки не роняет verify (warning в лог).
+
+- First-run wizard: «Включить вебхук?» → URL + auth.
+- Уже настроенный инстанс: `nexus-control-cli webhook configure` / `status` /
+  `test` / `disable [--clear-vault]`.
+- Auth: `none` | `bearer` (токен) | `basic` (логин/пароль) | `header` (свой
+  заголовок, например `X-Api-Key`). Секреты — vault или env
+  (`WEBHOOK_TOKEN`, `WEBHOOK_USERNAME`/`WEBHOOK_PASSWORD`, `WEBHOOK_HEADER_VALUE`),
+  не TOML.
+- Заголовки запроса: `Content-Type: application/json`,
+  `User-Agent: nexus-control/<version>`, `X-Nexus-Control-Event: verify.completed`
+  (для `webhook test` — `webhook.test`).
+
+Тело `verify.completed` (сжато): `event`, `source`, `version`, `repository`,
+времена, `cancelled`, `scanners`, `totals`, `assets[]` (`path`, `kind`,
+`verdict`, `scans` с counts и до 20 CVE на сканер).
 
 ---
 
@@ -435,7 +560,7 @@ Docker-сканеры монтируют только `DOWNLOAD_ROOT` (ro) и `R
 
 ## Ограничения текущей версии
 
-- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются
+- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются только ассеты из последнего `verified-manifest.json` (PASS), stale-файлы в локальном `*-verified` не грузятся
 - Нет delete и произвольного admin write в Nexus
 - Для docker нужны skopeo или docker CLI
 - Очень большие репозитории загружают все ассеты в память для построения дерева (пагинация используется на проводе)
@@ -461,7 +586,7 @@ pytest
 | Auth failed | Логин/пароль; права пользователя на репозитории |
 | Ошибки TLS | Self-signed в лаборатории → `NEXUS_VERIFY_SSL=false` (ожидается warning) |
 | Пустые docker-теги | Задайте `NEXUS_DOCKER_REGISTRY=host:port` |
-| Grype/Trivy не найден | Установите бинарник **или** docker + образ; либо выключите сканер клавишей `s` |
+| Grype/Trivy/OSV не найден | Установите бинарник **или** docker + образ; либо выключите сканер клавишей `s` |
 | skopeo/docker pull падает | Auth к registry; для insecure HTTP помогает `NEXUS_VERIFY_SSL=false` |
 | Путь отклонён | В path был `..` или абсолютный путь — пропуск из соображений безопасности |
 | UI «зависает» | Не должен; проверьте панель логов / файл лога |
@@ -506,23 +631,28 @@ nexus-control/
     ├── logging_setup.py
     ├── i18n.py
     ├── cli/                     # nexus-control-cli
-    │   ├── __main__.py          # argparse: repos / verify / upload / schedule / history / vk-teams
+    │   ├── __main__.py          # argparse: repos / verify / upload / schedule / history / vk-teams / …
     │   ├── cmd_repos.py
     │   ├── cmd_verify.py        # download + scan + verified [+ upload]
     │   ├── cmd_upload.py        # upload локального *-verified без сканера
     │   ├── cmd_schedule.py      # интерактивное меню планировщика
     │   ├── cmd_history.py       # list/show scan history
     │   ├── cmd_vk_teams.py      # configure / status / test / disable
+    │   ├── cmd_osv_db.py        # offline OSV DB status/update
+    │   ├── cmd_defectdojo.py    # DefectDojo configure/status/disable
+    │   ├── cmd_webhook.py       # webhook configure/status/disable/test
     │   ├── assets.py            # listing / cache / inspect / checkpoints
     │   ├── progress.py
     │   └── bootstrap.py
+    ├── integrations/            # VK Teams, DefectDojo, webhook
+    │   ├── vk_teams.py          # Bot API httpx-клиент + Fernet vault
+    │   ├── vk_notify.py         # сообщения + Upload callback (фон)
+    │   ├── defectdojo.py
+    │   └── webhook.py
     ├── scheduler/               # schedule.toml + daemon (pidfile/cron loop)
     │   ├── models.py / store.py / cronutil.py
     │   ├── daemon.py / jobs.py / pidfile.py / state.py
     │   └── paths.py
-    ├── integrations/            # внешние интеграции (VK Teams notify)
-    │   ├── vk_teams.py          # Bot API httpx-клиент + Fernet vault
-    │   └── vk_notify.py         # сообщения + Upload callback (фон)
     ├── nexus/                   # REST-клиент Nexus
     │   ├── client.py
     │   ├── repositories.py / assets.py / uploads.py
@@ -531,7 +661,7 @@ nexus-control/
     ├── services/
     │   ├── pipeline.py          # download → scan → verified copy
     │   ├── downloader.py
-    │   ├── grype_scanner.py / trivy_scanner.py
+    │   ├── grype_scanner.py / trivy_scanner.py / osv_scanner.py
     │   ├── scan_common.py / scan_checkpoint.py
     │   ├── scan_history.py      # index + run snapshots
     │   ├── verifier.py / verified_uploader.py

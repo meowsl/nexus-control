@@ -2,15 +2,28 @@
 
 from __future__ import annotations
 
+import getpass
+import sys
+import time
 from argparse import Namespace
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
+from rich.live import Live
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
 from nexus_control.cli.bootstrap import open_cli_client
-from nexus_control.config import ConfigError
+from nexus_control.config import ConfigError, load_settings
+from nexus_control.nexus.client import NexusClient
+from nexus_control.nexus.credentials import (
+    NON_INTERACTIVE_CREDS_HINT,
+    SCHEDULER_VAULT_FILENAME,
+    clear_scheduler_credentials,
+    save_scheduler_credentials,
+)
 from nexus_control.scheduler.cronutil import (
     CRON_HELP,
     CRON_PRESETS,
@@ -51,13 +64,28 @@ def run_schedule(args: Namespace) -> int:
     if action == "stop":
         return stop_daemon()
     if action == "status":
-        return _cmd_status(schedule_file)
-    if action == "run":
+        return _cmd_status(
+            schedule_file,
+            monitor=bool(getattr(args, "monitor", False)),
+            interval=float(getattr(args, "monitor_interval", 1.0) or 1.0),
+        )
+    if action in {"run", "_run"}:
         rule_id = getattr(args, "rule_id", None)
         if not rule_id:
             console.print("[red]rule id required for run[/red]")
             return 2
-        return run_rule_now(rule_id, schedule_file=schedule_file)
+        return run_rule_now(
+            rule_id,
+            schedule_file=schedule_file,
+            scan_limit=getattr(args, "scan_limit", None),
+            foreground=bool(
+                action == "_run" or getattr(args, "foreground", False)
+            ),
+        )
+    if action == "login":
+        return _cmd_login()
+    if action == "logout":
+        return _cmd_logout()
     if action == "menu":
         return _run_menu(schedule_file)
     console.print(f"[red]Unknown schedule action: {action}[/red]")
@@ -80,13 +108,15 @@ def _run_menu(schedule_file: Path | None) -> int:
             "  [cyan]5[/cyan]) Start daemon\n"
             "  [cyan]6[/cyan]) Stop daemon\n"
             "  [cyan]7[/cyan]) Status / next runs\n"
-            "  [cyan]8[/cyan]) Run rule now\n"
+            "  [cyan]8[/cyan]) Run rule now (background; watch with 7 / status -m)\n"
+            "  [cyan]9[/cyan]) Login (save encrypted creds for daemon)\n"
+            "  [cyan]L[/cyan]) Logout (clear saved scheduler creds)\n"
             "  [cyan]0[/cyan]) Quit"
         )
         choice = Prompt.ask(
             "Select",
-            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"],
-            default="0"
+            choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "L", "l"],
+            default="0",
         )
         if choice == "0":
             return 0
@@ -108,6 +138,10 @@ def _run_menu(schedule_file: Path | None) -> int:
             _cmd_status(path)
         elif choice == "8":
             _menu_run(path)
+        elif choice == "9":
+            _cmd_login()
+        elif choice.lower() == "l":
+            _cmd_logout()
 
 
 def _load(path: Path) -> ScheduleConfig:
@@ -241,32 +275,108 @@ def _menu_run(path: Path) -> None:
         choices=[r.id for r in config.rules],
     )
     code = run_rule_now(rule_id, schedule_file=path)
-    console.print(f"Finished with exit code {code}")
+    if code == 0:
+        console.print("[dim]Watch progress: nexus-control-cli schedule status -m[/dim]")
+    else:
+        console.print(f"Finished with exit code {code}")
 
 
-def _cmd_status(schedule_file: Path | None) -> int:
+def _cmd_status(
+    schedule_file: Path | None,
+    *,
+    monitor: bool = False,
+    interval: float = 1.0,
+) -> int:
+    if not monitor:
+        try:
+            console.print(_status_renderable(schedule_file))
+        except ConfigError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 2
+        return 0
+
+    poll = max(0.2, float(interval))
+    console.print(
+        f"[dim]Monitoring scheduler (Ctrl+C to stop), refresh={poll:.1f}s[/dim]"
+    )
     try:
-        status = get_status(schedule_file=schedule_file)
+        with Live(
+            _status_renderable(schedule_file),
+            console=console,
+            refresh_per_second=max(1, int(1.0 / poll)),
+            transient=False,
+        ) as live:
+            while True:
+                time.sleep(poll)
+                live.update(_status_renderable(schedule_file))
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         return 2
+    except KeyboardInterrupt:
+        console.print("\n[dim]Monitor stopped.[/dim]")
+        return 0
 
+
+def _status_renderable(schedule_file: Path | None):
+    """Собрать Rich-renderable для одноразового status / Live monitor."""
+    from rich.console import Group
+
+    status = get_status(schedule_file=schedule_file)
+    lines: list[str | Text] = []
     if status.running:
-        console.print(f"[green]Daemon running[/green] pid={status.pid}")
+        lines.append(
+            Text(f"Daemon running pid={status.pid}", style="green")
+        )
     else:
-        console.print("[yellow]Daemon not running[/yellow]")
-    console.print(f"Schedule file: {status.schedule_path}")
-    console.print(
+        lines.append(Text("Daemon not running", style="yellow"))
+    run_pid = status.state.run_pid
+    if run_pid:
+        from nexus_control.scheduler.pidfile import process_is_alive
+
+        if process_is_alive(run_pid):
+            lines.append(Text(f"Manual run pid={run_pid}", style="green"))
+    lines.append(f"Schedule file: {status.schedule_path}")
+    lines.append(
         f"Timezone={status.config.resolved_timezone()} "
         f"(config={status.config.timezone})  "
         f"overlap={status.config.overlap}  "
         f"rules={len(status.config.rules)}"
     )
     if status.state.started_at:
-        console.print(f"Started at: {status.state.started_at}")
-    if status.state.busy:
-        console.print(f"[cyan]Busy:[/cyan] {status.state.current_rule}")
+        lines.append(f"Started at: {status.state.started_at}")
+    lines.append(f"Updated: {datetime.now().astimezone().isoformat(timespec='seconds')}")
 
+    if status.state.busy:
+        rule = status.state.current_rule or "?"
+        repo = status.state.current_repo
+        busy = f"Busy: {rule}"
+        if repo:
+            busy += f"  repo={repo}"
+        lines.append(Text(busy, style="cyan bold"))
+        pct = status.state.progress_pct
+        if pct is not None:
+            bar = int(max(0.0, min(1.0, pct)) * 20)
+            gauge = "█" * bar + "░" * (20 - bar)
+            lines.append(
+                Text(
+                    f"Progress: [{gauge}] {int(pct * 100):3d}%  "
+                    f"{status.state.progress_stage}",
+                    style="cyan",
+                )
+            )
+        if status.state.progress_message:
+            lines.append(f"  {status.state.progress_message}")
+        if status.state.progress_updated_at:
+            lines.append(
+                Text(
+                    f"  progress@ {status.state.progress_updated_at}",
+                    style="dim",
+                )
+            )
+    else:
+        lines.append(Text("Idle (waiting for next cron fire)", style="dim"))
+
+    parts: list[object] = list(lines)
     if status.config.rules:
         table = Table(title="Next fires / last runs")
         table.add_column("ID")
@@ -300,8 +410,8 @@ def _cmd_status(schedule_file: Path | None) -> int:
                 last_s,
                 exit_s,
             )
-        console.print(table)
-    return 0
+        parts.append(table)
+    return Group(*parts)
 
 
 def _print_cron_presets() -> None:
@@ -427,10 +537,18 @@ def _prompt_rule(
     workers = int(workers_s) if workers_s else None
 
     limit_s = Prompt.ask(
-        "limit (empty=none)",
+        "limit / download-limit (empty=none)",
         default=str(existing.limit) if existing and existing.limit else "",
     ).strip()
     limit = int(limit_s) if limit_s else None
+
+    scan_limit_s = Prompt.ask(
+        "scan_limit / max mains to verify (empty=none, debug)",
+        default=(
+            str(existing.scan_limit) if existing and existing.scan_limit else ""
+        ),
+    ).strip()
+    scan_limit = int(scan_limit_s) if scan_limit_s else None
 
     wants_upload = action in {"upload", "verify_upload"} or upload
     targets: dict[str, str] = {}
@@ -461,6 +579,7 @@ def _prompt_rule(
         path_prefix=path_prefix,
         workers=workers,
         limit=limit,
+        scan_limit=scan_limit,
         refresh=refresh,
     )
 
@@ -536,12 +655,80 @@ def _prompt_repos(default: list[str] | None) -> list[str]:
 
 def _fetch_repo_names() -> list[str]:
     try:
-        with open_cli_client() as ctx:
+        with open_cli_client(allow_prompt=False) as ctx:
             repos = ctx.client.list_repositories()
             return [r.name for r in repos if not r.is_docker]
     except (ConfigError, Exception) as exc:  # noqa: BLE001
         console.print(f"[red]Cannot list repos: {exc}[/red]")
+        console.print(
+            "[yellow]Hint:[/yellow] set NEXUS_USERNAME/NEXUS_PASSWORD in .env "
+            "or run [cyan]nexus-control-cli schedule login[/cyan]"
+        )
         return []
+
+
+def _cmd_login() -> int:
+    """Один раз спросить креды, проверить против Nexus, сохранить scheduler vault."""
+    settings = load_settings()
+    env_user = (settings.nexus_username or "").strip()
+    env_password = settings.nexus_password or ""
+
+    if env_user and env_password:
+        username, password = env_user, env_password
+        console.print(
+            f"Using NEXUS_USERNAME from env/config ([bold]{username}[/bold]); "
+            "validating against Nexus…"
+        )
+    else:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            console.print(f"[red]{NON_INTERACTIVE_CREDS_HINT}[/red]")
+            return 2
+        console.print("Nexus authentication for scheduler")
+        console.print(
+            f"Credentials are stored encrypted in {SCHEDULER_VAULT_FILENAME} "
+            "(not tied to NEXUS_SESSION_TTL; clear with schedule logout)."
+        )
+        hint = f" [{env_user}]" if env_user else ""
+        username = input(f"Username{hint}: ").strip() or env_user
+        if not username:
+            console.print("[red]Username is required[/red]")
+            return 2
+        password = getpass.getpass("Password: ")
+        if not password:
+            console.print("[red]Password is required[/red]")
+            return 2
+
+    probe = settings.model_copy(
+        update={"nexus_username": username, "nexus_password": password}
+    )
+    client = NexusClient(probe)
+    try:
+        client.open()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Nexus authentication failed:[/red] {exc}")
+        return 2
+    finally:
+        client.close()
+
+    path = save_scheduler_credentials(probe, username=username, password=password)
+    console.print(
+        f"[green]Saved encrypted scheduler credentials[/green] "
+        f"(user=[bold]{username}[/bold])\n"
+        f"Vault: {path}\n"
+        "Daemon/start/run will reuse them without prompting. "
+        "Clear with [cyan]schedule logout[/cyan]."
+    )
+    return 0
+
+
+def _cmd_logout() -> int:
+    settings = load_settings()
+    existed = clear_scheduler_credentials(settings)
+    if existed:
+        console.print("[green]Scheduler credentials cleared.[/green]")
+    else:
+        console.print("No scheduler credentials were stored.")
+    return 0
 
 
 def _maybe_prompt_scheduler_meta(config: ScheduleConfig) -> None:

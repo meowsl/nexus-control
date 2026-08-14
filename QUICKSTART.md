@@ -11,7 +11,7 @@
 - Python 3.13+ **или** [uv](https://docs.astral.sh/uv/) (подтянет Python сам)
 - Доступ к Nexus Sonatype CE
 - Учётная запись с правами на чтение репозиториев/ассетов
-- Для сканирования: `grype` и/или `trivy` **или** Docker
+- Для сканирования: `grype` / `trivy` / `osv-scanner` **или** Docker
 - Для docker-репозиториев (опционально): `skopeo` или `docker`
 
 ---
@@ -100,7 +100,7 @@ nexus_verify_ssl = false
 
 1. Раскройте дерево (`Enter`).
 2. `Space` — отметить файлы/папки (● / ○).
-3. `s` — выбрать сканеры (grype / trivy / оба).
+3. `s` — выбрать сканеры (grype / trivy / osv).
 4. `d` — только скачать; `v` — download → scan → copy PASS в verified.
 5. `D` / `V` — то же для **всего** репозитория.
 6. `o` — последний отчёт.

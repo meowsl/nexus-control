@@ -5,7 +5,10 @@
 # local = timezone машины (/etc/timezone, $TZ). Можно задать IANA явно.
 timezone = "local"
 # If a previous job is still running: skip | queue | overlap
-overlap = "skip"
+# queue (default) = run due jobs one-by-one ASAP after the current finishes
+# skip = drop a due slot if another job is still marked busy
+# overlap = reserved (v1 still sequential, same as queue)
+overlap = "queue"
 
 [[rules]]
 id = "nightly-core"
@@ -25,7 +28,8 @@ description = "Сырые и pypi по субботам"
 repos = ["raw-hosted", "pypi-hosted", "maven-snapshots"]
 action = "verify"
 upload = true
-# scanners = "grype,trivy"
+# scanners = "grype,trivy,osv"
 # path_prefix = "com/example"
 # workers = 4
-# limit = 100
+# limit = 100          # max assets needing download/re-download
+# scan_limit = 20      # max mains to verify (handy for debug on large repos)

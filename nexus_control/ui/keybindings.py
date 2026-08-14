@@ -101,7 +101,7 @@ def help_text() -> str:
             f"  V           {_('Verify entire repository')}",
             f"  o           {_('Open last report')}",
             f"  h           {_('Open scan history')}",
-            f"  s           {_('Scanners (grype / trivy / both)')}",
+            f"  s           {_('Scanners (grype / trivy / osv)')}",
             f"  f           {_('Toggle UI language (en/ru)')}",
             f"  ?           {_('Show this help')}",
             "",
