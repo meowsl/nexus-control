@@ -141,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
             "login",
             "logout",
             "_daemon",
+            "_run",
         ],
         help=(
             "menu (default) | start | stop | status | run | "
@@ -179,6 +180,11 @@ def build_parser() -> argparse.ArgumentParser:
             "With run: override rule scan_limit — max main assets to verify "
             "(debug). Also accepted on verify."
         ),
+    )
+    p_schedule.add_argument(
+        "--foreground",
+        action="store_true",
+        help="With run: keep the job in this terminal (default: background)",
     )
     p_schedule.set_defaults(_handler="schedule")
 

@@ -541,7 +541,7 @@ def test_run_rule_now_records_last_runs(
     )
 
     with patch("nexus_control.scheduler.daemon.run_rule", return_value=0) as run:
-        code = run_rule_now("nightly", schedule_file=schedule_path)
+        code = run_rule_now("nightly", schedule_file=schedule_path, foreground=True)
 
     assert code == 0
     run.assert_called_once()

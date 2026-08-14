@@ -69,7 +69,7 @@ def run_schedule(args: Namespace) -> int:
             monitor=bool(getattr(args, "monitor", False)),
             interval=float(getattr(args, "monitor_interval", 1.0) or 1.0),
         )
-    if action == "run":
+    if action in {"run", "_run"}:
         rule_id = getattr(args, "rule_id", None)
         if not rule_id:
             console.print("[red]rule id required for run[/red]")
@@ -78,6 +78,9 @@ def run_schedule(args: Namespace) -> int:
             rule_id,
             schedule_file=schedule_file,
             scan_limit=getattr(args, "scan_limit", None),
+            foreground=bool(
+                action == "_run" or getattr(args, "foreground", False)
+            ),
         )
     if action == "login":
         return _cmd_login()
@@ -105,7 +108,7 @@ def _run_menu(schedule_file: Path | None) -> int:
             "  [cyan]5[/cyan]) Start daemon\n"
             "  [cyan]6[/cyan]) Stop daemon\n"
             "  [cyan]7[/cyan]) Status / next runs\n"
-            "  [cyan]8[/cyan]) Run rule now\n"
+            "  [cyan]8[/cyan]) Run rule now (background; watch with 7 / status -m)\n"
             "  [cyan]9[/cyan]) Login (save encrypted creds for daemon)\n"
             "  [cyan]L[/cyan]) Logout (clear saved scheduler creds)\n"
             "  [cyan]0[/cyan]) Quit"
@@ -272,7 +275,10 @@ def _menu_run(path: Path) -> None:
         choices=[r.id for r in config.rules],
     )
     code = run_rule_now(rule_id, schedule_file=path)
-    console.print(f"Finished with exit code {code}")
+    if code == 0:
+        console.print("[dim]Watch progress: nexus-control-cli schedule status -m[/dim]")
+    else:
+        console.print(f"Finished with exit code {code}")
 
 
 def _cmd_status(
@@ -323,6 +329,12 @@ def _status_renderable(schedule_file: Path | None):
         )
     else:
         lines.append(Text("Daemon not running", style="yellow"))
+    run_pid = status.state.run_pid
+    if run_pid:
+        from nexus_control.scheduler.pidfile import process_is_alive
+
+        if process_is_alive(run_pid):
+            lines.append(Text(f"Manual run pid={run_pid}", style="green"))
     lines.append(f"Schedule file: {status.schedule_path}")
     lines.append(
         f"Timezone={status.config.resolved_timezone()} "

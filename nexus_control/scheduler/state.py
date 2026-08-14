@@ -40,7 +40,9 @@ class SchedulerState:
     next_fires: dict[str, str] = field(default_factory=dict)
     # rule_id → YYYYMMDDHHMM of last handled cron slot (run or skipped).
     last_fires: dict[str, str] = field(default_factory=dict)
-    # Live progress for ``schedule status --monitor`` (daemon jobs).
+    # Pid of a detached ``schedule run`` (not the cron daemon).
+    run_pid: int | None = None
+    # Live progress for ``schedule status --monitor`` (daemon / manual jobs).
     progress_pct: float | None = None
     progress_stage: str = ""
     progress_asset: str = ""
@@ -68,6 +70,7 @@ class SchedulerState:
             },
             "next_fires": dict(self.next_fires),
             "last_fires": dict(self.last_fires),
+            "run_pid": self.run_pid,
             "progress_pct": self.progress_pct,
             "progress_stage": self.progress_stage,
             "progress_asset": self.progress_asset,
@@ -102,6 +105,12 @@ class SchedulerState:
             for k, v in last_fires_raw.items()
             if str(v).strip()
         }
+        run_pid_raw = data.get("run_pid")
+        run_pid: int | None
+        try:
+            run_pid = int(run_pid_raw) if run_pid_raw is not None else None
+        except (TypeError, ValueError):
+            run_pid = None
         pct_raw = data.get("progress_pct")
         progress_pct: float | None
         try:
@@ -118,6 +127,7 @@ class SchedulerState:
             last_runs=last_runs,
             next_fires={str(k): str(v) for k, v in next_fires.items()},
             last_fires=last_fires,
+            run_pid=run_pid,
             progress_pct=progress_pct,
             progress_stage=str(data.get("progress_stage") or ""),
             progress_asset=str(data.get("progress_asset") or ""),

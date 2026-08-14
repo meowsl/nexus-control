@@ -93,6 +93,8 @@ def test_parser_schedule_flags() -> None:
     )
     assert run_lim.schedule_action == "run"
     assert run_lim.scan_limit == 10
+    fg = parser.parse_args(["schedule", "run", "nightly-core", "--foreground"])
+    assert fg.foreground is True
 
 
 def test_filter_path_prefix_and_limit() -> None:

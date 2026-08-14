@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 # Внутренний флаг для detached child: run foreground loop.
 ENV_DAEMON_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_FOREGROUND"
+# Child of ``schedule run`` (already detached): execute the rule in-process.
+ENV_RUN_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_RUN_FOREGROUND"
 
 # При старте/reload слоты старше grace помечаются handled без запуска
 # (чтобы не гонять вчерашние cron). Слоты внутри grace — в очередь.
@@ -215,13 +217,17 @@ def run_rule_now(
     *,
     schedule_file: Path | None = None,
     scan_limit: int | None = None,
+    foreground: bool = False,
 ) -> int:
-    """Синхронный прогон правила (меню / schedule run).
+    """Прогон правила: по умолчанию в фоне, прогресс через ``schedule status -m``.
 
-    Креды только из env / scheduler vault — без интерактивного prompt.
-    Пишет ``last_runs`` в scheduler-state.json (для ``schedule status``).
-    Cron-слоты (``last_fires``) не трогает — ручной прогон не «съедает» слот.
+    ``foreground=True`` / env ``NEXUS_CONTROL_SCHEDULER_RUN_FOREGROUND`` —
+    в текущем процессе (меню-тест, detached child).
+    Cron-слоты (``last_fires``) не трогает.
     """
+    if os.environ.get(ENV_RUN_FOREGROUND) == "1":
+        foreground = True
+
     settings = load_cli_settings(allow_prompt=False)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
@@ -234,6 +240,112 @@ def run_rule_now(
     if scan_limit is not None and scan_limit < 1:
         print("--scan-limit must be >= 1", file=sys.stderr)
         return 2
+
+    if not foreground:
+        return _spawn_rule_run(
+            rule.id,
+            schedule_path=schedule_path,
+            settings=settings,
+            scan_limit=scan_limit,
+        )
+    return _run_rule_foreground(
+        rule,
+        settings=settings,
+        scan_limit=scan_limit,
+    )
+
+
+def _active_manual_pid(state: SchedulerState) -> int | None:
+    pid = state.run_pid
+    if pid is None:
+        return None
+    if process_is_alive(pid):
+        return pid
+    return None
+
+
+def _spawn_rule_run(
+    rule_id: str,
+    *,
+    schedule_path: Path,
+    settings: Settings,
+    scan_limit: int | None,
+) -> int:
+    state_file = state_path(settings.nexus_cache_dir)
+    state = load_state(state_file)
+    daemon_pid = running_pid(pid_path(settings.nexus_cache_dir))
+    manual_pid = _active_manual_pid(state)
+
+    if manual_pid is not None:
+        print(
+            f"A manual run is already active (pid={manual_pid}, "
+            f"rule={state.current_rule!r}). "
+            "Watch: nexus-control-cli schedule status -m",
+            file=sys.stderr,
+        )
+        return 1
+    if daemon_pid is not None and state.busy:
+        print(
+            f"Scheduler daemon is busy with {state.current_rule!r} "
+            f"(pid={daemon_pid}). "
+            "Watch: nexus-control-cli schedule status -m",
+            file=sys.stderr,
+        )
+        return 1
+    if state.busy:
+        state.busy = False
+        state.current_rule = None
+        state.run_pid = None
+        state.clear_progress()
+        save_state(state_file, state)
+
+    env = os.environ.copy()
+    env[ENV_RUN_FOREGROUND] = "1"
+    cmd = [
+        sys.executable,
+        "-m",
+        "nexus_control.cli",
+        "schedule",
+        "_run",
+        rule_id,
+        "--schedule-file",
+        str(schedule_path),
+    ]
+    if scan_limit is not None:
+        cmd.extend(["--scan-limit", str(scan_limit)])
+    with open(os.devnull, "rb") as devnull_in, open(os.devnull, "ab") as devnull_out:
+        proc = __import__("subprocess").Popen(
+            cmd,
+            stdin=devnull_in,
+            stdout=devnull_out,
+            stderr=devnull_out,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+    time.sleep(0.4)
+    if proc.poll() is not None:
+        print(
+            f"Background run failed to start (exit={proc.returncode}). "
+            f"Check {settings.log_file}",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"Started rule {rule_id!r} in background (pid={proc.pid}).\n"
+        f"Progress: nexus-control-cli schedule status -m\n"
+        f"Log: {settings.log_file}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _run_rule_foreground(
+    rule: ScheduleRule,
+    *,
+    settings: Settings,
+    scan_limit: int | None,
+) -> int:
     effective = scan_limit if scan_limit is not None else rule.scan_limit
     print(
         f"Running rule {rule.id} for repos={rule.repos}"
@@ -244,7 +356,6 @@ def run_rule_now(
     state_file = state_path(settings.nexus_cache_dir)
     state = load_state(state_file)
     daemon_pid = running_pid(pid_path(settings.nexus_cache_dir))
-    # Не перехватываем busy/progress, если демон уже крутит job.
     claim_busy = not (daemon_pid is not None and state.busy)
 
     from nexus_control.scheduler.progress import StateProgressSink
@@ -255,7 +366,7 @@ def run_rule_now(
     if claim_busy:
         state.busy = True
         state.current_rule = rule.id
-        state.pid = os.getpid() if daemon_pid is None else state.pid
+        state.run_pid = os.getpid()
         state.clear_progress()
         save_state(state_file, state)
         sink = StateProgressSink(state_file, state)
@@ -285,12 +396,15 @@ def run_rule_now(
             scan_limit=scan_limit,
         )
         message = f"manual exit={code}"
+    except KeyboardInterrupt:
+        logger.warning("Manual rule %s interrupted", rule.id)
+        code = 130
+        message = "manual interrupted"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Manual rule %s failed: %s", rule.id, exc)
         code = 1
         message = f"manual error: {exc}"
     finally:
-        # Перечитать state: демон мог обновить next_fires / свой job.
         latest = load_state(state_file)
         latest.last_runs[rule.id] = RuleRunRecord(
             rule_id=rule.id,
@@ -303,9 +417,8 @@ def run_rule_now(
         if claim_busy and latest.current_rule == rule.id:
             latest.busy = False
             latest.current_rule = None
+            latest.run_pid = None
             latest.clear_progress()
-            if daemon_pid is None:
-                latest.pid = None
         save_state(state_file, latest)
     return code
 
