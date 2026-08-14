@@ -219,8 +219,10 @@ def run_rule_now(
     """Синхронный прогон правила (меню / schedule run).
 
     Креды только из env / scheduler vault — без интерактивного prompt.
+    Пишет ``last_runs`` в scheduler-state.json (для ``schedule status``).
+    Cron-слоты (``last_fires``) не трогает — ручной прогон не «съедает» слот.
     """
-    load_cli_settings(allow_prompt=False)
+    settings = load_cli_settings(allow_prompt=False)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
@@ -238,7 +240,74 @@ def run_rule_now(
         + (f" scan_limit={effective}" if effective is not None else ""),
         file=sys.stderr,
     )
-    return run_rule(rule, scan_limit=scan_limit)
+
+    state_file = state_path(settings.nexus_cache_dir)
+    state = load_state(state_file)
+    daemon_pid = running_pid(pid_path(settings.nexus_cache_dir))
+    # Не перехватываем busy/progress, если демон уже крутит job.
+    claim_busy = not (daemon_pid is not None and state.busy)
+
+    from nexus_control.scheduler.progress import StateProgressSink
+
+    started = iso_now()
+    sink = None
+    on_repo_start = None
+    if claim_busy:
+        state.busy = True
+        state.current_rule = rule.id
+        state.pid = os.getpid() if daemon_pid is None else state.pid
+        state.clear_progress()
+        save_state(state_file, state)
+        sink = StateProgressSink(state_file, state)
+
+        def _on_repo_start(repo: str) -> None:
+            state.current_repo = repo
+            state.progress_message = f"Starting repo {repo}"
+            state.progress_updated_at = iso_now()
+            save_state(state_file, state)
+
+        on_repo_start = _on_repo_start
+    else:
+        logger.info(
+            "Manual run of %s while daemon busy with %s; "
+            "last_runs will still be recorded",
+            rule.id,
+            state.current_rule,
+        )
+
+    code = 1
+    message = ""
+    try:
+        code = run_rule(
+            rule,
+            on_progress=sink,
+            on_repo_start=on_repo_start,
+            scan_limit=scan_limit,
+        )
+        message = f"manual exit={code}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Manual rule %s failed: %s", rule.id, exc)
+        code = 1
+        message = f"manual error: {exc}"
+    finally:
+        # Перечитать state: демон мог обновить next_fires / свой job.
+        latest = load_state(state_file)
+        latest.last_runs[rule.id] = RuleRunRecord(
+            rule_id=rule.id,
+            started_at=started,
+            finished_at=iso_now(),
+            exit_code=code,
+            message=message,
+            skipped=False,
+        )
+        if claim_busy and latest.current_rule == rule.id:
+            latest.busy = False
+            latest.current_rule = None
+            latest.clear_progress()
+            if daemon_pid is None:
+                latest.pid = None
+        save_state(state_file, latest)
+    return code
 
 
 def _settings_no_prompt() -> Settings:

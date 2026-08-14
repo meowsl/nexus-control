@@ -497,6 +497,62 @@ def test_overlap_skip_records_skipped(tmp_path: Path) -> None:
     assert st.last_fires["x"] == "202601010000"
 
 
+def test_run_rule_now_records_last_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Menu / schedule run пишет last_runs, но не last_fires."""
+    from nexus_control.scheduler.daemon import run_rule_now
+    from nexus_control.scheduler.models import ScheduleConfig, ScheduleRule
+
+    schedule_path = tmp_path / "schedule.toml"
+    save_schedule(
+        ScheduleConfig(
+            timezone="UTC",
+            rules=[
+                ScheduleRule(
+                    id="nightly",
+                    cron="0 3 * * *",
+                    repos=["maven-hosted"],
+                )
+            ],
+        ),
+        schedule_path,
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    state_file = cache / "scheduler-state.json"
+    save_state(
+        state_file,
+        SchedulerState(last_fires={"nightly": "202608100300"}),
+    )
+
+    fake_settings = MagicMock()
+    fake_settings.nexus_cache_dir = cache
+    fake_settings.log_file = tmp_path / "logs" / "app.log"
+    fake_settings.nexus_password = None
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.load_cli_settings",
+        lambda allow_prompt=False: fake_settings,
+    )
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.running_pid",
+        lambda _path: None,
+    )
+
+    with patch("nexus_control.scheduler.daemon.run_rule", return_value=0) as run:
+        code = run_rule_now("nightly", schedule_file=schedule_path)
+
+    assert code == 0
+    run.assert_called_once()
+    loaded = load_state(state_file)
+    assert loaded.last_runs["nightly"].exit_code == 0
+    assert loaded.last_runs["nightly"].message.startswith("manual exit=")
+    assert loaded.last_fires["nightly"] == "202608100300"
+    assert loaded.busy is False
+    assert loaded.current_rule is None
+
+
 def test_menu_status_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from argparse import Namespace
 
