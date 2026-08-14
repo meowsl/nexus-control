@@ -130,13 +130,11 @@ scanner, потолок 8). Явные значения в config / `--workers` 
 сканеров across всех asset-workers (иначе `workers × scanners` легко
 перегружает хост).
 
-**Disk-pressure** (CLI / scheduler verify): при заполнении volume выше
-`disk_high_watermark` (по умолчанию 80%) новые downloads паузятся →
-сканируются уже локальные файлы → при `--upload` / `verify_upload` идёт
-upload finished → downloads упаковываются в `archive_root` (`*.tar.gz`) и
-удаляются с диска → при usage ≤ `disk_low_watermark` (70%) качание
-возобновляется. Критический порог `disk_critical_watermark` (95%) —
-ошибка без бесконечного цикла. Отключение: `disk_reclaim_enabled = false`.
+**Диск:** если volume с downloads/reports/verified заполнен выше
+`disk_critical_watermark` (по умолчанию 95%), новые downloads не стартуют —
+сканируется только уже локальное, затем пишутся отчёты. Архивации downloads
+нет: tar.gz reclaim на том же диске не освобождал место (hardlink PASS) и
+обрывал большие прогоны.
 
 **Verified без удвоения места:** по умолчанию `verified_link_mode=auto` —
 PASS кладётся в `*-verified` через **hardlink** на том же volume (download и
@@ -144,8 +142,6 @@ verified — один inode). Перекачка через `.partial`+`replace`
 уже linked verified. Если hardlink невозможен (другой FS) — обычный copy.
 Уже существующие полные копии не конвертируются сами: один раз
 `OVERWRITE_VERIFIED=true` или удалить `*-verified` и перепрогнать verify.
-При disk-pressure reclaim unlink download у hardlink'нутого PASS **не
-освобождает** байты, пока жив путь в verified (nlink > 1) — это ожидаемо.
 
 Жёсткий потолок снаружи процесса (рекомендуется для daemon):
 
