@@ -1,11 +1,11 @@
-"""Tests for resource governor limits, archive/purge, and scanner semaphore."""
+"""Tests for resource governor limits and scanner semaphore."""
 
 from __future__ import annotations
 
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from nexus_control.config import Settings
 from nexus_control.models import (
@@ -23,7 +23,6 @@ from nexus_control.services.resource_governor import (
     HostResources,
     ResourceGovernor,
     compute_auto_concurrency,
-    format_reclaim_notice,
     resolve_limits,
 )
 
@@ -34,11 +33,9 @@ def _settings(tmp_path: Path, **kwargs: object) -> Settings:
         download_root=tmp_path / "dl",
         reports_root=tmp_path / "reports",
         verified_root=tmp_path / "verified",
-        archive_root=tmp_path / "archive",
         scanners="grype",
         pipeline_workers=0,
         max_scanner_procs=0,
-        disk_reclaim_enabled=True,
     )
     base.update(kwargs)
     return Settings(**base)  # type: ignore[arg-type]
@@ -90,34 +87,6 @@ def test_resolve_limits_respects_explicit_overrides(tmp_path: Path) -> None:
     )
     assert limits2.pipeline_workers == 2
     assert limits2.max_scanner_procs == 1
-
-
-def test_archive_and_purge_deletes_downloads(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    repo = "repo"
-    asset = "pkg/a.jar"
-    local = settings.download_root / repo / "pkg" / "a.jar"
-    local.parent.mkdir(parents=True, exist_ok=True)
-    local.write_bytes(b"hello-artifact")
-    checkpoint = local.parent / f"{local.name}.scan-checkpoint.json"
-    checkpoint.write_text("{}", encoding="utf-8")
-
-    limits = resolve_limits(
-        settings,
-        scanner_count=1,
-        workers_override=1,
-        max_scanner_procs_override=1,
-    )
-    gov = ResourceGovernor(settings, limits)
-    result = gov.archive_and_purge(repo, [asset], batch_id="testbatch")
-
-    assert result.asset_count == 1
-    assert result.archive_path is not None
-    assert result.archive_path.is_file()
-    assert not local.exists()
-    assert not checkpoint.exists()
-    notice = format_reclaim_notice(result)
-    assert "archived 1 assets" in notice
 
 
 def test_scanner_semaphore_caps_concurrency(tmp_path: Path) -> None:
@@ -226,18 +195,10 @@ def test_deferred_download_when_gate_closed(tmp_path: Path) -> None:
     assert summary.results[0].download.status == DownloadStatus.DEFERRED
 
 
-def test_disk_pressure_loop_scans_local_then_reclaims(tmp_path: Path) -> None:
+def test_resourced_pipeline_runs_without_archive(tmp_path: Path) -> None:
     from nexus_control.services.resource_pipeline import run_resourced_pipeline
 
-    settings = _settings(
-        tmp_path,
-        pipeline_workers=1,
-        max_scanner_procs=1,
-        disk_high_watermark=0.10,
-        disk_low_watermark=0.05,
-        disk_critical_watermark=0.99,
-    )
-    # Pre-seed local file so pressure path can scan without download
+    settings = _settings(tmp_path, pipeline_workers=1, max_scanner_procs=1)
     local = settings.download_root / "repo" / "pkg" / "a.jar"
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_bytes(b"seed")
@@ -246,20 +207,13 @@ def test_disk_pressure_loop_scans_local_then_reclaims(tmp_path: Path) -> None:
 
     def inspect(asset: NexusAsset) -> DownloadInspection:
         path = settings.download_root / "repo" / Path(asset.path)
-        if path.is_file():
-            return DownloadInspection(needs_download=False, local_path=path)
-        return DownloadInspection(needs_download=True, local_path=path)
-
-    def fake_download(asset: NexusAsset) -> DownloadResult:
-        path = settings.download_root / "repo" / Path(asset.path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"dl")
-        return DownloadResult(
-            status=DownloadStatus.SUCCESS, local_path=path, bytes_written=2
-        )
+        return DownloadInspection(needs_download=False, local_path=path)
 
     pipeline.downloader.inspect_asset = inspect  # type: ignore[method-assign]
-    pipeline.downloader.download_asset = fake_download  # type: ignore[method-assign]
+    pipeline.downloader.download_asset = lambda asset: DownloadResult(  # type: ignore[method-assign]
+        status=DownloadStatus.SKIPPED_EXISTING,
+        local_path=local,
+    )
     pipeline.grype.scan_path = lambda **k: ScanResult(  # type: ignore[method-assign]
         status=ScanStatus.SUCCESS, verdict=Verdict.PASS, scanner="grype"
     )
@@ -271,35 +225,29 @@ def test_disk_pressure_loop_scans_local_then_reclaims(tmp_path: Path) -> None:
     pipeline.verifier.write_manifest = lambda s: None  # type: ignore[method-assign]
     pipeline.verifier.write_unverified_list = lambda s: None  # type: ignore[method-assign]
 
-    # Force "high" disk for first checks, then "low" after reclaim
-    ratios = iter([0.50, 0.50, 0.50, 0.50, 0.02, 0.02, 0.02, 0.02])
-
-    def fake_ratio(self: ResourceGovernor) -> float:  # noqa: ARG001
-        try:
-            return next(ratios)
-        except StopIteration:
-            return 0.02
-
     asset = NexusAsset(
         id="a",
         path="pkg/a.jar",
         download_url="http://x/a",
         repository="repo",
     )
-
-    with patch.object(ResourceGovernor, "disk_used_ratio", fake_ratio):
-        summary, uploads = run_resourced_pipeline(
-            pipeline,
-            repository="repo",
-            items=[asset],
-            workers=1,
-            max_scanner_procs=1,
-            history_source=None,
-        )
-
+    summary, uploads = run_resourced_pipeline(
+        pipeline,
+        repository="repo",
+        items=[asset],
+        workers=1,
+        max_scanner_procs=1,
+        history_source=None,
+    )
     assert summary.total_passed == 1
     assert uploads == []
-    # Reclaim should have removed the download
-    assert not local.exists()
-    archives = list((tmp_path / "archive" / "repo").glob("*.tar.gz"))
-    assert archives
+    assert local.exists()
+
+
+def test_allow_new_download_false_when_critical(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, disk_critical_watermark=0.50)
+    limits = resolve_limits(settings, scanner_count=1, workers_override=1)
+    gov = ResourceGovernor(settings, limits)
+    gov.disk_used_ratio = lambda: 0.99  # type: ignore[method-assign]
+    assert gov.is_critical() is True
+    assert gov.allow_new_download() is False

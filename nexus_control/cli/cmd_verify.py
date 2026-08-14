@@ -262,8 +262,7 @@ def run_verify(args: Namespace) -> int:
             "resources": {
                 "workers": limits.pipeline_workers,
                 "max_scanner_procs": limits.max_scanner_procs,
-                "disk_high_watermark": limits.disk_high_watermark,
-                "disk_low_watermark": limits.disk_low_watermark,
+                "disk_critical_watermark": limits.disk_critical_watermark,
             },
             "selection": {
                 "download_needed": selection.download_needed,

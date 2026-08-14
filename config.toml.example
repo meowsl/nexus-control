@@ -41,12 +41,8 @@ locale = "ru"
 # Глобальный лимит процессов сканеров (все ассеты × scanners). 0 = auto.
 # CLI: --max-scanner-procs N
 # max_scanner_procs = 0
-# Disk-pressure: pause new downloads at high, resume after reclaim below low.
-# disk_high_watermark = 0.80
-# disk_low_watermark = 0.70
+# Stop new downloads if the data volume is this full (default 95%).
 # disk_critical_watermark = 0.95
-# disk_reclaim_enabled = true
-# archive_root = "~/nexus-control/archive"
 # Неизменённый PASS-ассет повторно не сканируется в пределах TTL.
 # После TTL checkpoint протухает, чтобы учитывать обновления vulnerability DB.
 # 0 = всегда сканировать. По умолчанию 86400 (сутки).

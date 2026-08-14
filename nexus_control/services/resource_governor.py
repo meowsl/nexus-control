@@ -1,25 +1,16 @@
-"""Авто-лимиты CPU/RAM и disk-pressure (watermarks, archive/purge)."""
+"""Авто-лимиты CPU/RAM и проверка заполнения диска (без archive/purge)."""
 
 from __future__ import annotations
 
 import logging
 import os
 import shutil
-import tarfile
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from nexus_control.config import Settings
 from nexus_control.utils.fs import ensure_dir
-from nexus_control.nexus.uploads import normalize_storage_asset_path
-from nexus_control.utils.safe_path import (
-    UnsafePathError,
-    asset_download_path,
-    resolve_storage_path,
-    sanitize_repo_name,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +21,7 @@ _DISK_CRITICAL_DEFAULT = 0.95
 
 
 class DiskPressureError(RuntimeError):
-    """Диск заполнен, а reclaim/scan-local не освобождает место."""
+    """Диск заполнен критически, новые downloads невозможны."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +40,7 @@ class HostResources:
 class ResourceLimits:
     pipeline_workers: int
     max_scanner_procs: int
-    disk_high_watermark: float
-    disk_low_watermark: float
     disk_critical_watermark: float
-    disk_reclaim_enabled: bool
     host: HostResources
     workers_from_auto: bool
     scanner_procs_from_auto: bool
@@ -65,19 +53,8 @@ class ResourceLimits:
             f"→ workers={self.pipeline_workers}({auto_w}) "
             f"max_scanner_procs={self.max_scanner_procs}({auto_s}) "
             f"disk={self.host.disk_used_ratio:.0%} "
-            f"(high={self.disk_high_watermark:.0%} "
-            f"low={self.disk_low_watermark:.0%})"
+            f"(critical={self.disk_critical_watermark:.0%})"
         )
-
-
-@dataclass(frozen=True, slots=True)
-class ArchiveResult:
-    archive_path: Path | None
-    asset_count: int
-    bytes_before: int
-    bytes_freed: int
-    disk_ratio_before: float
-    disk_ratio_after: float
 
 
 def read_mem_gb() -> tuple[float, float]:
@@ -98,7 +75,6 @@ def read_mem_gb() -> tuple[float, float]:
         if avail_kb is not None and avail_kb >= 0:
             return avail_kb / (1024 * 1024), total_gb
         return total_gb * 0.5, total_gb
-    # Не Linux / нет meminfo
     return 4.0, 8.0
 
 
@@ -136,8 +112,6 @@ def detect_host_resources(settings: Settings) -> HostResources:
         settings.reports_root,
         settings.verified_root,
     ]
-    if settings.disk_reclaim_enabled:
-        paths.append(settings.archive_root)
     disk_path, total_b, used_b, free_b = disk_usage_for_paths(paths)
     ratio = (used_b / total_b) if total_b else 0.0
     return HostResources(
@@ -198,16 +172,11 @@ def resolve_limits(
         max_scanner = auto_scanners
         scanners_auto = True
 
-    high = float(settings.disk_high_watermark)
-    low = float(settings.disk_low_watermark)
     critical = float(settings.disk_critical_watermark)
     return ResourceLimits(
         pipeline_workers=workers,
         max_scanner_procs=max_scanner,
-        disk_high_watermark=high,
-        disk_low_watermark=low,
         disk_critical_watermark=critical,
-        disk_reclaim_enabled=bool(settings.disk_reclaim_enabled),
         host=host,
         workers_from_auto=workers_auto,
         scanner_procs_from_auto=scanners_auto,
@@ -215,7 +184,7 @@ def resolve_limits(
 
 
 class ResourceGovernor:
-    """Проверки диска + семафор сканеров + archive/purge downloads."""
+    """Семафор сканеров + проверка critical disk (без archive)."""
 
     def __init__(self, settings: Settings, limits: ResourceLimits) -> None:
         self.settings = settings
@@ -234,19 +203,11 @@ class ResourceGovernor:
     def disk_used_ratio(self) -> float:
         return self.refresh_disk().disk_used_ratio
 
-    def is_high(self) -> bool:
-        return self.disk_used_ratio() >= self.limits.disk_high_watermark
-
-    def is_low_or_below(self) -> bool:
-        return self.disk_used_ratio() <= self.limits.disk_low_watermark
-
     def is_critical(self) -> bool:
         return self.disk_used_ratio() >= self.limits.disk_critical_watermark
 
     def allow_new_download(self) -> bool:
-        if self.is_critical():
-            return False
-        return not self.is_high()
+        return not self.is_critical()
 
     def acquire_scanner(self) -> None:
         self._scanner_sem.acquire()
@@ -254,125 +215,5 @@ class ResourceGovernor:
     def release_scanner(self) -> None:
         self._scanner_sem.release()
 
-    def archive_and_purge(
-        self,
-        repository: str,
-        asset_paths: list[str],
-        *,
-        batch_id: str | None = None,
-    ) -> ArchiveResult:
-        """Упаковать локальные downloads в tar.gz и удалить оригиналы."""
-        ratio_before = self.disk_used_ratio()
-        unique_paths = sorted({p.replace("\\", "/").lstrip("/") for p in asset_paths if p})
-        files: list[tuple[str, Path]] = []
-        bytes_before = 0
-        for asset_path in unique_paths:
-            try:
-                dest = asset_download_path(
-                    self.settings.download_root,
-                    repository,
-                    normalize_storage_asset_path(asset_path),
-                )
-            except UnsafePathError:
-                continue
-            local = resolve_storage_path(dest)
-            if not local.is_file():
-                # Legacy path without .nupkg suffix (pre-normalize storage).
-                try:
-                    legacy = asset_download_path(
-                        self.settings.download_root, repository, asset_path
-                    )
-                except UnsafePathError:
-                    continue
-                local = resolve_storage_path(legacy)
-                if not local.is_file():
-                    continue
-            try:
-                size = local.stat().st_size
-            except OSError:
-                size = 0
-            bytes_before += size
-            files.append((asset_path, local))
-            # Checkpoint рядом с файлом
-            checkpoint = local.parent / f"{local.name}.scan-checkpoint.json"
-            if checkpoint.is_file():
-                files.append((f"{asset_path}.scan-checkpoint.json", checkpoint))
 
-        if not files:
-            return ArchiveResult(
-                archive_path=None,
-                asset_count=0,
-                bytes_before=0,
-                bytes_freed=0,
-                disk_ratio_before=ratio_before,
-                disk_ratio_after=ratio_before,
-            )
-
-        stamp = batch_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        repo_safe = sanitize_repo_name(repository)
-        archive_dir = ensure_dir(self.settings.archive_root / repo_safe)
-        archive_path = archive_dir / f"{stamp}.tar.gz"
-
-        # Дедуп путей на диске (main + checkpoint)
-        seen: set[Path] = set()
-        unique_files: list[tuple[str, Path]] = []
-        for name, path in files:
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            unique_files.append((name, path))
-
-        with tarfile.open(archive_path, "w:gz") as tar:
-            for arcname, path in unique_files:
-                try:
-                    tar.add(path, arcname=arcname, recursive=False)
-                except OSError as exc:
-                    logger.warning("Archive skip %s: %s", path, exc)
-
-        freed = 0
-        for _name, path in unique_files:
-            try:
-                size = path.stat().st_size
-            except OSError:
-                size = 0
-            try:
-                path.unlink(missing_ok=True)
-                freed += size
-            except OSError as exc:
-                logger.warning("Purge failed for %s: %s", path, exc)
-
-        ratio_after = self.disk_used_ratio()
-        logger.info(
-            "disk reclaim: archived %d files (%d assets) → %s, "
-            "freed≈%.2f GiB, usage %.0f%%→%.0f%%",
-            len(unique_files),
-            len(unique_paths),
-            archive_path,
-            freed / (1024**3),
-            ratio_before * 100,
-            ratio_after * 100,
-        )
-        return ArchiveResult(
-            archive_path=archive_path,
-            asset_count=len(unique_paths),
-            bytes_before=bytes_before,
-            bytes_freed=freed,
-            disk_ratio_before=ratio_before,
-            disk_ratio_after=ratio_after,
-        )
-
-
-def format_reclaim_notice(result: ArchiveResult) -> str:
-    if result.asset_count == 0:
-        return "disk reclaim: nothing to archive"
-    where = str(result.archive_path) if result.archive_path else "?"
-    return (
-        f"disk reclaim: archived {result.asset_count} assets → {where}, "
-        f"freed≈{result.bytes_freed / (1024**3):.2f} GiB, "
-        f"usage {result.disk_ratio_before:.0%}→{result.disk_ratio_after:.0%}"
-    )
-
-
-# Re-export for tests / callers that want the constant.
 DISK_CRITICAL_DEFAULT = _DISK_CRITICAL_DEFAULT
