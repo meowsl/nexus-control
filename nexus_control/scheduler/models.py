@@ -28,11 +28,21 @@ class ScheduleRule:
     # Legacy single target (only for rules with one repo). Prefer ``targets``.
     target: str | None = None
     scanners: str | None = None
-    path_prefix: str | None = None
+    # Asset path filters (OR). Empty = whole repo. Prefer this over legacy string.
+    path_prefixes: list[str] = field(default_factory=list)
     workers: int | None = None
     limit: int | None = None
     scan_limit: int | None = None
     refresh: bool = False
+
+    @property
+    def path_prefix(self) -> str | None:
+        """Legacy single-prefix view: one entry as-is, several comma-joined."""
+        if not self.path_prefixes:
+            return None
+        if len(self.path_prefixes) == 1:
+            return self.path_prefixes[0]
+        return ",".join(self.path_prefixes)
 
     def wants_verify(self) -> bool:
         return self.action in {"verify", "verify_upload"}

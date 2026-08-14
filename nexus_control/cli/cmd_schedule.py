@@ -520,10 +520,19 @@ def _prompt_rule(
         default=bool(existing.enabled) if existing else True,
     )
 
-    path_prefix = Prompt.ask(
-        "path_prefix (empty=none)",
-        default=(existing.path_prefix or "") if existing else "",
-    ).strip() or None
+    prefixes_default = ""
+    if existing and existing.path_prefixes:
+        prefixes_default = ",".join(existing.path_prefixes)
+    prefixes_raw = Prompt.ask(
+        "path_prefixes (comma-separated, empty=none)",
+        default=prefixes_default,
+    ).strip()
+    path_prefixes = [
+        part.strip() for part in prefixes_raw.split(",") if part.strip()
+    ] if prefixes_raw else []
+    from nexus_control.utils.path_prefixes import normalize_path_prefixes
+
+    path_prefixes = normalize_path_prefixes(path_prefixes)
 
     scanners = Prompt.ask(
         "scanners (empty=config default)",
@@ -576,7 +585,7 @@ def _prompt_rule(
         targets=targets,
         target=legacy_target,
         scanners=scanners,
-        path_prefix=path_prefix,
+        path_prefixes=path_prefixes,
         workers=workers,
         limit=limit,
         scan_limit=scan_limit,

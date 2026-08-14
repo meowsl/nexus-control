@@ -171,7 +171,11 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
     target = item.get("target")
     targets_raw = item.get("targets")
     scanners = item.get("scanners")
-    path_prefix = item.get("path_prefix")
+    path_prefixes = _parse_path_prefixes(
+        item,
+        rule_id=rule_id,
+        index=index,
+    )
 
     targets = _parse_targets(targets_raw, rule_id=rule_id, index=index)
     legacy_target: str | None = None
@@ -215,12 +219,46 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         targets=targets,
         target=legacy_target,
         scanners=str(scanners).strip() if scanners else None,
-        path_prefix=str(path_prefix).strip() if path_prefix else None,
+        path_prefixes=path_prefixes,
         workers=workers,
         limit=limit,
         scan_limit=scan_limit,
         refresh=bool(item.get("refresh", False)),
     )
+
+
+def _parse_path_prefixes(
+    item: dict[str, Any],
+    *,
+    rule_id: str,
+    index: int,
+) -> list[str]:
+    """Accept ``path_prefix`` (str|list) and/or ``path_prefixes`` (str|list)."""
+    from nexus_control.utils.path_prefixes import normalize_path_prefixes
+
+    chunks: list[str] = []
+    for key in ("path_prefix", "path_prefixes"):
+        raw = item.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            chunks.append(raw)
+            continue
+        if isinstance(raw, list):
+            for entry in raw:
+                if entry is None:
+                    continue
+                if isinstance(entry, (str, int, float)):
+                    chunks.append(str(entry))
+                    continue
+                raise ScheduleStoreError(
+                    f"rules[{index}] ({rule_id}): {key} entries must be strings"
+                )
+            continue
+        raise ScheduleStoreError(
+            f"rules[{index}] ({rule_id}): {key} must be a string or array of strings"
+        )
+    return normalize_path_prefixes(chunks)
 
 
 def _parse_targets(
@@ -303,8 +341,10 @@ def _rule_to_dict(rule: ScheduleRule) -> dict[str, Any]:
         data["target"] = rule.target
     if rule.scanners:
         data["scanners"] = rule.scanners
-    if rule.path_prefix:
-        data["path_prefix"] = rule.path_prefix
+    if len(rule.path_prefixes) == 1:
+        data["path_prefix"] = rule.path_prefixes[0]
+    elif len(rule.path_prefixes) > 1:
+        data["path_prefixes"] = list(rule.path_prefixes)
     if rule.workers is not None:
         data["workers"] = rule.workers
     if rule.limit is not None:

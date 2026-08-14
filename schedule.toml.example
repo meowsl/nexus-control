@@ -29,7 +29,9 @@ repos = ["raw-hosted", "pypi-hosted", "maven-snapshots"]
 action = "verify"
 upload = true
 # scanners = "grype,trivy,osv"
+# Single prefix (string) or several (array); both keys also merge if set together.
 # path_prefix = "com/example"
+# path_prefixes = ["com/", "org/"]
 # workers = 4
 # limit = 100          # max assets needing download/re-download
 # scan_limit = 20      # max mains to verify (handy for debug on large repos)

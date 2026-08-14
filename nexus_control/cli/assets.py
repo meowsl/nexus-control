@@ -22,7 +22,10 @@ from nexus_control.nexus.uploads import (
 )
 from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
-
+from nexus_control.utils.path_prefixes import (
+    normalize_path_prefixes,
+    path_matches_prefixes,
+)
 logger = logging.getLogger(__name__)
 
 # (inspected_count, stats, source_label) — source: "nexus" | "cache"
@@ -91,7 +94,7 @@ def list_assets_for_cli(
 def filter_assets_for_pipeline(
     assets: list[NexusAsset],
     *,
-    path_prefix: str | None = None,
+    path_prefix: str | Sequence[str] | None = None,
     limit: int | None = None,
     scan_limit: int | None = None,
 ) -> list[NexusAsset]:
@@ -115,7 +118,7 @@ def select_assets_for_cli(
     settings: Settings,
     repository: str,
     *,
-    path_prefix: str | None = None,
+    path_prefix: str | Sequence[str] | None = None,
     limit: int | None = None,
     scan_limit: int | None = None,
     refresh: bool = False,
@@ -246,7 +249,7 @@ def select_assets_for_cli(
 def _select_assets(
     assets: Iterable[NexusAsset],
     *,
-    path_prefix: str | None,
+    path_prefix: str | Sequence[str] | None,
     limit: int | None,
     scan_limit: int | None = None,
     settings: Settings | None = None,
@@ -280,7 +283,7 @@ class _AssetSelector:
     def __init__(
         self,
         *,
-        path_prefix: str | None,
+        path_prefix: str | Sequence[str] | None,
         limit: int | None,
         scan_limit: int | None = None,
         settings: Settings | None = None,
@@ -292,7 +295,7 @@ class _AssetSelector:
         progress_source: str = "nexus",
         progress_every: int = 50,
     ) -> None:
-        self.prefix = (path_prefix or "").strip().lstrip("/")
+        self.prefixes = normalize_path_prefixes(path_prefix)
         self.limit = limit
         self.scan_limit = scan_limit
         self.total = 0
@@ -331,7 +334,7 @@ class _AssetSelector:
     def add(self, asset: NexusAsset) -> None:
         self.total += 1
         path = asset.path.replace("\\", "/").lstrip("/")
-        if self.prefix and not path.startswith(self.prefix):
+        if not path_matches_prefixes(path, self.prefixes):
             self.emit_progress()
             return
         main_path = main_asset_path_for_sidecar(path)
