@@ -178,7 +178,9 @@ nexus-control-cli schedule stop
 nexus-control-cli schedule status
 nexus-control-cli schedule status -m          # live progress (Ctrl+C)
 nexus-control-cli schedule status -m --interval 0.5
-nexus-control-cli schedule run nightly-core
+nexus-control-cli schedule run nightly-core          # фон; прогресс: status -m
+nexus-control-cli schedule run nightly-core --foreground
+nexus-control-cli schedule status -m
 ```
 
 Правила хранятся в `~/.config/nexus-control/schedule.toml` (или `$NEXUS_CONTROL_SCHEDULE`).
