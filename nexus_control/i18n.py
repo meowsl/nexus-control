@@ -301,6 +301,45 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "DefectDojo включён. Конфиг: {path}; vault API-ключа: {vault}"
         ),
         "DefectDojo disabled": "DefectDojo выключен",
+        (
+            "A webhook can receive a JSON summary after each verify "
+            "(TUI / CLI / scheduler) for your own tooling."
+        ): (
+            "Вебхук может получать JSON-сводку после каждого verify "
+            "(TUI / CLI / планировщик) для вашей автоматизации."
+        ),
+        "Enable webhook integration?": "Включить интеграцию вебхука?",
+        "Webhook URL [{default}]": "URL вебхука [{default}]",
+        "Verify webhook TLS certificates? [Y/n]": (
+            "Проверять TLS-сертификаты вебхука? [Y/n]"
+        ),
+        (
+            "Auth: none (no credentials) | bearer (token) | "
+            "basic (login/password) | header (custom HTTP header)"
+        ): (
+            "Авторизация: none (без кред) | bearer (токен) | "
+            "basic (логин/пароль) | header (свой HTTP-заголовок)"
+        ),
+        "Webhook auth [{default}]": "Авторизация вебхука [{default}]",
+        "Choose: none, bearer, basic, or header": (
+            "Выберите: none, bearer, basic или header"
+        ),
+        "Webhook Bearer token: ": "Bearer-токен вебхука: ",
+        "Token is required": "Требуется токен",
+        "Webhook username: ": "Имя пользователя вебхука: ",
+        "Username is required": "Требуется имя пользователя",
+        "Webhook password: ": "Пароль вебхука: ",
+        "Custom header name [{default}]": "Имя заголовка [{default}]",
+        "Custom header value: ": "Значение заголовка: ",
+        "Header value is required": "Требуется значение заголовка",
+        "Webhook secrets saved (encrypted) under {path}": (
+            "Секреты вебхука сохранены (encrypted) в {path}"
+        ),
+        "Webhook setup": "Настройка вебхука",
+        "Webhook enabled. Config: {path}; secrets vault: {vault}": (
+            "Вебхук включён. Конфиг: {path}; vault секретов: {vault}"
+        ),
+        "Webhook disabled": "Вебхук выключен",
         "Missing OSV offline DB for: {ecosystems}": (
             "Нет локальной OSV offline DB для: {ecosystems}"
         ),

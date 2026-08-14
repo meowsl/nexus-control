@@ -87,7 +87,7 @@ def test_wizard_writes_locale(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     path = resolve_config_path()
 
-    answers = iter(["en", "http://nexus.test:8081", "n", "grype", "n"])
+    answers = iter(["en", "http://nexus.test:8081", "n", "grype", "n", "n"])
 
     def fake_input(prompt: str = "") -> str:
         return next(answers)

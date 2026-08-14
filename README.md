@@ -97,6 +97,11 @@ nexus-control-cli osv-db status
 nexus-control-cli osv-db update --ecosystem NuGet
 # cron example:
 # 0 3 * * * nexus-control-cli osv-db update --ecosystem NuGet
+
+# Webhook: POST JSON-сводки после verify (Bearer / Basic / custom header)
+nexus-control-cli webhook configure
+nexus-control-cli webhook status
+nexus-control-cli webhook test
 ```
 
 `--limit N` ограничивает только основные ассеты, которым действительно нужна
@@ -452,6 +457,29 @@ API-ключ: в UI DefectDojo → профиль → **API Key**.
 
 ---
 
+## Webhook
+
+Опционально: после каждого verify (TUI / CLI / scheduler) nexus-control шлёт
+**POST JSON** на ваш URL — сводка репозитория, totals, ассеты и уязвимости
+(без native dumps сканеров). Ошибка доставки не роняет verify (warning в лог).
+
+- First-run wizard: «Включить вебхук?» → URL + auth.
+- Уже настроенный инстанс: `nexus-control-cli webhook configure` / `status` /
+  `test` / `disable [--clear-vault]`.
+- Auth: `none` | `bearer` (токен) | `basic` (логин/пароль) | `header` (свой
+  заголовок, например `X-Api-Key`). Секреты — vault или env
+  (`WEBHOOK_TOKEN`, `WEBHOOK_USERNAME`/`WEBHOOK_PASSWORD`, `WEBHOOK_HEADER_VALUE`),
+  не TOML.
+- Заголовки запроса: `Content-Type: application/json`,
+  `User-Agent: nexus-control/<version>`, `X-Nexus-Control-Event: verify.completed`
+  (для `webhook test` — `webhook.test`).
+
+Тело `verify.completed` (сжато): `event`, `source`, `version`, `repository`,
+времена, `cancelled`, `scanners`, `totals`, `assets[]` (`path`, `kind`,
+`verdict`, `scans` с counts и до 20 CVE на сканер).
+
+---
+
 ## Docker-репозитории
 
 - Теги показываются под виртуальным узлом `images/` (не сырые blob/manifest paths).
@@ -552,11 +580,13 @@ nexus-control/
     │   ├── cmd_history.py       # list/show scan history
     │   ├── cmd_osv_db.py        # offline OSV DB status/update
     │   ├── cmd_defectdojo.py    # DefectDojo configure/status/disable
+    │   ├── cmd_webhook.py       # webhook configure/status/disable/test
     │   ├── assets.py            # listing / cache / inspect / checkpoints
     │   ├── progress.py
     │   └── bootstrap.py
-    ├── integrations/            # DefectDojo push и др.
-    │   └── defectdojo.py
+    ├── integrations/            # DefectDojo, webhook
+    │   ├── defectdojo.py
+    │   └── webhook.py
     ├── scheduler/               # schedule.toml + daemon (pidfile/cron loop)
     │   ├── models.py / store.py / cronutil.py
     │   ├── daemon.py / jobs.py / pidfile.py / state.py

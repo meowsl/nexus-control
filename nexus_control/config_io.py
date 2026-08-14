@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 
 # Секреты не должны попадать в config.toml из wizard.
 SECRET_KEYS = frozenset(
-    {"nexus_password", "nexus_username", "defectdojo_api_key"}
+    {
+        "nexus_password",
+        "nexus_username",
+        "defectdojo_api_key",
+        "webhook_token",
+        "webhook_username",
+        "webhook_password",
+        "webhook_header_value",
+    }
 )
 
 

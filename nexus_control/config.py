@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 ScannerDockerMode = Literal["auto", "true", "false"]
 GrypeDockerMode = ScannerDockerMode  # совместимость
 VerifiedLinkMode = Literal["auto", "copy"]
+WebhookAuthMode = Literal["none", "bearer", "basic", "header"]
 
 # Путь TOML для settings_customise_sources (задаётся в load_settings).
 _active_toml_path: Path | None = None
@@ -155,6 +156,35 @@ class Settings(BaseSettings):
     defectdojo_engagement_name: str = ""
     defectdojo_product_type_name: str = "Nexus"
 
+    # Generic webhook after verify (TUI / CLI / scheduler).
+    # Secrets (token / password / header value) — env or vault, not TOML.
+    webhook_enabled: bool = False
+    webhook_url: str = ""
+    webhook_auth: WebhookAuthMode = "none"
+    webhook_token: str = Field(
+        default="",
+        description="Bearer token (env WEBHOOK_TOKEN or vault)",
+        validation_alias=AliasChoices("webhook_token", "WEBHOOK_TOKEN"),
+    )
+    webhook_username: str = Field(
+        default="",
+        validation_alias=AliasChoices("webhook_username", "WEBHOOK_USERNAME"),
+    )
+    webhook_password: str = Field(
+        default="",
+        validation_alias=AliasChoices("webhook_password", "WEBHOOK_PASSWORD"),
+    )
+    webhook_header_name: str = ""
+    webhook_header_value: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "webhook_header_value",
+            "WEBHOOK_HEADER_VALUE",
+        ),
+    )
+    webhook_verify_ssl: bool = True
+    webhook_timeout: float = Field(default=15.0, ge=1.0, le=120.0)
+
     # Перезапись
     overwrite_downloads: bool = False
     overwrite_verified: bool = False
@@ -219,7 +249,14 @@ class Settings(BaseSettings):
         return str(value).strip().rstrip("/")
 
     @field_validator(
-        "nexus_username", "nexus_password", "defectdojo_api_key", mode="before"
+        "nexus_username",
+        "nexus_password",
+        "defectdojo_api_key",
+        "webhook_token",
+        "webhook_username",
+        "webhook_password",
+        "webhook_header_value",
+        mode="before",
     )
     @classmethod
     def _coerce_optional_secret(cls, value: object) -> str:
@@ -227,9 +264,9 @@ class Settings(BaseSettings):
             return ""
         return str(value)
 
-    @field_validator("defectdojo_url", mode="before")
+    @field_validator("defectdojo_url", "webhook_url", mode="before")
     @classmethod
-    def _normalize_defectdojo_url(cls, value: object) -> str:
+    def _normalize_optional_http_url(cls, value: object) -> str:
         if value is None:
             return ""
         text = str(value).strip().rstrip("/")
@@ -237,8 +274,20 @@ class Settings(BaseSettings):
             return ""
         if "://" not in text:
             raise ValueError(
-                f"Invalid DEFECTDOJO_URL {text!r}: expected scheme, "
-                "e.g. http://localhost:8080"
+                f"Invalid URL {text!r}: expected scheme, "
+                "e.g. https://hooks.example.com/scan"
+            )
+        return text
+
+    @field_validator("webhook_auth", mode="before")
+    @classmethod
+    def _normalize_webhook_auth(cls, value: object) -> str:
+        text = str(value or "none").strip().lower()
+        if text in {"password", "login", "login-password", "userpass"}:
+            return "basic"
+        if text not in {"none", "bearer", "basic", "header"}:
+            raise ValueError(
+                f"Invalid webhook_auth={text!r}; expected none|bearer|basic|header"
             )
         return text
 
@@ -389,6 +438,16 @@ class Settings(BaseSettings):
             "defectdojo_product_name": self.defectdojo_product_name,
             "defectdojo_engagement_name": self.defectdojo_engagement_name,
             "defectdojo_product_type_name": self.defectdojo_product_type_name,
+            "webhook_enabled": self.webhook_enabled,
+            "webhook_url": self.webhook_url,
+            "webhook_auth": self.webhook_auth,
+            "webhook_token": "***" if self.webhook_token else "",
+            "webhook_username": self.webhook_username,
+            "webhook_password": "***" if self.webhook_password else "",
+            "webhook_header_name": self.webhook_header_name,
+            "webhook_header_value": "***" if self.webhook_header_value else "",
+            "webhook_verify_ssl": self.webhook_verify_ssl,
+            "webhook_timeout": self.webhook_timeout,
             "overwrite_downloads": self.overwrite_downloads,
             "overwrite_verified": self.overwrite_verified,
             "verified_link_mode": self.verified_link_mode,
