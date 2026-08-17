@@ -210,10 +210,14 @@ def test_resourced_pipeline_runs_without_archive(tmp_path: Path) -> None:
         return DownloadInspection(needs_download=False, local_path=path)
 
     pipeline.downloader.inspect_asset = inspect  # type: ignore[method-assign]
-    pipeline.downloader.download_asset = lambda asset: DownloadResult(  # type: ignore[method-assign]
-        status=DownloadStatus.SKIPPED_EXISTING,
-        local_path=local,
-    )
+
+    def download_asset(_asset: NexusAsset) -> DownloadResult:
+        return DownloadResult(
+            status=DownloadStatus.SKIPPED_EXISTING,
+            local_path=local,
+        )
+
+    pipeline.downloader.download_asset = download_asset  # type: ignore[method-assign]
     pipeline.grype.scan_path = lambda **k: ScanResult(  # type: ignore[method-assign]
         status=ScanStatus.SUCCESS, verdict=Verdict.PASS, scanner="grype"
     )

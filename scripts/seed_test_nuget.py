@@ -42,8 +42,10 @@ def _nupkg_bytes(package_id: str, version: str) -> bytes:
             (
                 '<?xml version="1.0" encoding="utf-8"?>'
                 '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                '<Default Extension="psmdcp" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+                '<Default Extension="rels" '
+                'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="psmdcp" '
+                'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
                 '<Default Extension="nuspec" ContentType="application/octet"/>'
                 "</Types>"
             ),
