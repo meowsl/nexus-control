@@ -63,6 +63,27 @@ class TuiLogHandler(logging.Handler):
             self.handleError(record)
 
 
+class FlushingRotatingFileHandler(RotatingFileHandler):
+    """Ротация + немедленный flush, чтобы ``tail -f`` видел строки во время job."""
+
+    def _open(self):
+        return open(
+            self.baseFilename,
+            self.mode,
+            encoding=self.encoding,
+            errors=self.errors,
+            buffering=1,
+        )
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        try:
+            if self.stream is not None:
+                self.stream.flush()
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
 def setup_logging(
     level: str,
     log_file: Path,
@@ -82,7 +103,7 @@ def setup_logging(
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = RotatingFileHandler(
+    file_handler = FlushingRotatingFileHandler(
         log_file,
         maxBytes=5 * 1024 * 1024,
         backupCount=5,

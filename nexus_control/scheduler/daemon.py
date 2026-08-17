@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -46,6 +47,7 @@ from nexus_control.scheduler.state import (
     save_state,
 )
 from nexus_control.scheduler.store import ScheduleStoreError, load_schedule
+from nexus_control.utils.fs import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +241,9 @@ def run_rule_now(
         foreground = True
 
     settings = load_cli_settings(allow_prompt=False)
+    if foreground:
+        # load_cli_settings пишет в nexus-control.log; manual run — в scheduler.log.
+        _setup_scheduler_file_logging(settings)
     schedule_path = resolve_schedule_path(schedule_file)
     config = load_schedule(schedule_path)
     rule = config.get_rule(rule_id)
@@ -263,6 +268,13 @@ def run_rule_now(
         settings=settings,
         scan_limit=scan_limit,
     )
+
+
+def _setup_scheduler_file_logging(settings: Settings) -> Path:
+    """Писать логи демона и manual run в scheduler.log (не в nexus-control.log)."""
+    log_path = scheduler_log_path(settings.log_file)
+    setup_logging(settings.log_level, log_path, password=settings.nexus_password)
+    return log_path
 
 
 def _active_manual_pid(state: SchedulerState) -> int | None:
@@ -311,6 +323,7 @@ def _spawn_rule_run(
 
     env = os.environ.copy()
     env[ENV_RUN_FOREGROUND] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     cmd = [
         sys.executable,
         "-m",
@@ -323,12 +336,16 @@ def _spawn_rule_run(
     ]
     if scan_limit is not None:
         cmd.extend(["--scan-limit", str(scan_limit)])
-    with open(os.devnull, "rb") as devnull_in, open(os.devnull, "ab") as devnull_out:
-        proc = __import__("subprocess").Popen(
+    log_path = scheduler_log_path(settings.log_file)
+    ensure_parent_dir(log_path)
+    # stdin → /dev/null; stdout/stderr → scheduler.log (ошибки до setup_logging
+    # и Rich-прогресс не теряются). Child FileHandler пишет в тот же файл.
+    with open(os.devnull, "rb") as devnull_in, open(log_path, "ab") as log_out:
+        proc = subprocess.Popen(
             cmd,
             stdin=devnull_in,
-            stdout=devnull_out,
-            stderr=devnull_out,
+            stdout=log_out,
+            stderr=log_out,
             env=env,
             start_new_session=True,
             close_fds=True,
@@ -337,14 +354,14 @@ def _spawn_rule_run(
     if proc.poll() is not None:
         print(
             f"Background run failed to start (exit={proc.returncode}). "
-            f"Check {settings.log_file}",
+            f"Check {log_path}",
             file=sys.stderr,
         )
         return 1
     print(
         f"Started rule {rule_id!r} in background (pid={proc.pid}).\n"
         f"Progress: nexus-control-cli schedule status -m\n"
-        f"Log: {settings.log_file}",
+        f"Log: {log_path}",
         file=sys.stderr,
     )
     return 0
@@ -488,8 +505,7 @@ def _spawn_detached(schedule_path: Path) -> int:
 
 
 def _run_loop(settings: Settings, schedule_path: Path) -> int:
-    log_path = scheduler_log_path(settings.log_file)
-    setup_logging(settings.log_level, log_path, password=settings.nexus_password)
+    _setup_scheduler_file_logging(settings)
     logger.info("Scheduler daemon starting schedule=%s", schedule_path)
 
     lock = PidLock(
