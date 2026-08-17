@@ -52,7 +52,11 @@ def test_parser_verify_flags() -> None:
     assert args.repo == "maven-hosted"
     assert args.upload is True
     assert args.target == "maven-hosted-verified"
-    assert args.path_prefix == "com/example"
+    assert args.path_prefix == ["com/example"]
+    multi = parser.parse_args(
+        ["verify", "--repo", "r", "--path-prefix", "com/", "--path-prefix", "org/"]
+    )
+    assert multi.path_prefix == ["com/", "org/"]
     assert args.limit == 5
     assert args.scan_limit == 3
     assert args.workers == 8
@@ -128,6 +132,16 @@ def test_filter_path_prefix_and_limit() -> None:
         "com/a/1.0/a.jar",
         "com/a/1.0/a.jar.md5",
         "com/a/1.0/a.jar.sha1",
+    }
+
+    multi = filter_assets_for_pipeline(
+        assets, path_prefix=["com/a", "org/"], limit=None
+    )
+    assert {a.path for a in multi} == {
+        "com/a/1.0/a.jar",
+        "com/a/1.0/a.jar.md5",
+        "com/a/1.0/a.jar.sha1",
+        "org/x/1.0/x.jar",
     }
 
     limited = filter_assets_for_pipeline(assets, path_prefix="com", limit=1)

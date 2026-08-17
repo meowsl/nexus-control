@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from nexus_control.config import Settings
 from nexus_control.services.osv_offline_db import (
     EnsureStatus,

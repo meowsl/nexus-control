@@ -11,6 +11,7 @@ import pytest
 
 from nexus_control.scheduler.cronutil import (
     CronError,
+    format_iso_in_timezone,
     next_fire,
     preview_next_fires,
     validate_cron,
@@ -91,6 +92,18 @@ def test_next_fire_timezone() -> None:
     assert fires[0] < fires[1]
 
 
+def test_format_iso_in_timezone() -> None:
+    assert (
+        format_iso_in_timezone(
+            "2026-08-14T03:05:01.554728+00:00",
+            "Europe/Moscow",
+        )
+        == "2026-08-14T06:05:01+03:00"
+    )
+    assert format_iso_in_timezone("", "Europe/Moscow") == ""
+    assert format_iso_in_timezone("not-a-date", "Europe/Moscow") == "not-a-date"
+
+
 def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     data = {
         "scheduler": {"timezone": "Europe/Moscow", "overlap": "skip"},
@@ -130,9 +143,63 @@ def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:
     loaded = load_schedule(path)
     assert loaded.timezone == "Europe/Moscow"
     assert [r.id for r in loaded.rules] == ["nightly-core", "weekend"]
+    assert loaded.rules[1].path_prefixes == ["com/example"]
     assert loaded.rules[1].path_prefix == "com/example"
     assert loaded.rules[1].workers == 2
     assert loaded.rules[1].scan_limit == 5
+
+
+def test_parse_path_prefixes_string_and_list(tmp_path: Path) -> None:
+    as_string = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "s",
+                    "cron": "0 1 * * *",
+                    "repos": ["r"],
+                    "path_prefix": "/com/example",
+                }
+            ]
+        }
+    )
+    assert as_string.rules[0].path_prefixes == ["com/example"]
+
+    as_list = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "m",
+                    "cron": "0 1 * * *",
+                    "repos": ["r"],
+                    "path_prefixes": ["com/", "org/", "/com/"],
+                }
+            ]
+        }
+    )
+    assert as_list.rules[0].path_prefixes == ["com/", "org/"]
+    assert as_list.rules[0].path_prefix == "com/,org/"
+
+    merged = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "both",
+                    "cron": "0 1 * * *",
+                    "repos": ["r"],
+                    "path_prefix": "com/",
+                    "path_prefixes": ["org/", "net/"],
+                }
+            ]
+        }
+    )
+    assert merged.rules[0].path_prefixes == ["com/", "org/", "net/"]
+
+    out = tmp_path / "s.toml"
+    save_schedule(as_list, out)
+    text = out.read_text(encoding="utf-8")
+    assert "path_prefixes" in text
+    reloaded = load_schedule(out)
+    assert reloaded.rules[0].path_prefixes == ["com/", "org/"]
 
 
 def test_parse_rejects_duplicate_ids() -> None:
