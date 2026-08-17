@@ -17,7 +17,11 @@ from nexus_control.models import (
     Verdict,
     Vulnerability,
 )
-from nexus_control.services.scan_common import format_text_report, normalize_severity
+from nexus_control.services.scan_common import (
+    format_text_report,
+    normalize_severity,
+    verdict_from_vulnerabilities,
+)
 from nexus_control.utils.fs import ensure_parent_dir, write_json
 from nexus_control.utils.safe_path import report_paths
 from nexus_control.utils.subprocess_runner import CommandError, CommandResult, run_command, which
@@ -278,7 +282,7 @@ class OsvScanner:
                 scanner_version=version,
             )
 
-        parsed = parse_osv_json(result.stdout)
+        parsed = parse_osv_json(result.stdout, severity=self.settings.severity)
         try:
             raw = json.loads(result.stdout) if result.stdout.strip() else parsed.raw
         except json.JSONDecodeError:
@@ -401,7 +405,11 @@ def is_osv_soft_empty(stderr: str, stdout: str = "") -> bool:
     return any(marker in text for marker in _OSV_SOFT_EMPTY_MARKERS)
 
 
-def parse_osv_json(payload: str | dict[str, Any]) -> ScanResult:
+def parse_osv_json(
+    payload: str | dict[str, Any],
+    *,
+    severity: str | None = None,
+) -> ScanResult:
     """Парсер JSON osv-scanner (results[].packages[].vulnerabilities)."""
     if isinstance(payload, str):
         text = payload.strip()
@@ -478,7 +486,7 @@ def parse_osv_json(payload: str | dict[str, Any]) -> ScanResult:
     for v in vulns:
         counts.increment(v.severity)
 
-    verdict = Verdict.PASS if counts.total == 0 else Verdict.FAIL
+    verdict = verdict_from_vulnerabilities(vulns, severity)
     return ScanResult(
         status=ScanStatus.SUCCESS,
         verdict=verdict,

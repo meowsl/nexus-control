@@ -19,6 +19,10 @@ locale = "ru"
 # assets_cache_ttl = 86400
 
 # scanners = "grype"          # или "trivy", "osv", или "grype,trivy,osv"
+# Минимальная severity для FAIL (этот уровень и выше).
+# negligible = любая находка (по умолчанию). Unknown всегда FAIL.
+# CLI: --severity high   TUI: клавиша s   schedule: поле severity у правила
+# severity = "negligible"
 # DefectDojo: после verify FAIL-ассеты → Generic Findings Import (reimport-scan).
 # API-ключ НЕ в TOML — vault (wizard / defectdojo configure) или DEFECTDOJO_API_KEY.
 # defectdojo_enabled = false

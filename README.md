@@ -86,6 +86,9 @@ nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max main
 # Параллельная загрузка/скан (по умолчанию auto от CPU/RAM; или явный override)
 nexus-control-cli verify --repo maven-hosted --workers 8 --max-scanner-procs 4
 
+# Порог severity (FAIL на high+; Low/Medium не блокируют verified)
+nexus-control-cli verify --repo maven-hosted --severity high
+
 # История сканирований (последние verify из TUI / CLI / scheduler)
 nexus-control-cli history
 nexus-control-cli history --repo maven-hosted --limit 20
@@ -362,6 +365,7 @@ nexus-control
 | `VERIFIED_ROOT` | `~/nexus-control` | Родитель каталогов `<repo>-verified/` |
 | `VERIFIED_LINK_MODE` | `auto` | `auto`: hardlink download→verified на том же volume (без удвоения байт), иначе copy; `copy`: всегда полная копия |
 | `SCANNERS` | `grype` | Через запятую: `grype`, `trivy`, `osv` (в TUI — клавиша `s`) |
+| `SEVERITY` | `negligible` | Порог FAIL: `critical` \| `high` \| `medium` \| `low` \| `negligible` (TUI `s`, CLI `--severity`) |
 | `DEFECTDOJO_ENABLED` | `false` | После verify пушить FAIL findings в DefectDojo |
 | `DEFECTDOJO_URL` | _(пусто)_ | Базовый URL, например `http://localhost:8080` |
 | `DEFECTDOJO_API_KEY` | _(пусто)_ | API token (или encrypted vault) |
@@ -403,7 +407,7 @@ python main.py
 1. Запустите TUI против вашего Nexus.
 2. На экране репозиториев: фильтр `/`, обновление `r`, открытие `Enter`.
 3. В дереве ассетов выберите файл или директорию.
-4. `s` — выбрать сканеры (grype / trivy / osv). Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
+4. `s` — выбрать сканеры и порог severity. Space — отметить файлы/папки; `v` — download → scan → copy PASS в verified (`d` — только download).
 5. Нажмите `V` для того же сценария по **всему** репозиторию.
 6. Изучите модальное окно результатов; позже `o` / `h` — последний отчёт и история.
 
@@ -434,7 +438,7 @@ python main.py
 | `v` | Verify выбранного / отмеченного |
 | `D` | Скачать **весь** репозиторий |
 | `V` | Verify **всего** репозитория |
-| `s` | Сканеры (grype / trivy / osv) |
+| `s` | Сканеры и порог severity |
 | `o` | Последний отчёт (память или disk history) |
 | `h` | История сканирований (текущий репо) |
 | `?` | Справка |
@@ -481,7 +485,7 @@ Docker-образы сохраняются как:
 
 ## Сканеры (Grype / Trivy / OSV) и Docker-fallback
 
-Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. При verify включённые сканеры могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`, `osv_<asset>.json|txt`.
+Включённые сканеры задаются `SCANNERS` (по умолчанию `grype`) или в TUI клавишей `s`. Порог `SEVERITY` / `--severity` / TUI `s` определяет, какие находки дают FAIL. При verify включённые сканеры могут работать **параллельно**. Отчёты: `grype_<asset>.json|txt`, `trivy_<asset>.json|txt`, `osv_<asset>.json|txt` (полный список findings; вердикт — по порогу).
 
 OSV-Scanner всегда запускается с `--experimental-plugins=directory,artifact` (presets для directory + artifact extractors). Доп. флаги — через `OSV_EXTRA_ARGS`.
 
@@ -499,7 +503,9 @@ OSV-Scanner всегда запускается с `--experimental-plugins=direc
 
 Docker-сканеры монтируют `DOWNLOAD_ROOT` (ro), `REPORTS_ROOT` (rw) и кэш offline OSV DB (rw). Без privileged. Docker socket **не** монтируется.
 
-**Политика вердикта (строгая):** у каждого *участвующего* сканера любая уязвимость → `FAIL`. `SKIPPED` в aggregate не учитывается. В verified копируется только если итоговый вердикт `PASS`.
+**Политика вердикта:** FAIL, если у участвующего сканера есть находка **не ниже** порога `severity` (`critical` | `high` | `medium` | `low` | `negligible`). По умолчанию `negligible` — любая уязвимость, как раньше. `Unknown` всегда FAIL. `SKIPPED` в aggregate не учитывается. В verified копируется только итоговый `PASS`.
+
+Порог задаётся в `config.toml` (`severity = "high"`), CLI `--severity high`, TUI (клавиша `s`) или поле `severity` у правила в `schedule.toml`. Смена порога инвалидирует PASS-checkpoint.
 
 ---
 

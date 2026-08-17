@@ -29,6 +29,7 @@ repos = ["raw-hosted", "pypi-hosted", "maven-snapshots"]
 action = "verify"
 upload = true
 # scanners = "grype,trivy,osv"
+# severity = "high"    # fail on high+; empty/omit = config default
 # Single prefix (string) or several (array); both keys also merge if set together.
 # path_prefix = "com/example"
 # path_prefixes = ["com/", "org/"]

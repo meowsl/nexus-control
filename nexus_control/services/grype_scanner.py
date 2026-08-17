@@ -18,6 +18,7 @@ from nexus_control.models import (
 from nexus_control.services.scan_common import (  # noqa: F401 — re-export for tests
     format_text_report,
     normalize_severity,
+    verdict_from_vulnerabilities,
 )
 from nexus_control.utils.fs import ensure_parent_dir, write_json
 from nexus_control.utils.safe_path import report_paths
@@ -171,7 +172,9 @@ class GrypeScanner:
                 grype_version=version,
             )
 
-        parsed = parse_grype_json(result.stdout)
+        parsed = parse_grype_json(
+            result.stdout, severity=self.settings.severity
+        )
         # Предпочитать JSON из stdout; также сохранить его.
         try:
             raw = json.loads(result.stdout) if result.stdout.strip() else parsed.raw
@@ -266,7 +269,11 @@ def _infer_scheme(path: Path) -> str:
     return "file"
 
 
-def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
+def parse_grype_json(
+    payload: str | dict[str, Any],
+    *,
+    severity: str | None = None,
+) -> ScanResult:
     """Совместимый парсер JSON Grype (matches и/или vulnerabilities)."""
     if isinstance(payload, str):
         text = payload.strip()
@@ -339,8 +346,7 @@ def parse_grype_json(payload: str | dict[str, Any]) -> ScanResult:
     for v in vulns:
         counts.increment(v.severity)
 
-    # Строгая политика нулевых уязвимостей.
-    verdict = Verdict.PASS if counts.total == 0 else Verdict.FAIL
+    verdict = verdict_from_vulnerabilities(vulns, severity)
     return ScanResult(
         status=ScanStatus.SUCCESS,
         verdict=verdict,

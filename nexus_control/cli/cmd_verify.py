@@ -22,7 +22,7 @@ from nexus_control.services.osv_offline_db import EnsureStatus, ensure_osv_offli
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.services.resource_governor import DiskPressureError, resolve_limits
 from nexus_control.services.resource_pipeline import run_resourced_pipeline
-from nexus_control.services.scan_common import parse_scanner_names
+from nexus_control.services.scan_common import parse_scanner_names, parse_severity_threshold
 from nexus_control.utils.path_prefixes import format_path_prefixes
 from nexus_control.services.scan_history import record_scan_run
 from nexus_control.services.verified_uploader import VerifiedUploader
@@ -76,6 +76,17 @@ def run_verify(args: Namespace) -> int:
         run_settings = ensure.settings or ctx.settings
         if ensure.status == EnsureStatus.OK and ensure.message:
             console.print(f"[dim]{ensure.message}[/dim]")
+
+        severity_arg = getattr(args, "severity", None)
+        if severity_arg:
+            try:
+                parsed_severity = parse_severity_threshold(severity_arg)
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+                return 2
+            run_settings = run_settings.model_copy(
+                update={"severity": parsed_severity}
+            )
 
         pipeline = PipelineService(run_settings, ctx.client)
         # NuGet всегда гоняет osv identity; версия нужна для PASS-checkpoint.
@@ -186,7 +197,8 @@ def run_verify(args: Namespace) -> int:
             f"scan-only={selection.scan_only} "
             f"checkpoint-skip={selection.checkpoint_skipped}, "
             f"workers={limits.pipeline_workers} "
-            f"scanners_procs={limits.max_scanner_procs}"
+            f"scanners_procs={limits.max_scanner_procs} "
+            f"severity={run_settings.severity}"
         )
 
         uploader = VerifiedUploader(ctx.client) if args.upload else None
@@ -251,6 +263,7 @@ def run_verify(args: Namespace) -> int:
         payload = {
             "repository": summary.repository,
             "scanners": summary.scanners,
+            "severity": run_settings.severity,
             "started_at": summary.started_at.isoformat(),
             "finished_at": (
                 summary.finished_at or datetime.now(timezone.utc)

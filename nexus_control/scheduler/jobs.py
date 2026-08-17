@@ -82,6 +82,7 @@ def _run_repo(
             Namespace(
                 repo=repo,
                 scanners=rule.scanners,
+                severity=rule.severity,
                 upload=rule.wants_upload(),
                 target=target,
                 path_prefix=rule.path_prefixes or None,

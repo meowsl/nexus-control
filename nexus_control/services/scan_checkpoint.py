@@ -23,7 +23,7 @@ def checkpoint_path(local_path: Path) -> Path:
 
 def scan_policy_hash(settings: Settings, scanners: Sequence[str]) -> str:
     """Fingerprint настроек, способных изменить результат сканирования."""
-    parts: list[str] = []
+    parts: list[str] = [f"severity={settings.severity}"]
     for name in sorted(scanners):
         if name == "grype":
             parts.append(

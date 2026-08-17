@@ -248,6 +248,7 @@ def test_config_to_dict_omits_empty_overrides() -> None:
     rule = dumped["rules"][0]
     assert "target" not in rule
     assert "scanners" not in rule
+    assert "severity" not in rule
     assert "workers" not in rule
 
 
