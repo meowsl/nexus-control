@@ -17,6 +17,7 @@ from nexus_control.integrations.vk_notify import (
     PendingUpload,
     PendingUploadStore,
     build_rule_message,
+    format_vk_datetime,
     handle_callback,
     notify_rule_finished,
     should_notify,
@@ -64,12 +65,15 @@ def _meta(
     copied: int = 0,
     checkpoint_skipped: int = 0,
     scanned: int = 0,
+    started_at: str = "2026-08-10T10:00:00+00:00",
+    finished_at: str = "2026-08-10T10:01:00+00:00",
+    defectdojo_engagement_id: int | None = None,
 ) -> ScanRunMeta:
     return ScanRunMeta(
         run_id=f"run_{repo}",
         repository=repo,
-        started_at="2026-08-10T10:00:00+00:00",
-        finished_at="2026-08-10T10:01:00+00:00",
+        started_at=started_at,
+        finished_at=finished_at,
         source="scheduler",
         scanners=["grype"],
         totals=ScanRunTotals(
@@ -81,6 +85,7 @@ def _meta(
             checkpoint_skipped=checkpoint_skipped,
         ),
         rule_id="nightly",
+        defectdojo_engagement_id=defectdojo_engagement_id,
     )
 
 
@@ -139,7 +144,17 @@ def test_settings_token_wins_over_vault(tmp_path: Path) -> None:
     assert vk_teams_token_source(settings) == "config"
 
 
-def test_build_rule_message_verify_only() -> None:
+def test_format_vk_datetime_moscow() -> None:
+    assert format_vk_datetime("2026-08-10T03:00:00+00:00") == "10.08.2026 06:00"
+    assert format_vk_datetime(None) == "—"
+
+
+def test_build_rule_message_verify_only(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+    )
     rule = ScheduleRule(
         id="nightly",
         cron="0 3 * * *",
@@ -149,32 +164,60 @@ def test_build_rule_message_verify_only() -> None:
     )
     text = build_rule_message(
         rule,
-        0,
         {
             "test-pypi": _meta(
                 "test-pypi",
+                passed=0,
+                failed=0,
+                scanned=0,
                 checkpoint_skipped=8,
+                started_at="2026-08-10T03:00:00+00:00",
+                finished_at="2026-08-10T03:15:00+00:00",
             ),
-            "test-npm": _meta("test-npm", passed=7, copied=7, scanned=7),
+            "test-npm": _meta(
+                "test-npm",
+                passed=7,
+                failed=2,
+                copied=7,
+                scanned=9,
+                started_at="2026-08-10T03:00:00+00:00",
+                finished_at="2026-08-10T03:20:00+00:00",
+                defectdojo_engagement_id=42,
+            ),
         },
+        settings=settings,
+        manual=False,
     )
-    assert "nightly" in text
-    assert "test-pypi" in text
-    assert "Skipped=8" in text
-    assert "PASS=7" in text
-    assert "verify-only" in text
+    assert "Плановое сканирование" in text
+    assert "<b>test-pypi</b>" in text
+    assert "<b>test-npm</b>" in text
+    assert "Артефакты без уязвимостей: 7" in text
+    assert "Выявлено проблем: 2" in text
+    assert "10.08.2026 06:00 - 10.08.2026 06:15" in text
+    assert "10.08.2026 06:00 - 10.08.2026 06:20" in text
+    assert "Смотреть в DefectDojo" in text
+    assert "http://localhost:8080/engagement/42" in text
 
 
-def test_build_rule_message_verify_upload() -> None:
+def test_build_rule_message_manual_verify_upload(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
     rule = ScheduleRule(
         id="auto",
         cron="0 3 * * *",
         repos=["r1"],
         action="verify_upload",
     )
-    text = build_rule_message(rule, 0, {"r1": None})
-    assert "automatic" in text
-    assert "no history yet" in text
+    text = build_rule_message(
+        rule,
+        {"r1": None},
+        settings=settings,
+        manual=True,
+    )
+    assert "Сканирование <b>r1</b>" in text
+    assert "— - —" in text
+    assert "Артефакты без уязвимостей: 0" in text
+    assert "Выявлено проблем: 0" in text
+    assert "DefectDojo" not in text
 
 
 def test_pending_store_roundtrip(tmp_path: Path) -> None:
@@ -202,7 +245,7 @@ def test_pending_store_roundtrip(tmp_path: Path) -> None:
 
 def test_upload_keyboard() -> None:
     kb = upload_keyboard("up:tok")
-    assert kb == [[{"text": "Upload", "callbackData": "up:tok"}]]
+    assert kb == [[{"text": "Загрузить в Nexus", "callbackData": "up:tok"}]]
 
 
 def test_notify_rule_finished_sends_with_button(tmp_path: Path) -> None:
@@ -433,7 +476,7 @@ def test_handle_callback_does_not_block_poll(tmp_path: Path) -> None:
         assert upload_in_flight() is True
         client.answer_callback_query.assert_called()
         text = client.answer_callback_query.call_args[1].get("text")
-        assert text == "Uploading…"
+        assert text == "Загружаю…"
         client.edit_text.assert_not_called()
     finally:
         release.set()
@@ -473,7 +516,7 @@ def test_handle_callback_already_running_keeps_pending(tmp_path: Path) -> None:
             if c[1].get("show_alert")
         ]
         assert alerts
-        assert "already running" in str(alerts[-1][1].get("text", "")).lower()
+        assert "уже выполняется" in str(alerts[-1][1].get("text", "")).lower()
         assert PendingUploadStore.load(settings).get("tok-b") is not None
     finally:
         release.set()
@@ -627,4 +670,4 @@ def test_vk_teams_cli_test_sends_message(
     )
     assert run_vk_teams(Namespace(vk_action="test")) == 0
     client.send_text.assert_called_once()
-    assert "connectivity test" in client.send_text.call_args[0][1]
+    assert "Проверка связи" in client.send_text.call_args[0][1]

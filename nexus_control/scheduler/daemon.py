@@ -431,7 +431,7 @@ def _run_rule_foreground(
             latest.clear_progress()
         save_state(state_file, latest)
     try:
-        notify_rule_finished(settings, rule, code)
+        notify_rule_finished(settings, rule, code, manual=True)
     except Exception:  # noqa: BLE001
         logger.exception("VK Teams notify_rule_finished failed")
     return code

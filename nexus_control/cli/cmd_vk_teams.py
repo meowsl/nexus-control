@@ -150,7 +150,7 @@ def _test() -> int:
     try:
         bot.send_text(
             cfg.vk_teams_chat_id,
-            "nexus-control: VK Teams connectivity test",
+            "🔍 <b>nexus-control</b>\nПроверка связи с VK Teams — всё работает.",
             parse_mode="HTML",
         )
     except VkTeamsError as exc:

@@ -9,10 +9,13 @@ import time
 import uuid
 from argparse import Namespace
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from nexus_control.config import Settings
+from nexus_control.integrations.defectdojo import defectdojo_engagement_url
 from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
@@ -24,6 +27,8 @@ from nexus_control.services.scan_history import ScanRunMeta, latest_run_for_repo
 from nexus_control.utils.fs import ensure_dir, read_json, write_json
 
 logger = logging.getLogger(__name__)
+
+VK_MESSAGE_TZ = "Europe/Moscow"
 
 PENDING_TTL_SEC = 24 * 3600
 CALLBACK_PREFIX = "up:"
@@ -206,38 +211,96 @@ def should_notify(
     return False
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def format_vk_datetime(value: str | None, *, tz_name: str = VK_MESSAGE_TZ) -> str:
+    """``DD.MM.YYYY HH:mm`` в заданной TZ (по умолчанию Europe/Moscow)."""
+    dt = _parse_iso_datetime(value)
+    if dt is None:
+        return "—"
+    return dt.astimezone(ZoneInfo(tz_name)).strftime("%d.%m.%Y %H:%M")
+
+
+def _task_title(repo: str, *, manual: bool, action: str) -> str:
+    repo_html = f"<b>{html.escape(repo)}</b>"
+    if action == "upload":
+        prefix = "Загрузка" if manual else "Плановая загрузка"
+    else:
+        prefix = "Сканирование" if manual else "Плановое сканирование"
+    return f"{prefix} {repo_html}"
+
+
+def _format_time_range(meta: ScanRunMeta | None) -> str:
+    if meta is None:
+        return "— - —"
+    start = format_vk_datetime(meta.started_at)
+    end = format_vk_datetime(meta.finished_at)
+    return f"{start} - {end}"
+
+
+def _defectdojo_link(settings: Settings, meta: ScanRunMeta | None) -> str | None:
+    if meta is None:
+        return None
+    url = defectdojo_engagement_url(settings, meta.defectdojo_engagement_id)
+    if not url:
+        return None
+    return f'<a href="{html.escape(url)}">Смотреть в DefectDojo</a>'
+
+
+def _format_repo_block(
+    repo: str,
+    meta: ScanRunMeta | None,
+    *,
+    settings: Settings,
+    manual: bool,
+    action: str,
+) -> str:
+    passed = meta.totals.passed if meta is not None else 0
+    failed = meta.totals.failed if meta is not None else 0
+    lines = [
+        _task_title(repo, manual=manual, action=action),
+        "",
+        _format_time_range(meta),
+        "",
+        f"📦 <b>{html.escape(repo)}</b>",
+        f"✅ Артефакты без уязвимостей: {passed}",
+        f"⚠️ Выявлено проблем: {failed}",
+    ]
+    dd_link = _defectdojo_link(settings, meta)
+    if dd_link:
+        lines.append("")
+        lines.append(dd_link)
+    return "\n".join(lines)
+
+
 def build_rule_message(
     rule: ScheduleRule,
-    exit_code: int,
     metas_by_repo: dict[str, ScanRunMeta | None],
+    *,
+    settings: Settings,
+    manual: bool = False,
 ) -> str:
-    status = "OK" if exit_code == 0 else "FAILED"
-    lines = [
-        f"<b>nexus-control</b> · rule <code>{html.escape(rule.id)}</code>",
-        f"action=<code>{html.escape(rule.action)}</code> · "
-        f"exit=<b>{exit_code}</b> ({status})",
-    ]
-    if rule.description:
-        lines.append(html.escape(rule.description))
-    lines.append("")
-    for repo in rule.repos:
-        meta = metas_by_repo.get(repo)
-        if meta is None:
-            lines.append(f"• <code>{html.escape(repo)}</code> — no history yet")
-            continue
-        t = meta.totals
-        lines.append(
-            f"• <code>{html.escape(repo)}</code>: "
-            f"Total={t.total} PASS={t.passed} FAIL={t.failed} "
-            f"ERROR={t.errors} Copied={t.copied} Skipped={t.checkpoint_skipped}"
+    blocks = [
+        _format_repo_block(
+            repo,
+            metas_by_repo.get(repo),
+            settings=settings,
+            manual=manual,
+            action=rule.action,
         )
-    if rule.wants_upload():
-        lines.append("")
-        lines.append("Upload: automatic (verify_upload / upload).")
-    else:
-        lines.append("")
-        lines.append("Upload: use the button below (verify-only rule).")
-    return "\n".join(lines)
+        for repo in rule.repos
+    ]
+    return "\n\n".join(blocks)
 
 
 def notify_rule_finished(
@@ -245,6 +308,7 @@ def notify_rule_finished(
     rule: ScheduleRule,
     exit_code: int,
     *,
+    manual: bool = False,
     client: VkTeamsClient | None = None,
 ) -> None:
     """Best-effort notify after a scheduler rule completes."""
@@ -268,7 +332,12 @@ def notify_rule_finished(
         )
         return
 
-    text = build_rule_message(rule, exit_code, metas_by_repo)
+    text = build_rule_message(
+        rule,
+        metas_by_repo,
+        settings=settings,
+        manual=manual,
+    )
     bot = client or VkTeamsClient.from_settings(settings)
     chat_id = settings.vk_teams_chat_id.strip()
 
@@ -334,7 +403,7 @@ def handle_callback(
     data = (callback_data or "").strip()
     if not data.startswith(CALLBACK_PREFIX):
         try:
-            bot.answer_callback_query(query_id, text="Unknown action")
+            bot.answer_callback_query(query_id, text="Неизвестное действие")
         except VkTeamsError as exc:
             logger.debug("answerCallbackQuery failed: %s", exc)
         return
@@ -355,7 +424,7 @@ def handle_callback(
         try:
             bot.answer_callback_query(
                 query_id,
-                text="Upload already running",
+                text="Загрузка уже выполняется",
                 show_alert=True,
             )
         except VkTeamsError as exc:
@@ -366,7 +435,7 @@ def handle_callback(
         try:
             bot.answer_callback_query(
                 query_id,
-                text="Upload expired or already used",
+                text="Кнопка устарела или уже использована",
                 show_alert=True,
             )
         except VkTeamsError as exc:
@@ -374,7 +443,7 @@ def handle_callback(
         return
 
     try:
-        bot.answer_callback_query(query_id, text="Uploading…")
+        bot.answer_callback_query(query_id, text="Загружаю…")
     except VkTeamsError as exc:
         logger.warning("answerCallbackQuery failed: %s", exc)
 
@@ -414,7 +483,8 @@ def _perform_pending_upload(
     run_upload_fn: Any,
 ) -> None:
     lines = [
-        f"<b>Upload</b> for rule <code>{html.escape(pending.rule_id)}</code>",
+        "⬆️ <b>Загрузка в Nexus</b>",
+        f"Правило <code>{html.escape(pending.rule_id)}</code>",
         "",
     ]
     worst = 0
@@ -437,15 +507,18 @@ def _perform_pending_upload(
             code = 1
         if code > worst:
             worst = code
-        status = "OK" if code == 0 else f"FAILED ({code})"
+        status = "готово" if code == 0 else f"ошибка (код {code})"
         dest = target or f"{repo}-verified"
         lines.append(
             f"• <code>{html.escape(repo)}</code> → "
-            f"<code>{html.escape(dest)}</code>: {status}"
+            f"<code>{html.escape(dest)}</code> — {status}"
         )
 
     lines.append("")
-    lines.append(f"Done · worst exit={worst}")
+    if worst == 0:
+        lines.append("Итог: ✅ всё успешно")
+    else:
+        lines.append(f"Итог: ❌ есть ошибки (код {worst})")
     follow_up = "\n".join(lines)
 
     try:

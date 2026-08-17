@@ -328,8 +328,8 @@ class VkTeamsClient:
         return out
 
 
-def upload_keyboard(callback_data: str, *, label: str = "Upload") -> list[
+def upload_keyboard(callback_data: str, *, label: str = "Загрузить в Nexus") -> list[
     list[dict[str, str]]
 ]:
-    """Одна кнопка Upload с callbackData ``up:<token>``."""
+    """Одна кнопка «Загрузить в Nexus» с callbackData ``up:<token>``."""
     return [[{"text": label, "callbackData": callback_data}]]

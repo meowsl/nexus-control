@@ -270,6 +270,7 @@ vk_teams_upload_button = true
 или, для CI, `VK_TEAMS_TOKEN` в окружении. Env/TOML перекрывают vault.
 
 - `failures` — только при `exit_code != 0` или FAIL/ERROR в истории прогона.
+- Сообщение по каждому репозиторию правила: заголовок («Плановое сканирование …» / «Сканирование …» при ручном `schedule run`), интервал времени (Europe/Moscow), PASS/FAIL, ссылка на DefectDojo engagement (если был push), кнопка **Загрузить в Nexus** для `action=verify`.
 - При `verify_upload` кнопка не показывается (upload уже выполнен).
 - Callbacks обрабатывает **тот же** scheduler daemon (long-poll `events/get`
   в idle и коротким poll во время длинного verify). Upload идёт в фоне и не
@@ -279,11 +280,11 @@ vk_teams_upload_button = true
 
 Смоук:
 
-1. `nexus-control-cli vk-teams test` — в чате появляется «connectivity test».
+1. `nexus-control-cli vk-teams test` — в чате появляется сообщение о проверке связи.
 2. `nexus-control-cli schedule start` (или уже запущенный демон).
 3. Дождитесь cron **или** `nexus-control-cli schedule run <verify-only-rule>`.
-4. В чате — сводка PASS/FAIL; для `action=verify` — кнопка **Upload**.
-5. Нажмите Upload → «Uploading…» → сообщение правится итогами; cron не зависает.
+4. В чате — сводка по репозиториям; для `action=verify` — кнопка **Загрузить**.
+5. Нажмите **Загрузить** → «Загружаю…» → сообщение обновится итогами; cron не зависает.
 
 Выключить: `nexus-control-cli vk-teams disable` (опционально `--clear-vault`).
 
