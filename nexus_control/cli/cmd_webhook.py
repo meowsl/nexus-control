@@ -255,7 +255,9 @@ def _test(args: Namespace) -> int:
     set_locale(settings.locale)
     cfg = resolve_webhook_settings(settings)
     if not cfg.webhook_enabled or not (cfg.webhook_url or "").strip():
-        console.print("[red]Webhook is not configured. Run: nexus-control-cli webhook configure[/red]")
+        console.print(
+            "[red]Webhook is not configured. Run: nexus-control-cli webhook configure[/red]"
+        )
         return 2
     result = push_test(cfg)
     if args.json:

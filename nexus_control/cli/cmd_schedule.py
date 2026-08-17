@@ -29,7 +29,9 @@ from nexus_control.scheduler.cronutil import (
     CRON_PRESETS,
     CronError,
     find_preset,
+    format_iso_in_timezone,
     preview_next_fires,
+    resolve_tz,
     validate_cron,
 )
 from nexus_control.scheduler.daemon import (
@@ -322,6 +324,11 @@ def _status_renderable(schedule_file: Path | None):
     from rich.console import Group
 
     status = get_status(schedule_file=schedule_file)
+    sched_tz = status.config.resolved_timezone()
+
+    def _fmt(value: str | None) -> str:
+        return format_iso_in_timezone(value, sched_tz)
+
     lines: list[str | Text] = []
     if status.running:
         lines.append(
@@ -343,8 +350,10 @@ def _status_renderable(schedule_file: Path | None):
         f"rules={len(status.config.rules)}"
     )
     if status.state.started_at:
-        lines.append(f"Started at: {status.state.started_at}")
-    lines.append(f"Updated: {datetime.now().astimezone().isoformat(timespec='seconds')}")
+        lines.append(f"Started at: {_fmt(status.state.started_at)}")
+    lines.append(
+        f"Updated: {datetime.now(resolve_tz(sched_tz)).isoformat(timespec='seconds')}"
+    )
 
     if status.state.busy:
         rule = status.state.current_rule or "?"
@@ -369,7 +378,7 @@ def _status_renderable(schedule_file: Path | None):
         if status.state.progress_updated_at:
             lines.append(
                 Text(
-                    f"  progress@ {status.state.progress_updated_at}",
+                    f"  progress@ {_fmt(status.state.progress_updated_at)}",
                     style="dim",
                 )
             )
@@ -378,10 +387,11 @@ def _status_renderable(schedule_file: Path | None):
 
     parts: list[object] = list(lines)
     if status.config.rules:
-        table = Table(title="Next fires / last runs")
+        table = Table(title=f"Next fires / last runs ({sched_tz})")
         table.add_column("ID")
         table.add_column("Next")
-        table.add_column("Last")
+        table.add_column("Last Start")
+        table.add_column("Last End")
         table.add_column("Exit")
         for rule in status.config.rules:
             nxt = status.state.next_fires.get(rule.id, "")
@@ -392,14 +402,18 @@ def _status_renderable(schedule_file: Path | None):
                         timezone=status.config.resolved_timezone(),
                         count=1,
                     )
-                    nxt = fires[0].isoformat() if fires else ""
+                    nxt = fires[0].isoformat(timespec="seconds") if fires else ""
                 except CronError as exc:
                     nxt = f"error: {exc}"
+            if nxt and not nxt.startswith("error:"):
+                nxt = _fmt(nxt)
             last = status.state.last_runs.get(rule.id)
-            last_s = ""
+            last_start = ""
+            last_end = ""
             exit_s = ""
             if last:
-                last_s = last.finished_at or last.started_at or ""
+                last_start = _fmt(last.started_at or "")
+                last_end = _fmt(last.finished_at or "")
                 if last.skipped:
                     exit_s = "skipped"
                 elif last.exit_code is not None:
@@ -407,7 +421,8 @@ def _status_renderable(schedule_file: Path | None):
             table.add_row(
                 rule.id + ("" if rule.enabled else " (off)"),
                 nxt,
-                last_s,
+                last_start,
+                last_end,
                 exit_s,
             )
         parts.append(table)

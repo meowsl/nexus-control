@@ -663,7 +663,8 @@ class PipelineService:
             asset_path=asset_path,
             local_path=local_path,
         )
-        # NuGet: Grype/Trivy дают ложный empty PASS — пропускаем, гоняем только osv-scanner (offline).
+        # NuGet: Grype/Trivy дают ложный empty PASS — пропускаем,
+        # гоняем только osv-scanner (offline).
         run_names = list(enabled)
         skipped: dict[str, ScanResult] = {}
         if nuget:
