@@ -81,11 +81,17 @@ def test_write_toml_strips_secrets(xdg_home: Path) -> None:
             "nexus_url": "http://localhost:8081",
             "nexus_username": "admin",
             "nexus_password": "secret",
+            "vk_teams_token": "bot-secret",
+            "defectdojo_api_key": "dd-secret",
+            "webhook_token": "wh-secret",
         },
     )
     data = read_toml(path)
     assert "nexus_password" not in data
     assert "nexus_username" not in data
+    assert "vk_teams_token" not in data
+    assert "defectdojo_api_key" not in data
+    assert "webhook_token" not in data
 
 
 def test_peek_and_needs_setup(xdg_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

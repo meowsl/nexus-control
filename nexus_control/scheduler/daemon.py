@@ -6,13 +6,21 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from nexus_control.cli.bootstrap import load_cli_settings
 from nexus_control.config import ConfigError, Settings
+from nexus_control.integrations.vk_notify import (
+    notify_rule_finished,
+    poll_and_handle_events,
+    vk_teams_should_poll,
+)
 from nexus_control.logging_setup import setup_logging
 from nexus_control.scheduler.cronutil import CronError, next_fire
 from nexus_control.scheduler.jobs import run_rule
@@ -49,6 +57,8 @@ ENV_RUN_FOREGROUND = "NEXUS_CONTROL_SCHEDULER_RUN_FOREGROUND"
 # При старте/reload слоты старше grace помечаются handled без запуска
 # (чтобы не гонять вчерашние cron). Слоты внутри grace — в очередь.
 _STARTUP_GRACE_SECONDS = 90.0
+# Short long-poll while a rule is running so Upload still works.
+VK_BUSY_POLL_TIME = 2
 
 
 @dataclass(slots=True)
@@ -420,6 +430,10 @@ def _run_rule_foreground(
             latest.run_pid = None
             latest.clear_progress()
         save_state(state_file, latest)
+    try:
+        notify_rule_finished(settings, rule, code, manual=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("VK Teams notify_rule_finished failed")
     return code
 
 
@@ -568,13 +582,25 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
                 # Слот, чьё время уже наступило, ждёт окончания текущего job
                 # и стартует следом (catch-up без окна 90с).
                 # Честный parallel overlap отложен.
-                _execute_rule(rule, fire_at, fire_key, state, state_file)
+                _execute_rule(
+                    settings, rule, fire_at, fire_key, state, state_file
+                )
             _refresh_next_fires(config, state, state_file)
             continue
 
         # Sleep until next fire (max 30s so signals/reload are responsive).
+        # When VK Teams Upload buttons are enabled, long-poll events instead.
         sleep_for = _seconds_until_next(config)
-        time.sleep(min(max(sleep_for, 0.2), 30.0))
+        wait = min(max(sleep_for, 0.2), 30.0)
+        if vk_teams_should_poll(settings):
+            poll_time = max(1, min(int(wait), 25))
+            try:
+                poll_and_handle_events(settings, poll_time=poll_time)
+            except Exception:  # noqa: BLE001
+                logger.exception("VK Teams event poll failed")
+                time.sleep(min(wait, 5.0))
+        else:
+            time.sleep(wait)
 
     state.busy = False
     state.current_rule = None
@@ -584,7 +610,40 @@ def _run_loop(settings: Settings, schedule_path: Path) -> int:
     return 0
 
 
+@contextmanager
+def _vk_poll_during_job(settings: Settings) -> Iterator[None]:
+    """Short-poll VK Teams while a rule runs so Upload stays responsive."""
+    if not vk_teams_should_poll(settings):
+        yield
+        return
+    stop = threading.Event()
+
+    def _run() -> None:
+        while not stop.is_set():
+            try:
+                poll_and_handle_events(settings, poll_time=VK_BUSY_POLL_TIME)
+            except Exception:  # noqa: BLE001
+                logger.exception("VK Teams event poll failed (busy)")
+                if stop.wait(1.0):
+                    return
+            if stop.wait(0.05):
+                return
+
+    thread = threading.Thread(
+        target=_run,
+        name="vk-teams-poll",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=float(VK_BUSY_POLL_TIME + 3))
+
+
 def _execute_rule(
+    settings: Settings,
     rule: ScheduleRule,
     fire_at: datetime,
     fire_key: str,
@@ -615,7 +674,8 @@ def _execute_rule(
     code = 1
     message = ""
     try:
-        code = run_rule(rule, on_progress=sink, on_repo_start=_on_repo_start)
+        with _vk_poll_during_job(settings):
+            code = run_rule(rule, on_progress=sink, on_repo_start=_on_repo_start)
         message = f"exit={code}"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Rule %s failed: %s", rule.id, exc)
@@ -635,6 +695,10 @@ def _execute_rule(
         )
         _mark_fire_handled(state, rule.id, fire_key)
         save_state(state_file, state)
+        try:
+            notify_rule_finished(settings, rule, code)
+        except Exception:  # noqa: BLE001
+            logger.exception("VK Teams notify_rule_finished failed")
 
 
 def _fire_stamp(fire_at: datetime) -> str:

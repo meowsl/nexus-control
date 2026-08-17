@@ -305,6 +305,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_history.set_defaults(_handler="history")
 
+    p_vk = sub.add_parser(
+        "vk-teams",
+        help="VK Teams / VK Workspace bot notifications (scheduler)",
+    )
+    p_vk.add_argument(
+        "vk_action",
+        choices=["configure", "status", "test", "disable"],
+        help="configure | status | test | disable",
+    )
+    p_vk.add_argument(
+        "--json",
+        action="store_true",
+        help="JSON output (status)",
+    )
+    p_vk.add_argument(
+        "--clear-vault",
+        action="store_true",
+        help="With disable: delete encrypted vk-teams.vault",
+    )
+    p_vk.set_defaults(_handler="vk_teams")
+
     return parser
 
 
@@ -344,6 +365,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_webhook import run_webhook
 
             code = run_webhook(args)
+        elif args._handler == "vk_teams":
+            from nexus_control.cli.cmd_vk_teams import run_vk_teams
+
+            code = run_vk_teams(args)
         else:
             parser.error(f"Unknown command: {args.command}")
             return

@@ -49,6 +49,19 @@ locale = "ru"
 # scan_checkpoint_ttl = 86400
 # Сколько последних verify-прогонов хранить (TUI h / CLI history). 0 = выкл.
 # scan_history_keep = 50
+
+# --- VK Teams (VK Workspace Bot API) -----------------------------------------
+# Уведомления только от scheduler после завершения правила.
+# Бот: @Metabot → /newbot → token. API URL — у админов / Metabot /start
+# (часто https://myteam.mail.ru/bot/v1; on-prem — свой).
+# Токен НЕ кладите сюда: nexus-control-cli vk-teams configure → vk-teams.vault
+# vk_teams_api_url = "https://myteam.mail.ru/bot/v1"
+# vk_teams_chat_id = ""
+# vk_teams_notify = "off"          # off | always | failures
+# vk_teams_upload_button = true    # кнопка Upload для action=verify
+# vk_teams_verify_ssl = true
+# vk_teams_timeout = 30.0
+
 # download_root = "~/nexus-control/downloads"
 # reports_root = "~/nexus-control/reports"
 # verified_root = "~/nexus-control"

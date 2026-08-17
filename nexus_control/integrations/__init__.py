@@ -1,1 +1,1 @@
-"""Опциональные интеграции (DefectDojo, webhook и др.)."""
+"""Опциональные интеграции (VK Teams, DefectDojo, webhook и др.)."""
