@@ -11,6 +11,7 @@ import pytest
 
 from nexus_control.scheduler.cronutil import (
     CronError,
+    format_iso_in_timezone,
     next_fire,
     preview_next_fires,
     validate_cron,
@@ -89,6 +90,18 @@ def test_next_fire_timezone() -> None:
     )
     assert len(fires) == 2
     assert fires[0] < fires[1]
+
+
+def test_format_iso_in_timezone() -> None:
+    assert (
+        format_iso_in_timezone(
+            "2026-08-14T03:05:01.554728+00:00",
+            "Europe/Moscow",
+        )
+        == "2026-08-14T06:05:01+03:00"
+    )
+    assert format_iso_in_timezone("", "Europe/Moscow") == ""
+    assert format_iso_in_timezone("not-a-date", "Europe/Moscow") == "not-a-date"
 
 
 def test_parse_and_roundtrip_schedule(tmp_path: Path) -> None:

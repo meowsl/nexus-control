@@ -197,3 +197,20 @@ def preview_next_fires(
         cursor = next_fire(expr, timezone=timezone, after=cursor)
         out.append(cursor)
     return out
+
+
+def format_iso_in_timezone(value: str | None, timezone: str) -> str:
+    """Parse ISO timestamp and render in schedule timezone (``isoformat`` seconds)."""
+    if not value:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    tz = resolve_tz(timezone)
+    return dt.astimezone(tz).isoformat(timespec="seconds")
