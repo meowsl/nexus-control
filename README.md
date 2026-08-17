@@ -567,7 +567,7 @@ API-ключ: в UI DefectDojo → профиль → **API Key**.
 
 ## Ограничения текущей версии
 
-- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются только ассеты из последнего `verified-manifest.json` (PASS), stale-файлы в локальном `*-verified` не грузятся
+- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются PASS из последнего `verified-manifest.json` и их checksum/signature sidecar'ы (`.md5`/`.sha1`/…, без сканирования); stale-файлы в локальном `*-verified` не грузятся
 - Нет delete и произвольного admin write в Nexus
 - Для docker нужны skopeo или docker CLI
 - Очень большие репозитории загружают все ассеты в память для построения дерева (пагинация используется на проводе)

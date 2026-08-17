@@ -29,6 +29,7 @@ from nexus_control.nexus.uploads import (
     is_uploadable_asset,
     is_verified_local_sidecar,
 )
+from nexus_control.services.scan_common import main_asset_path_for_sidecar
 from nexus_control.services.verified_uploader import VerifiedUploader
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,15 @@ def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
     if not out:
         raise ValueError(f"{MANIFEST_NAME} has no usable passed_assets paths")
     return out
+
+
+def _path_allowed_by_manifest(rel: str, allowed: set[str]) -> bool:
+    """PASS из manifest, либо checksum sidecar рядом с таким PASS."""
+    key = rel.replace("\\", "/").lstrip("/")
+    if key in allowed:
+        return True
+    main = main_asset_path_for_sidecar(key)
+    return bool(main and main.replace("\\", "/").lstrip("/") in allowed)
 
 
 def _summary_from_verified_dir(
@@ -115,7 +125,7 @@ def _summary_from_verified_dir(
             skipped_non_package += 1
             continue
         key = rel.replace("\\", "/").lstrip("/")
-        if key not in allowed:
+        if not _path_allowed_by_manifest(key, allowed):
             skipped_not_in_manifest += 1
             logger.info(
                 "Skip upload %s: not in last %s (stale or failed last verify)",

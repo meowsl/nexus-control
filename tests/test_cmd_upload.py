@@ -73,6 +73,39 @@ def test_summary_skips_stale_not_in_manifest(tmp_path: Path) -> None:
     ]
 
 
+def test_summary_includes_maven_sidecars_of_passed_main(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    root = settings.verified_repo_dir("maven-hosted")
+    main = root / "cib" / "jdbc" / "2.0.1" / "jdbc-2.0.1.pom"
+    sha1 = root / "cib" / "jdbc" / "2.0.1" / "jdbc-2.0.1.pom.sha1"
+    stale_sha1 = root / "cib" / "jdbc" / "1.0.0" / "jdbc-1.0.0.pom.sha1"
+    main.parent.mkdir(parents=True)
+    stale_sha1.parent.mkdir(parents=True)
+    main.write_text("<project/>", encoding="utf-8")
+    sha1.write_text("abc", encoding="utf-8")
+    stale_sha1.write_text("old", encoding="utf-8")
+    (root / "verified-manifest.json").write_text(
+        json.dumps(
+            {
+                "repository": "maven-hosted",
+                "passed_assets": [
+                    {"asset_path": "cib/jdbc/2.0.1/jdbc-2.0.1.pom"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, skipped = _summary_from_verified_dir(
+        settings, "maven-hosted", fmt="maven2"
+    )
+    paths = {r.asset_path for r in summary.results}
+    assert "cib/jdbc/2.0.1/jdbc-2.0.1.pom" in paths
+    assert "cib/jdbc/2.0.1/jdbc-2.0.1.pom.sha1" in paths
+    assert "cib/jdbc/1.0.0/jdbc-1.0.0.pom.sha1" not in paths
+    assert skipped == 1
+
+
 def test_summary_requires_manifest(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     root = settings.verified_repo_dir("test-npm")

@@ -7,9 +7,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from nexus_control.models import NexusAsset, PipelineSummary, Verdict
+from nexus_control.models import AssetPipelineResult, NexusAsset, PipelineSummary, Verdict
 from nexus_control.nexus.client import NexusAPIError, NexusClient
 from nexus_control.nexus.uploads import is_uploadable_asset
+from nexus_control.services.scan_common import (
+    is_scan_ignored_path,
+    iter_local_companion_sidecars,
+    main_asset_path_for_sidecar,
+)
 from nexus_control.utils.hashing import local_matches_remote
 from nexus_control.utils.safe_path import sanitize_repo_name
 
@@ -72,6 +77,78 @@ def index_remote_assets(assets: list[NexusAsset]) -> dict[str, NexusAsset]:
     return out
 
 
+def _verified_copy_ok(result: AssetPipelineResult) -> bool:
+    return (
+        result.verify.verified_path is not None
+        and (result.verify.copied or result.verify.skipped_existing)
+    )
+
+
+def is_upload_result_candidate(
+    result: AssetPipelineResult,
+    *,
+    passed_mains: set[str],
+) -> bool:
+    """PASS-пакеты и checksum/signature sidecar'ы рядом с таким PASS.
+
+    Sidecar'ы не сканируются (вердикт ``SKIPPED``), но в Nexus ``*-verified``
+    их нужно заливать вместе с прошедшим артефактом — и только с ним.
+    """
+    if not _verified_copy_ok(result):
+        return False
+    key = _normalize_asset_path_key(result.asset_path)
+    if result.verdict == Verdict.PASS:
+        return True
+    if result.verdict != Verdict.SKIPPED or not is_scan_ignored_path(key):
+        return False
+    main = main_asset_path_for_sidecar(key)
+    return bool(main and _normalize_asset_path_key(main) in passed_mains)
+
+
+def collect_upload_items(summary: PipelineSummary) -> list[tuple[str, Path]]:
+    """Пары ``(asset_path, local verified file)`` для загрузки в Nexus.
+
+    Берёт PASS из pipeline и sidecar'ы (из results или файлы рядом с PASS).
+    """
+    items: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    passed_mains = {
+        _normalize_asset_path_key(result.asset_path)
+        for result in summary.results
+        if result.verdict == Verdict.PASS and _verified_copy_ok(result)
+    }
+
+    def add(asset_path: str, local: Path) -> None:
+        key = _normalize_asset_path_key(asset_path)
+        if not key or key in seen or not local.is_file():
+            return
+        seen.add(key)
+        items.append((key, local))
+
+    for result in summary.results:
+        if not is_upload_result_candidate(result, passed_mains=passed_mains):
+            continue
+        local = result.verify.verified_path
+        if local is None:
+            continue
+        add(result.asset_path, local)
+
+    for result in summary.results:
+        if result.verdict != Verdict.PASS or not _verified_copy_ok(result):
+            continue
+        if is_scan_ignored_path(result.asset_path):
+            continue
+        local = result.verify.verified_path
+        if local is None:
+            continue
+        main_key = _normalize_asset_path_key(result.asset_path)
+        for side in iter_local_companion_sidecars(local):
+            suffix = side.name[len(local.name) :]
+            add(main_key + suffix, side)
+
+    return items
+
+
 def should_skip_unchanged_upload(local_path: Path, remote: NexusAsset | None) -> bool:
     """True, если remote уже есть и локальный файл совпадает (checksum/size)."""
     if remote is None:
@@ -108,19 +185,13 @@ class VerifiedUploader:
             )
         fmt = source.format.lower().strip()
 
-        candidates = [
-            r
-            for r in summary.results
-            if r.verdict == Verdict.PASS
-            and r.verify.verified_path is not None
-            and (r.verify.copied or r.verify.skipped_existing)
-        ]
+        items = collect_upload_items(summary)
         out = UploadSummary(
             source_repository=summary.repository,
             target_repository=target,
             source_format=fmt,
         )
-        if not candidates:
+        if not items:
             logger.warning("No verified PASS assets to upload for %s", summary.repository)
             return out
 
@@ -144,11 +215,8 @@ class VerifiedUploader:
                     exc,
                 )
 
-        total = max(len(candidates), 1)
-        for index, result in enumerate(candidates):
-            path = result.asset_path
-            local = result.verify.verified_path
-            assert local is not None
+        total = max(len(items), 1)
+        for index, (path, local) in enumerate(items):
             if on_progress:
                 on_progress(path, index / total, "upload")
             try:
