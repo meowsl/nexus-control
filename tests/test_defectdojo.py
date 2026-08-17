@@ -91,7 +91,10 @@ def test_vulnerability_to_finding_cve() -> None:
     assert finding["severity"] == "High"
     assert finding["cve"] == "CVE-2024-1234"
     assert finding["component_name"] == "lodash"
-    assert finding["fix_version"] == "4.17.21"
+    assert "4.17.21" in finding["description"]
+    assert finding["mitigation"] == "Upgrade to 4.17.21"
+    assert "fix_version" not in finding
+    assert "fix_available" not in finding
     assert "npm-hosted" in finding["unique_id_from_tool"]
 
 

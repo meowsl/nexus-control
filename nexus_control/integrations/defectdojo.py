@@ -202,8 +202,6 @@ def vulnerability_to_finding(
     if ver:
         finding["component_version"] = ver
     if vuln.fix_version:
-        finding["fix_available"] = True
-        finding["fix_version"] = vuln.fix_version
         finding["mitigation"] = f"Upgrade to {vuln.fix_version}"
 
     vuln_ids: list[str] = []
