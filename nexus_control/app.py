@@ -12,7 +12,7 @@ from typing import Any
 from textual.app import App
 from textual.binding import Binding
 
-from nexus_control.config import ConfigError, Settings, load_settings
+from nexus_control.config import ConfigError, Settings, load_settings, warn_if_ssl_unverified
 from nexus_control.config_io import update_toml_key
 from nexus_control.config_paths import resolve_config_path
 from nexus_control.i18n import _, set_locale, toggle_locale
@@ -183,6 +183,7 @@ def run_app(settings: Settings | None = None) -> None:
     try:
         cfg = settings or load_settings()
         set_locale(cfg.locale)
+        warn_if_ssl_unverified(cfg)
         # Prompt / vault / env — до старта Textual, пока есть TTY.
         if settings is None:
             cfg = resolve_runtime_credentials(cfg)

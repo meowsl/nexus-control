@@ -669,3 +669,26 @@ def test_menu_status_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         )
     )
     assert code == 0
+
+
+def test_status_settings_skip_cli_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_control.scheduler.daemon import _settings_no_prompt
+
+    sentinel = object()
+    monkeypatch.setattr(
+        "nexus_control.config.load_settings",
+        lambda **_kwargs: sentinel,
+    )
+
+    def _boom(**_kwargs: object) -> None:
+        raise AssertionError("status must not resolve Nexus credentials")
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.load_cli_settings",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "nexus_control.cli.bootstrap.load_cli_settings",
+        _boom,
+    )
+    assert _settings_no_prompt() is sentinel

@@ -283,7 +283,7 @@ def resolve_runtime_credentials(
             and not creds.is_expired()
             and creds.matches(settings.nexus_url, session.username)
         ):
-            logger.info(
+            logger.debug(
                 "Restored credentials from encrypted vault (user=%s, until=%s)",
                 creds.username,
                 creds.expires_at,
@@ -302,7 +302,7 @@ def resolve_runtime_credentials(
     env_user = (settings.nexus_username or "").strip()
     env_password = settings.nexus_password or ""
     if env_user and env_password:
-        logger.info("Using Nexus credentials from environment / config")
+        logger.debug("Using Nexus credentials from environment / config")
         return settings.model_copy(
             update={"nexus_username": env_user, "nexus_password": env_password}
         )
@@ -312,7 +312,7 @@ def resolve_runtime_credentials(
         settings.nexus_url,
         env_user or None,
     ):
-        logger.info(
+        logger.debug(
             "Restored credentials from scheduler vault (user=%s)",
             persistent.username,
         )

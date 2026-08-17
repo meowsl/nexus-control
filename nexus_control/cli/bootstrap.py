@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
 
-from nexus_control.config import ConfigError, Settings, load_settings
+from nexus_control.config import ConfigError, Settings, load_settings, warn_if_ssl_unverified
 from nexus_control.i18n import set_locale
 from nexus_control.logging_setup import setup_logging
 from nexus_control.nexus.client import NexusClient
@@ -29,6 +29,7 @@ def load_cli_settings(*, allow_prompt: bool | None = None) -> Settings:
 
     cfg = load_settings()
     set_locale(cfg.locale)
+    warn_if_ssl_unverified(cfg)
     if allow_prompt is None:
         allow_prompt = sys.stdin.isatty()
     cfg = resolve_runtime_credentials(cfg, allow_prompt=allow_prompt)
