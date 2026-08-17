@@ -326,6 +326,19 @@ class DefectDojoClient:
             return {"status_code": response.status_code}
 
 
+def defectdojo_engagement_url(settings: Settings, engagement_id: int | None) -> str | None:
+    """Публичный URL engagement в UI DefectDojo, если интеграция включена."""
+    if engagement_id is None:
+        return None
+    cfg = resolve_defectdojo_settings(settings)
+    if not cfg.defectdojo_enabled:
+        return None
+    base = (cfg.defectdojo_url or "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/engagement/{int(engagement_id)}"
+
+
 def push_pipeline_findings(
     settings: Settings,
     summary: PipelineSummary,

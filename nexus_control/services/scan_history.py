@@ -67,6 +67,7 @@ class ScanRunMeta:
     path_prefix: str | None = None
     workers: int | None = None
     cancelled: bool = False
+    defectdojo_engagement_id: int | None = None
 
 
 def history_root(settings: Settings) -> Path:
@@ -95,6 +96,7 @@ def record_scan_run(
     path_prefix: str | None = None,
     workers: int | None = None,
     checkpoint_skipped: int = 0,
+    defectdojo_engagement_id: int | None = None,
 ) -> str | None:
     """Сохранить компактный snapshot + обновить index. None если выключено/ошибка."""
     keep = int(getattr(settings, "scan_history_keep", 50) or 0)
@@ -110,6 +112,7 @@ def record_scan_run(
             path_prefix=path_prefix,
             workers=workers,
             checkpoint_skipped=checkpoint_skipped,
+            defectdojo_engagement_id=defectdojo_engagement_id,
         )
         snapshot = {
             "meta": _meta_to_dict(meta),
@@ -244,6 +247,7 @@ def _meta_from_summary(
     path_prefix: str | None,
     workers: int | None,
     checkpoint_skipped: int = 0,
+    defectdojo_engagement_id: int | None = None,
 ) -> ScanRunMeta:
     skipped = sum(1 for r in summary.results if r.verdict == Verdict.SKIPPED)
     return ScanRunMeta(
@@ -268,6 +272,7 @@ def _meta_from_summary(
         path_prefix=path_prefix,
         workers=workers,
         cancelled=summary.cancelled,
+        defectdojo_engagement_id=defectdojo_engagement_id,
     )
 
 
@@ -284,6 +289,7 @@ def _meta_to_dict(meta: ScanRunMeta) -> dict[str, Any]:
         "path_prefix": meta.path_prefix,
         "workers": meta.workers,
         "cancelled": meta.cancelled,
+        "defectdojo_engagement_id": meta.defectdojo_engagement_id,
     }
 
 
@@ -323,7 +329,17 @@ def _meta_from_dict(data: dict[str, Any]) -> ScanRunMeta:
             int(data["workers"]) if data.get("workers") is not None else None
         ),
         cancelled=bool(data.get("cancelled", False)),
+        defectdojo_engagement_id=_maybe_int_field(data.get("defectdojo_engagement_id")),
     )
+
+
+def _maybe_int_field(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _asset_to_dict(result: AssetPipelineResult) -> dict[str, Any]:
