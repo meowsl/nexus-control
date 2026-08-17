@@ -289,12 +289,14 @@ def _cmd_status(
     monitor: bool = False,
     interval: float = 1.0,
 ) -> int:
+    try:
+        settings = _status_settings()
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 2
+
     if not monitor:
-        try:
-            console.print(_status_renderable(schedule_file))
-        except ConfigError as exc:
-            console.print(f"[red]{exc}[/red]")
-            return 2
+        console.print(_status_renderable(schedule_file, settings=settings))
         return 0
 
     poll = max(0.2, float(interval))
@@ -303,14 +305,14 @@ def _cmd_status(
     )
     try:
         with Live(
-            _status_renderable(schedule_file),
+            _status_renderable(schedule_file, settings=settings),
             console=console,
             refresh_per_second=max(1, int(1.0 / poll)),
             transient=False,
         ) as live:
             while True:
                 time.sleep(poll)
-                live.update(_status_renderable(schedule_file))
+                live.update(_status_renderable(schedule_file, settings=settings))
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         return 2
@@ -319,11 +321,18 @@ def _cmd_status(
         return 0
 
 
-def _status_renderable(schedule_file: Path | None):
+def _status_settings():
+    """Один раз за процесс status/monitor — без Nexus vault."""
+    from nexus_control.scheduler.daemon import _settings_no_prompt
+
+    return _settings_no_prompt()
+
+
+def _status_renderable(schedule_file: Path | None, *, settings=None):
     """Собрать Rich-renderable для одноразового status / Live monitor."""
     from rich.console import Group
 
-    status = get_status(schedule_file=schedule_file)
+    status = get_status(settings, schedule_file=schedule_file)
     sched_tz = status.config.resolved_timezone()
 
     def _fmt(value: str | None) -> str:

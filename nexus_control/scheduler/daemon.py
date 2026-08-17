@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterator
 
 from nexus_control.cli.bootstrap import load_cli_settings
-from nexus_control.config import ConfigError, Settings
+from nexus_control.config import Settings
 from nexus_control.integrations.vk_notify import (
     notify_rule_finished,
     poll_and_handle_events,
@@ -438,13 +438,14 @@ def _run_rule_foreground(
 
 
 def _settings_no_prompt() -> Settings:
-    try:
-        return load_cli_settings(allow_prompt=False)
-    except ConfigError:
-        # Status без credentials: минимальные settings из load_settings.
-        from nexus_control.config import load_settings
+    """Settings для status/monitor: без vault и без SSL-warning.
 
-        return load_settings()
+    ``schedule status -m`` опрашивает state раз в секунду — нельзя
+    каждый тик резолвить credentials (это спамило ``Restored credentials``).
+    """
+    from nexus_control.config import load_settings
+
+    return load_settings(run_wizard=False)
 
 
 def _spawn_detached(schedule_path: Path) -> int:

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from nexus_control.config import ConfigError, clear_settings_cache, load_settings
+from nexus_control.config import (
+    ConfigError,
+    Settings,
+    clear_settings_cache,
+    load_settings,
+    warn_if_ssl_unverified,
+)
 from nexus_control.config_io import read_toml, write_toml_atomic
 from nexus_control.config_paths import resolve_config_path
 from nexus_control.config_wizard import (
@@ -218,3 +224,21 @@ def test_invalid_toml_raises(
     # URL отсутствует из-за битого TOML; wizard выключен → ConfigError
     with pytest.raises(ConfigError):
         load_settings(env_file=None, config_path=path, run_wizard=False)
+
+
+def test_ssl_warning_not_on_settings_ctor(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("WARNING", logger="nexus_control.config")
+    settings = Settings(
+        nexus_url="http://localhost:8081",
+        nexus_verify_ssl=False,
+        nexus_cache_dir=tmp_path / "cache",
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "rp",
+        verified_root=tmp_path / "vf",
+        log_file=tmp_path / "logs" / "t.log",
+    )
+    assert not any("NEXUS_VERIFY_SSL" in rec.message for rec in caplog.records)
+    warn_if_ssl_unverified(settings)
+    warn_if_ssl_unverified(settings)
+    messages = [rec.message for rec in caplog.records if "NEXUS_VERIFY_SSL" in rec.message]
+    assert len(messages) == 1

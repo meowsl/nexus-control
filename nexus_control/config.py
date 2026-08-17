@@ -29,6 +29,8 @@ WebhookAuthMode = Literal["none", "bearer", "basic", "header"]
 
 # Путь TOML для settings_customise_sources (задаётся в load_settings).
 _active_toml_path: Path | None = None
+# WARNING про отключённый TLS — один раз за процесс, не на каждый Settings().
+_ssl_disabled_warned: bool = False
 
 
 def _expand_path(value: str | Path) -> Path:
@@ -412,11 +414,6 @@ class Settings(BaseSettings):
         ensure_dir(self.verified_root)
         ensure_parent_dir(self.log_file)
         ensure_dir(self.nexus_cache_dir, mode=0o700)
-        if not self.nexus_verify_ssl:
-            logger.warning(
-                "NEXUS_VERIFY_SSL=false — TLS certificate verification is disabled. "
-                "Use only in trusted lab environments."
-            )
         return self
 
     @property
@@ -570,4 +567,18 @@ def get_settings() -> Settings:
 
 def clear_settings_cache() -> None:
     """Очистить кэш настроек (тесты / перезагрузка)."""
+    global _ssl_disabled_warned
     get_settings.cache_clear()
+    _ssl_disabled_warned = False
+
+
+def warn_if_ssl_unverified(settings: Settings) -> None:
+    """Один WARNING, если TLS к Nexus выключен (не для status/monitor)."""
+    global _ssl_disabled_warned
+    if settings.nexus_verify_ssl or _ssl_disabled_warned:
+        return
+    _ssl_disabled_warned = True
+    logger.warning(
+        "NEXUS_VERIFY_SSL=false — TLS certificate verification is disabled. "
+        "Use only in trusted lab environments."
+    )
