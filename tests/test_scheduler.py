@@ -552,15 +552,23 @@ def test_overlap_skip_records_skipped(tmp_path: Path) -> None:
 
     # _execute_rule still runs when called (overlap check is in loop)
     rule = ScheduleRule(id="x", cron="0 0 * * *", repos=["r"])
+    settings = MagicMock()
+    settings.vk_teams_token = ""
+    settings.vk_teams_chat_id = ""
+    settings.vk_teams_notify = "off"
     with patch("nexus_control.scheduler.daemon.run_rule", return_value=0):
-        st = SchedulerState()
-        _execute_rule(
-            rule,
-            datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
-            "x:202601010000",
-            st,
-            state_file,
-        )
+        with patch(
+            "nexus_control.scheduler.daemon.notify_rule_finished"
+        ):
+            st = SchedulerState()
+            _execute_rule(
+                settings,
+                rule,
+                datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC")),
+                "x:202601010000",
+                st,
+                state_file,
+            )
     assert st.last_fires["x"] == "202601010000"
 
 
@@ -597,6 +605,9 @@ def test_run_rule_now_records_last_runs(
     fake_settings.nexus_cache_dir = cache
     fake_settings.log_file = tmp_path / "logs" / "app.log"
     fake_settings.nexus_password = None
+    fake_settings.vk_teams_token = ""
+    fake_settings.vk_teams_chat_id = ""
+    fake_settings.vk_teams_notify = "off"
 
     monkeypatch.setattr(
         "nexus_control.scheduler.daemon.load_cli_settings",

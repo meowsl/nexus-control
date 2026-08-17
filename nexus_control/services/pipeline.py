@@ -370,6 +370,22 @@ class PipelineService:
                 logger.error("Failed to write unverified assets list: %s", exc)
 
         if history_source in {"tui", "cli", "scheduler"}:
+            defectdojo_engagement_id: int | None = None
+            if verify and getattr(self.settings, "defectdojo_enabled", False):
+                try:
+                    from nexus_control.integrations.defectdojo import (
+                        push_pipeline_findings,
+                    )
+
+                    dd_result = push_pipeline_findings(self.settings, summary)
+                    if dd_result.error:
+                        logger.warning(
+                            "DefectDojo push incomplete: %s", dd_result.error
+                        )
+                    defectdojo_engagement_id = dd_result.engagement_id
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("DefectDojo push failed: %s", exc)
+
             try:
                 from nexus_control.services.scan_history import record_scan_run
 
@@ -381,21 +397,10 @@ class PipelineService:
                     path_prefix=history_path_prefix,
                     workers=history_workers,
                     checkpoint_skipped=history_checkpoint_skipped,
+                    defectdojo_engagement_id=defectdojo_engagement_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Scan history recording failed: %s", exc)
-
-        if verify and getattr(self.settings, "defectdojo_enabled", False):
-            try:
-                from nexus_control.integrations.defectdojo import push_pipeline_findings
-
-                result = push_pipeline_findings(self.settings, summary)
-                if result.error:
-                    logger.warning(
-                        "DefectDojo push incomplete: %s", result.error
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("DefectDojo push failed: %s", exc)
 
         if verify and getattr(self.settings, "webhook_enabled", False):
             try:

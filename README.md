@@ -92,6 +92,12 @@ nexus-control-cli history --repo maven-hosted --limit 20
 nexus-control-cli history show <run_id>
 nexus-control-cli history show <run_id> --json
 
+# VK Teams / VK Workspace бот (уведомления scheduler)
+nexus-control-cli vk-teams configure
+nexus-control-cli vk-teams status
+nexus-control-cli vk-teams test
+nexus-control-cli vk-teams disable --clear-vault
+
 # Offline OSV vulnerability DB (для osv / nuget verify без remote API)
 nexus-control-cli osv-db status
 nexus-control-cli osv-db update --ecosystem NuGet
@@ -232,6 +238,56 @@ Timezone по умолчанию — **локальный TZ машины** (`ti
 
 Session vault TUI (`credentials.vault`, TTL `NEXUS_SESSION_TTL`) для демона **не** считается долгоживущим источником.
 
+### VK Teams (чат бота VK Workspace)
+
+После завершения правила планировщик может отправить итог в чат бота
+[VK Teams Bot API](https://teams.vk.com/botapi/) (VK Messenger для бизнеса / VK Workspace)
+и, для `action = "verify"`, показать кнопку **Upload** — по нажатию загрузит все
+repos правила в `*-verified`. Это не почта и не VK ID.
+
+1. Создайте бота: `@Metabot` → `/newbot` → сохраните **token**.
+2. Узнайте **API URL** инсталляции (часто `https://myteam.mail.ru/bot/v1`;
+   on-prem VK Workspace — свой URL у админов / `@Metabot` `/start`).
+3. Узнайте **chatId** (ник, stamp группы или `…@chat.agent`) и добавьте бота в чат.
+4. Сохраните настройки (токен — в encrypted vault, не в `config.toml`):
+
+```bash
+nexus-control-cli vk-teams configure
+nexus-control-cli vk-teams status
+nexus-control-cli vk-teams test
+```
+
+В `config.toml` остаются только не-секреты:
+
+```toml
+vk_teams_api_url = "https://myteam.mail.ru/bot/v1"   # on-prem — свой URL
+vk_teams_chat_id = "…"
+vk_teams_notify = "always"   # off | always | failures
+vk_teams_upload_button = true
+```
+
+Токен: `NEXUS_CACHE_DIR/vk-teams.vault` (Fernet, тот же `.vault_key`, что у Nexus)
+или, для CI, `VK_TEAMS_TOKEN` в окружении. Env/TOML перекрывают vault.
+
+- `failures` — только при `exit_code != 0` или FAIL/ERROR в истории прогона.
+- Сообщение по каждому репозиторию правила: заголовок («Плановое сканирование …» / «Сканирование …» при ручном `schedule run`), интервал времени (Europe/Moscow), PASS/FAIL, ссылка на DefectDojo engagement (если был push), кнопка **Загрузить в Nexus** для `action=verify`.
+- При `verify_upload` кнопка не показывается (upload уже выполнен).
+- Callbacks обрабатывает **тот же** scheduler daemon (long-poll `events/get`
+  в idle и коротким poll во время длинного verify). Upload идёт в фоне и не
+  стопит cron. Без запущенного демона кнопка Upload не сработает.
+- Уведомления только от scheduler (`cron` / `schedule run`), не из TUI и не из
+  `nexus-control-cli verify`.
+
+Смоук:
+
+1. `nexus-control-cli vk-teams test` — в чате появляется сообщение о проверке связи.
+2. `nexus-control-cli schedule start` (или уже запущенный демон).
+3. Дождитесь cron **или** `nexus-control-cli schedule run <verify-only-rule>`.
+4. В чате — сводка по репозиториям; для `action=verify` — кнопка **Загрузить**.
+5. Нажмите **Загрузить** → «Загружаю…» → сообщение обновится итогами; cron не зависает.
+
+Выключить: `nexus-control-cli vk-teams disable` (опционально `--clear-vault`).
+
 Альтернатива без встроенного демона — классический cron:
 
 ```cron
@@ -319,6 +375,11 @@ nexus-control
 | `OVERWRITE_DOWNLOADS` | `false` | Force-перекачка; иначе skip по checksum, mismatch → overwrite |
 | `OVERWRITE_VERIFIED` | `false` | Перезаписывать в verified |
 | `SCAN_HISTORY_KEEP` | `50` | Сколько verify-прогонов хранить в истории; `0` = выкл |
+| `VK_TEAMS_TOKEN` | _(пусто)_ | Опционально: токен бота в env (CI). Предпочтительно `vk-teams configure` → vault |
+| `VK_TEAMS_API_URL` | `https://myteam.mail.ru/bot/v1` | Base URL Bot API (on-prem — свой) |
+| `VK_TEAMS_CHAT_ID` | _(пусто)_ | chatId / nick / stamp для уведомлений |
+| `VK_TEAMS_NOTIFY` | `off` | `off` / `always` / `failures` (только scheduler) |
+| `VK_TEAMS_UPLOAD_BUTTON` | `true` | Кнопка Upload для `action=verify` |
 | `LOG_FILE` | `~/nexus-control/logs/nexus-control.log` | Ротируемый лог |
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
@@ -542,6 +603,7 @@ pytest
 - Subprocess вызывается списками argv (`shell=False`)
 - У скачанных файлов execute-биты снимаются best-effort
 - Права кэша сессии ужесточаются на POSIX
+- Токен VK Teams хранится в `vk-teams.vault` (Fernet), не в `config.toml`
 - Временные auth-файлы docker/skopeo имеют режим `600` и удаляются вместе с temp-каталогом
 
 ---
@@ -570,19 +632,22 @@ nexus-control/
     ├── logging_setup.py
     ├── i18n.py
     ├── cli/                     # nexus-control-cli
-    │   ├── __main__.py          # argparse: repos / verify / upload / schedule / history
+    │   ├── __main__.py          # argparse: repos / verify / upload / schedule / history / vk-teams / …
     │   ├── cmd_repos.py
     │   ├── cmd_verify.py        # download + scan + verified [+ upload]
     │   ├── cmd_upload.py        # upload локального *-verified без сканера
     │   ├── cmd_schedule.py      # интерактивное меню планировщика
     │   ├── cmd_history.py       # list/show scan history
+    │   ├── cmd_vk_teams.py      # configure / status / test / disable
     │   ├── cmd_osv_db.py        # offline OSV DB status/update
     │   ├── cmd_defectdojo.py    # DefectDojo configure/status/disable
     │   ├── cmd_webhook.py       # webhook configure/status/disable/test
     │   ├── assets.py            # listing / cache / inspect / checkpoints
     │   ├── progress.py
     │   └── bootstrap.py
-    ├── integrations/            # DefectDojo, webhook
+    ├── integrations/            # VK Teams, DefectDojo, webhook
+    │   ├── vk_teams.py          # Bot API httpx-клиент + Fernet vault
+    │   ├── vk_notify.py         # сообщения + Upload callback (фон)
     │   ├── defectdojo.py
     │   └── webhook.py
     ├── scheduler/               # schedule.toml + daemon (pidfile/cron loop)

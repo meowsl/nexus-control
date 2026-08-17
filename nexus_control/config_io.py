@@ -15,11 +15,12 @@ from nexus_control.utils.fs import ensure_dir
 
 logger = logging.getLogger(__name__)
 
-# Секреты не должны попадать в config.toml из wizard.
+# Секреты не должны попадать в config.toml из wizard / CLI configure.
 SECRET_KEYS = frozenset(
     {
         "nexus_password",
         "nexus_username",
+        "vk_teams_token",
         "defectdojo_api_key",
         "webhook_token",
         "webhook_username",
