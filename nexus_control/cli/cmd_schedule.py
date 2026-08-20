@@ -558,6 +558,18 @@ def _prompt_rule(
 
     path_prefixes = normalize_path_prefixes(path_prefixes)
 
+    excludes_default = ""
+    if existing and existing.excluded_prefixes:
+        excludes_default = ",".join(existing.excluded_prefixes)
+    excludes_raw = Prompt.ask(
+        "excluded_prefixes (comma-separated, empty=none)",
+        default=excludes_default,
+    ).strip()
+    excluded_prefixes = [
+        part.strip() for part in excludes_raw.split(",") if part.strip()
+    ] if excludes_raw else []
+    excluded_prefixes = normalize_path_prefixes(excluded_prefixes)
+
     scanners = Prompt.ask(
         "scanners (empty=config default)",
         default=(existing.scanners or "") if existing else "",
@@ -627,6 +639,7 @@ def _prompt_rule(
         scanners=scanners,
         severity=severity,
         path_prefixes=path_prefixes,
+        excluded_prefixes=excluded_prefixes,
         workers=workers,
         limit=limit,
         scan_limit=scan_limit,

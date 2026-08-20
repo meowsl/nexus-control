@@ -24,7 +24,7 @@ from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
 from nexus_control.utils.path_prefixes import (
     normalize_path_prefixes,
-    path_matches_prefixes,
+    path_allowed_by_filters,
 )
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,7 @@ def filter_assets_for_pipeline(
     assets: list[NexusAsset],
     *,
     path_prefix: str | Sequence[str] | None = None,
+    exclude_prefix: str | Sequence[str] | None = None,
     limit: int | None = None,
     scan_limit: int | None = None,
 ) -> list[NexusAsset]:
@@ -107,6 +108,7 @@ def filter_assets_for_pipeline(
     selected, _total, _stats = _select_assets(
         assets,
         path_prefix=path_prefix,
+        exclude_prefix=exclude_prefix,
         limit=limit,
         scan_limit=scan_limit,
     )
@@ -119,6 +121,7 @@ def select_assets_for_cli(
     repository: str,
     *,
     path_prefix: str | Sequence[str] | None = None,
+    exclude_prefix: str | Sequence[str] | None = None,
     limit: int | None = None,
     scan_limit: int | None = None,
     refresh: bool = False,
@@ -157,6 +160,7 @@ def select_assets_for_cli(
             selected, total, stats = _select_assets(
                 stream,
                 path_prefix=path_prefix,
+                exclude_prefix=exclude_prefix,
                 limit=limit,
                 scan_limit=scan_limit,
                 settings=settings,
@@ -177,6 +181,7 @@ def select_assets_for_cli(
     logger.info("Streaming assets from Nexus for %s…", repository)
     selector = _AssetSelector(
         path_prefix=path_prefix,
+        exclude_prefix=exclude_prefix,
         limit=limit,
         scan_limit=scan_limit,
         settings=settings,
@@ -250,6 +255,7 @@ def _select_assets(
     assets: Iterable[NexusAsset],
     *,
     path_prefix: str | Sequence[str] | None,
+    exclude_prefix: str | Sequence[str] | None = None,
     limit: int | None,
     scan_limit: int | None = None,
     settings: Settings | None = None,
@@ -262,6 +268,7 @@ def _select_assets(
 ) -> tuple[list[NexusAsset], int, AssetSelectionStats]:
     selector = _AssetSelector(
         path_prefix=path_prefix,
+        exclude_prefix=exclude_prefix,
         limit=limit,
         scan_limit=scan_limit,
         settings=settings,
@@ -284,6 +291,7 @@ class _AssetSelector:
         self,
         *,
         path_prefix: str | Sequence[str] | None,
+        exclude_prefix: str | Sequence[str] | None = None,
         limit: int | None,
         scan_limit: int | None = None,
         settings: Settings | None = None,
@@ -296,6 +304,7 @@ class _AssetSelector:
         progress_every: int = 50,
     ) -> None:
         self.prefixes = normalize_path_prefixes(path_prefix)
+        self.excluded_prefixes = normalize_path_prefixes(exclude_prefix)
         self.limit = limit
         self.scan_limit = scan_limit
         self.total = 0
@@ -334,7 +343,11 @@ class _AssetSelector:
     def add(self, asset: NexusAsset) -> None:
         self.total += 1
         path = asset.path.replace("\\", "/").lstrip("/")
-        if not path_matches_prefixes(path, self.prefixes):
+        if not path_allowed_by_filters(
+            path,
+            prefixes=self.prefixes,
+            excluded_prefixes=self.excluded_prefixes,
+        ):
             self.emit_progress()
             return
         main_path = main_asset_path_for_sidecar(path)

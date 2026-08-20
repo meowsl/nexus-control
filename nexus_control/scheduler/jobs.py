@@ -86,6 +86,7 @@ def _run_repo(
                 upload=rule.wants_upload(),
                 target=target,
                 path_prefix=rule.path_prefixes or None,
+                exclude_prefix=rule.excluded_prefixes or None,
                 limit=rule.limit,
                 scan_limit=scan_limit,
                 workers=rule.workers,

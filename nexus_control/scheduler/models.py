@@ -32,6 +32,8 @@ class ScheduleRule:
     severity: str | None = None
     # Asset path filters (OR). Empty = whole repo. Prefer this over legacy string.
     path_prefixes: list[str] = field(default_factory=list)
+    # Skip download/scan when path starts with any of these (OR). Applied after includes.
+    excluded_prefixes: list[str] = field(default_factory=list)
     workers: int | None = None
     limit: int | None = None
     scan_limit: int | None = None

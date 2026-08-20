@@ -81,6 +81,7 @@ nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
 nexus-control-cli verify --repo maven-hosted --path-prefix com/example --limit 20 --json
+nexus-control-cli verify --repo maven-hosted --exclude-prefix com/ --scan-limit 20
 nexus-control-cli verify --repo maven-hosted --scan-limit 20   # debug: max mains to verify
 
 # Параллельная загрузка/скан (по умолчанию auto от CPU/RAM; или явный override)
@@ -219,6 +220,8 @@ cron = "30 4 * * 6"
 repos = ["raw-hosted", "pypi-hosted"]
 action = "verify"
 upload = true
+# path_prefixes = ["com/", "org/"]
+# excluded_prefixes = ["com/"]   # whole repo except com/; root xml stays
 ```
 
 Демон: pidfile в `NEXUS_CACHE_DIR/scheduler.pid`, лог — `scheduler.log` рядом с `LOG_FILE`.
