@@ -156,6 +156,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Action: {action}": "Действие: {action}",
         "Items: {count}": "Элементов: {count}",
         "Scanners: {scanners}": "Сканеры: {scanners}",
+        "Fail on: {severity}+": "FAIL от: {severity}+",
         "Approx. size: {size}": "Примерно размер: {size}",
         "Download path: {path}": "Путь загрузки: {path}",
         "Verified path: {path}": "Путь verified: {path}",
@@ -171,6 +172,17 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "все включённые сканеры дали PASS."
         ),
         "Select at least one scanner.": "Выберите хотя бы один сканер.",
+        "Fail on severity": "Порог severity",
+        (
+            "This level and above fail verify. Unknown is always FAIL. "
+            "negligible = any finding (default)."
+        ): (
+            "Этот уровень и выше дают FAIL. Unknown всегда FAIL. "
+            "negligible = любая находка (по умолчанию)."
+        ),
+        "Scanners: {names}; fail on {severity}+": (
+            "Сканеры: {names}; FAIL от {severity}+"
+        ),
         "Upload verified": "Загрузить verified",
         "Upload": "Загрузить",
         "Upload target repository": "Целевой репозиторий для upload",
@@ -231,6 +243,7 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Open last report": "Открыть последний отчёт",
         "Scanners (grype / trivy / both)": "Сканеры (grype / trivy / оба)",
         "Scanners (grype / trivy / osv)": "Сканеры (grype / trivy / osv)",
+        "Scanners and severity threshold": "Сканеры и порог severity",
         "Enable one or more. Verify copies to *-verified only if all "
         "enabled scanners PASS.": (
             "Включите один или несколько. Verify копирует в *-verified "

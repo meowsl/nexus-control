@@ -57,6 +57,7 @@ from nexus_control.ui.widgets import (
     HelpModal,
     MessageModal,
     ReportModal,
+    ScannerModalResult,
     ScannerSettingsModal,
     format_confirm_body,
 )
@@ -494,6 +495,7 @@ class AssetsScreen(Screen[None]):
         self._marked: set[str] = set()
         # Включённые сканеры для verify (инициализируются в on_mount из settings)
         self._enabled_scanners: list[str] = ["grype"]
+        self._severity: str = "negligible"
         # Settings с offline OSV flags после preflight (None = app.settings)
         self._pipeline_settings = None
         self._list_progress_last_ui = 0.0
@@ -518,8 +520,10 @@ class AssetsScreen(Screen[None]):
         self._ui_app = self.app
         try:
             self._enabled_scanners = list(self.app.settings.scanners_list)
+            self._severity = str(self.app.settings.severity)
         except Exception:  # noqa: BLE001
             self._enabled_scanners = ["grype"]
+            self._severity = "negligible"
         self._update_status_bar()
         self.query_one("#asset-filter", Input).can_focus = False
         self.query_one("#log", RichLog).can_focus = False
@@ -1140,7 +1144,7 @@ class AssetsScreen(Screen[None]):
         self.query_one("#status", Static).update(
             f"[b]{self.repository.name}[/b]  format={self.repository.format}  "
             f"type={self.repository.type}  support={support}  "
-            f"scanners={scanners}{sel}{listing}"
+            f"scanners={scanners}  severity={self._severity}{sel}{listing}"
         )
 
     def refresh_locale_ui(self) -> None:
@@ -1272,14 +1276,21 @@ class AssetsScreen(Screen[None]):
         )
 
     def action_scanner_settings(self) -> None:
-        def _after(chosen: list[str] | None) -> None:
+        def _after(chosen: ScannerModalResult | None) -> None:
             if chosen:
-                self._enabled_scanners = chosen
+                self._enabled_scanners = chosen.scanners
+                self._severity = chosen.severity
                 self._update_status_bar()
-                self._log(_("Scanners: {names}", names="+".join(chosen)))
+                self._log(
+                    _(
+                        "Scanners: {names}; fail on {severity}+",
+                        names="+".join(chosen.scanners),
+                        severity=chosen.severity,
+                    )
+                )
 
         self.app.push_screen(
-            ScannerSettingsModal(self._enabled_scanners),
+            ScannerSettingsModal(self._enabled_scanners, self._severity),
             _after,
         )
 
@@ -1317,6 +1328,7 @@ class AssetsScreen(Screen[None]):
             download_root=str(settings.download_root / self.repository.name),
             verified_root=str(settings.verified_repo_dir(self.repository.name)),
             scanners=self._enabled_scanners if scan else None,
+            severity=self._severity if scan else None,
         )
 
         def _after(confirmed: bool | None) -> None:
@@ -1489,6 +1501,8 @@ class AssetsScreen(Screen[None]):
         try:
             app.ensure_client()
             settings = self._pipeline_settings or app.settings
+            if scan and self._severity != settings.severity:
+                settings = settings.model_copy(update={"severity": self._severity})
             pipeline = PipelineService(settings, app.client)
             summary = pipeline.run(
                 repository=self.repository.name,

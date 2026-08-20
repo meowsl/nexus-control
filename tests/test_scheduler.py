@@ -248,6 +248,7 @@ def test_config_to_dict_omits_empty_overrides() -> None:
     rule = dumped["rules"][0]
     assert "target" not in rule
     assert "scanners" not in rule
+    assert "severity" not in rule
     assert "workers" not in rule
 
 
@@ -604,6 +605,7 @@ def test_run_rule_now_records_last_runs(
     fake_settings = MagicMock()
     fake_settings.nexus_cache_dir = cache
     fake_settings.log_file = tmp_path / "logs" / "app.log"
+    fake_settings.log_level = "INFO"
     fake_settings.nexus_password = None
     fake_settings.vk_teams_token = ""
     fake_settings.vk_teams_chat_id = ""
@@ -616,6 +618,10 @@ def test_run_rule_now_records_last_runs(
     monkeypatch.setattr(
         "nexus_control.scheduler.daemon.running_pid",
         lambda _path: None,
+    )
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.setup_logging",
+        lambda *_args, **_kwargs: None,
     )
 
     with patch("nexus_control.scheduler.daemon.run_rule", return_value=0) as run:
@@ -692,3 +698,165 @@ def test_status_settings_skip_cli_credentials(monkeypatch: pytest.MonkeyPatch) -
         _boom,
     )
     assert _settings_no_prompt() is sentinel
+
+
+def _manual_run_settings(tmp_path: Path) -> MagicMock:
+    fake_settings = MagicMock()
+    fake_settings.nexus_cache_dir = tmp_path / "cache"
+    fake_settings.nexus_cache_dir.mkdir()
+    fake_settings.log_file = tmp_path / "logs" / "nexus-control.log"
+    fake_settings.log_level = "INFO"
+    fake_settings.nexus_password = None
+    fake_settings.vk_teams_token = ""
+    fake_settings.vk_teams_chat_id = ""
+    fake_settings.vk_teams_notify = "off"
+    return fake_settings
+
+
+def test_run_rule_now_foreground_uses_scheduler_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_control.scheduler.daemon import run_rule_now
+    from nexus_control.scheduler.models import ScheduleConfig, ScheduleRule
+    from nexus_control.scheduler.paths import scheduler_log_path
+
+    schedule_path = tmp_path / "schedule.toml"
+    save_schedule(
+        ScheduleConfig(
+            timezone="UTC",
+            rules=[
+                ScheduleRule(
+                    id="nightly",
+                    cron="0 3 * * *",
+                    repos=["maven-hosted"],
+                )
+            ],
+        ),
+        schedule_path,
+    )
+    fake_settings = _manual_run_settings(tmp_path)
+    called: dict[str, object] = {}
+
+    def fake_setup(level: str, log_file: Path, password: str | None = None) -> None:
+        called["level"] = level
+        called["log_file"] = Path(log_file)
+        called["password"] = password
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.load_cli_settings",
+        lambda allow_prompt=False: fake_settings,
+    )
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.running_pid",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.setup_logging",
+        fake_setup,
+    )
+
+    with patch("nexus_control.scheduler.daemon.run_rule", return_value=0):
+        with patch("nexus_control.scheduler.daemon.notify_rule_finished"):
+            code = run_rule_now(
+                "nightly", schedule_file=schedule_path, foreground=True
+            )
+
+    assert code == 0
+    assert called["log_file"] == scheduler_log_path(fake_settings.log_file)
+    assert called["log_file"].name == "scheduler.log"
+    assert called["level"] == "INFO"
+
+
+def test_spawn_rule_run_redirects_stdio_to_scheduler_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from nexus_control.scheduler.daemon import _spawn_rule_run
+    from nexus_control.scheduler.paths import scheduler_log_path
+
+    fake_settings = _manual_run_settings(tmp_path)
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.running_pid",
+        lambda _path: None,
+    )
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    captured: dict[str, object] = {}
+
+    class FakeProc:
+        pid = 4242
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["stdout"] = kwargs["stdout"]
+        captured["stderr"] = kwargs["stderr"]
+        captured["env"] = kwargs["env"]
+        return FakeProc()
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.subprocess.Popen",
+        fake_popen,
+    )
+
+    code = _spawn_rule_run(
+        "nightly",
+        schedule_path=tmp_path / "schedule.toml",
+        settings=fake_settings,
+        scan_limit=None,
+    )
+    assert code == 0
+
+    expected = scheduler_log_path(fake_settings.log_file)
+    stdout = captured["stdout"]
+    stderr = captured["stderr"]
+    assert getattr(stdout, "name") == str(expected)
+    assert stderr is stdout
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env.get("PYTHONUNBUFFERED") == "1"
+
+    err = capsys.readouterr().err
+    assert str(expected) in err
+    assert "Log:" in err
+    assert "nexus-control.log" not in err
+
+
+def test_spawn_rule_run_failed_start_points_to_scheduler_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from nexus_control.scheduler.daemon import _spawn_rule_run
+    from nexus_control.scheduler.paths import scheduler_log_path
+
+    fake_settings = _manual_run_settings(tmp_path)
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.running_pid",
+        lambda _path: None,
+    )
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    class DeadProc:
+        pid = 7
+        returncode = 1
+
+        def poll(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        "nexus_control.scheduler.daemon.subprocess.Popen",
+        lambda *_args, **_kwargs: DeadProc(),
+    )
+
+    code = _spawn_rule_run(
+        "nightly",
+        schedule_path=tmp_path / "schedule.toml",
+        settings=fake_settings,
+        scan_limit=None,
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    expected = scheduler_log_path(fake_settings.log_file)
+    assert "Background run failed to start" in err
+    assert str(expected) in err
+    assert "nexus-control.log" not in err

@@ -563,6 +563,22 @@ def _prompt_rule(
         default=(existing.scanners or "") if existing else "",
     ).strip() or None
 
+    from nexus_control.services.scan_common import parse_severity_threshold
+
+    severity: str | None = None
+    while True:
+        severity_raw = Prompt.ask(
+            "severity (critical|high|medium|low|negligible, empty=config default)",
+            default=(existing.severity or "") if existing else "",
+        ).strip()
+        if not severity_raw:
+            break
+        try:
+            severity = parse_severity_threshold(severity_raw)
+            break
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+
     workers_s = Prompt.ask(
         "workers (empty=config default)",
         default=str(existing.workers) if existing and existing.workers else "",
@@ -609,6 +625,7 @@ def _prompt_rule(
         targets=targets,
         target=legacy_target,
         scanners=scanners,
+        severity=severity,
         path_prefixes=path_prefixes,
         workers=workers,
         limit=limit,

@@ -46,6 +46,8 @@ def test_parser_verify_flags() -> None:
             "--json",
             "--scanners",
             "grype,trivy",
+            "--severity",
+            "high",
         ]
     )
     assert args._handler == "verify"
@@ -63,6 +65,7 @@ def test_parser_verify_flags() -> None:
     assert args.refresh is True
     assert args.json is True
     assert args.scanners == "grype,trivy"
+    assert args.severity == "high"
 
 
 def test_parser_repos_and_upload() -> None:

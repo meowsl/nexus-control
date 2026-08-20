@@ -85,6 +85,20 @@ class Settings(BaseSettings):
 
     # Сканеры (через запятую: grype, trivy, osv). Можно менять в TUI (клавиша s).
     scanners: str = "grype"
+    # Минимальная severity, которая даёт FAIL (этот уровень и выше).
+    # negligible = любая находка (историческое поведение). Unknown всегда FAIL.
+    severity: str = Field(
+        default="negligible",
+        description=(
+            "Fail verify on this severity and above: "
+            "critical | high | medium | low | negligible"
+        ),
+        validation_alias=AliasChoices(
+            "severity",
+            "SEVERITY",
+            "fail_on_severity",
+        ),
+    )
     # Параллельная обработка ассетов в pipeline (download/scan/verify).
     # 0 = auto от CPU/RAM; 1 = строго последовательно; явные 2–8 — override.
     pipeline_workers: int = Field(default=0, ge=0)
@@ -351,6 +365,13 @@ class Settings(BaseSettings):
         names = parse_scanner_names(str(value if value is not None else "grype"))
         return ",".join(names)
 
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _normalize_severity_threshold(cls, value: object) -> str:
+        from nexus_control.services.scan_common import parse_severity_threshold
+
+        return parse_severity_threshold(value)
+
     @field_validator("locale", mode="before")
     @classmethod
     def _normalize_locale(cls, value: object) -> str:
@@ -471,6 +492,7 @@ class Settings(BaseSettings):
             "reports_root": str(self.reports_root),
             "verified_root": str(self.verified_root),
             "scanners": self.scanners,
+            "severity": self.severity,
             "pipeline_workers": self.pipeline_workers,
             "max_scanner_procs": self.max_scanner_procs,
             "disk_critical_watermark": self.disk_critical_watermark,

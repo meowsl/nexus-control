@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from textual import work
@@ -10,7 +11,17 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Input, Label, RichLog, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Input,
+    Label,
+    RadioButton,
+    RadioSet,
+    RichLog,
+    Static,
+)
 
 from nexus_control.i18n import _
 from nexus_control.models import AssetPipelineResult, PipelineSummary, Verdict
@@ -28,6 +39,12 @@ if TYPE_CHECKING:
     from nexus_control.app import NexusControlApp
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ScannerModalResult:
+    scanners: list[str]
+    severity: str
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -160,8 +177,8 @@ class HelpModal(ModalScreen[None]):
             self.dismiss(None)
 
 
-class ScannerSettingsModal(ModalScreen[list[str] | None]):
-    """Выбор сканеров для verify: grype / trivy / osv."""
+class ScannerSettingsModal(ModalScreen[ScannerModalResult | None]):
+    """Выбор сканеров и порога severity для verify."""
 
     DEFAULT_CSS = """
     ScannerSettingsModal {
@@ -170,13 +187,14 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
     ScannerSettingsModal > Vertical {
         width: 64;
         height: auto;
-        border: heavy $accent;
         background: $surface;
+        border: tall $primary;
         padding: 1 2;
     }
     ScannerSettingsModal .hint {
         color: $text-muted;
-        margin: 1 0;
+        height: auto;
+        margin-bottom: 1;
     }
     ScannerSettingsModal .error {
         color: $error;
@@ -187,11 +205,16 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
         align: center middle;
         margin-top: 1;
     }
+    ScannerSettingsModal RadioSet {
+        height: auto;
+        margin-bottom: 1;
+    }
     """
 
-    def __init__(self, selected: list[str]) -> None:
+    def __init__(self, selected: list[str], severity: str = "negligible") -> None:
         super().__init__()
         self._selected = {s.lower() for s in selected}
+        self._severity = severity
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -218,6 +241,42 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
                 value="osv" in self._selected,
                 id="scan-osv",
             )
+            yield Label(f"[b]{_('Fail on severity')}[/b]")
+            yield Static(
+                _(
+                    "This level and above fail verify. Unknown is always FAIL. "
+                    "negligible = any finding (default)."
+                ),
+                classes="hint",
+            )
+            with RadioSet(id="scan-severity"):
+                yield RadioButton(
+                    "critical",
+                    value=self._severity == "critical",
+                    id="sev-critical",
+                )
+                yield RadioButton(
+                    "high",
+                    value=self._severity == "high",
+                    id="sev-high",
+                )
+                yield RadioButton(
+                    "medium",
+                    value=self._severity == "medium",
+                    id="sev-medium",
+                )
+                yield RadioButton(
+                    "low",
+                    value=self._severity == "low",
+                    id="sev-low",
+                )
+                yield RadioButton(
+                    "negligible",
+                    value=self._severity not in {
+                        "critical", "high", "medium", "low",
+                    },
+                    id="sev-negligible",
+                )
             yield Static("", id="scan-error", classes="error")
             with Horizontal(classes="buttons"):
                 yield Button(_("Save"), variant="primary", id="ok")
@@ -240,7 +299,19 @@ class ScannerSettingsModal(ModalScreen[list[str] | None]):
                     _("Select at least one scanner.")
                 )
                 return
-            self.dismiss(chosen)
+            radio = self.query_one("#scan-severity", RadioSet)
+            pressed = radio.pressed_button
+            severity = "negligible"
+            if pressed is not None:
+                mapping = {
+                    "sev-critical": "critical",
+                    "sev-high": "high",
+                    "sev-medium": "medium",
+                    "sev-low": "low",
+                    "sev-negligible": "negligible",
+                }
+                severity = mapping.get(pressed.id or "", "negligible")
+            self.dismiss(ScannerModalResult(scanners=chosen, severity=severity))
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "escape":
@@ -626,15 +697,26 @@ def format_confirm_body(
     download_root: str,
     verified_root: str,
     scanners: list[str] | None = None,
+    severity: str | None = None,
 ) -> str:
     size_txt = human_size(total_size) if total_size is not None else _("unknown")
     scanners_txt = "+".join(scanners) if scanners else _("none")
-    return (
-        f"{_('Action: {action}', action=f'[b]{action}[/b]')}\n"
-        f"{_('Items: {count}', count=f'[b]{count}[/b]')}\n"
-        f"{_('Scanners: {scanners}', scanners=f'[b]{scanners_txt}[/b]')}\n"
-        f"{_('Approx. size: {size}', size=size_txt)}\n"
-        f"{_('Download path: {path}', path=download_root)}\n"
-        f"{_('Verified path: {path}', path=verified_root)}\n\n"
-        f"{_('Proceed?')}"
+    lines = [
+        f"{_('Action: {action}', action=f'[b]{action}[/b]')}",
+        f"{_('Items: {count}', count=f'[b]{count}[/b]')}",
+        f"{_('Scanners: {scanners}', scanners=f'[b]{scanners_txt}[/b]')}",
+    ]
+    if severity:
+        lines.append(
+            f"{_('Fail on: {severity}+', severity=f'[b]{severity}[/b]')}"
+        )
+    lines.extend(
+        [
+            f"{_('Approx. size: {size}', size=size_txt)}",
+            f"{_('Download path: {path}', path=download_root)}",
+            f"{_('Verified path: {path}', path=verified_root)}",
+            "",
+            f"{_('Proceed?')}",
+        ]
     )
+    return "\n".join(lines)

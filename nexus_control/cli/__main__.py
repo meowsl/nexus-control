@@ -42,6 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated scanners (default: from config)",
     )
     p_verify.add_argument(
+        "--severity",
+        default=None,
+        help=(
+            "Minimum severity that fails verify: critical, high, medium, "
+            "low, negligible (default: from config; negligible = any finding). "
+            "Unknown is always FAIL"
+        ),
+    )
+    p_verify.add_argument(
         "--upload",
         action="store_true",
         help="Upload PASS assets to remote *-verified after verify",

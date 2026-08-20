@@ -28,6 +28,8 @@ class ScheduleRule:
     # Legacy single target (only for rules with one repo). Prefer ``targets``.
     target: str | None = None
     scanners: str | None = None
+    # Fail-on-severity override (critical|high|medium|low|negligible). None = config.
+    severity: str | None = None
     # Asset path filters (OR). Empty = whole repo. Prefer this over legacy string.
     path_prefixes: list[str] = field(default_factory=list)
     workers: int | None = None

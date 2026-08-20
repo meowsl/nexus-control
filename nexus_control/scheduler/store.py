@@ -171,6 +171,17 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
     target = item.get("target")
     targets_raw = item.get("targets")
     scanners = item.get("scanners")
+    severity_raw = item.get("severity")
+    severity: str | None = None
+    if severity_raw is not None and str(severity_raw).strip():
+        from nexus_control.services.scan_common import parse_severity_threshold
+
+        try:
+            severity = parse_severity_threshold(severity_raw)
+        except ValueError as exc:
+            raise ScheduleStoreError(
+                f"rules[{index}] ({rule_id}): {exc}"
+            ) from exc
     path_prefixes = _parse_path_prefixes(
         item,
         rule_id=rule_id,
@@ -219,6 +230,7 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         targets=targets,
         target=legacy_target,
         scanners=str(scanners).strip() if scanners else None,
+        severity=severity,
         path_prefixes=path_prefixes,
         workers=workers,
         limit=limit,
@@ -341,6 +353,8 @@ def _rule_to_dict(rule: ScheduleRule) -> dict[str, Any]:
         data["target"] = rule.target
     if rule.scanners:
         data["scanners"] = rule.scanners
+    if rule.severity:
+        data["severity"] = rule.severity
     if len(rule.path_prefixes) == 1:
         data["path_prefix"] = rule.path_prefixes[0]
     elif len(rule.path_prefixes) > 1:

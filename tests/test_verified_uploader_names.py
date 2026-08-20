@@ -6,8 +6,20 @@ from pathlib import Path
 
 import pytest
 
-from nexus_control.models import NexusAsset
+from nexus_control.models import (
+    AssetKind,
+    AssetPipelineResult,
+    DownloadResult,
+    DownloadStatus,
+    NexusAsset,
+    PipelineSummary,
+    ScanResult,
+    ScanStatus,
+    Verdict,
+    VerifyResult,
+)
 from nexus_control.services.verified_uploader import (
+    collect_upload_items,
     index_remote_assets,
     normalize_upload_repo_name,
     should_skip_unchanged_upload,
@@ -88,3 +100,64 @@ def test_should_skip_unchanged_upload(tmp_path: Path) -> None:
     )
     # Недостаточно данных → не skip (безопаснее перезалить).
     assert should_skip_unchanged_upload(local, no_data) is False
+
+
+def _result(
+    path: str,
+    local: Path,
+    *,
+    verdict: Verdict,
+    copied: bool = True,
+) -> AssetPipelineResult:
+    status = ScanStatus.SUCCESS if verdict == Verdict.PASS else ScanStatus.SKIPPED
+    return AssetPipelineResult(
+        asset_path=path,
+        kind=AssetKind.FILE,
+        download=DownloadResult(status=DownloadStatus.SUCCESS, local_path=local),
+        scans={
+            "grype": ScanResult(status=status, verdict=verdict, scanner="grype"),
+        },
+        verify=VerifyResult(copied=copied, verified_path=local),
+    )
+
+
+def test_collect_upload_items_includes_skipped_sidecars(tmp_path: Path) -> None:
+    jar = tmp_path / "jdbc-2.0.1.jar"
+    sha1 = tmp_path / "jdbc-2.0.1.jar.sha1"
+    md5 = tmp_path / "jdbc-2.0.1.jar.md5"
+    jar.write_bytes(b"jar")
+    sha1.write_text("deadbeef", encoding="utf-8")
+    md5.write_text("cafebabe", encoding="utf-8")
+    fail_jar = tmp_path / "bad.jar"
+    fail_sha1 = tmp_path / "bad.jar.sha1"
+    fail_jar.write_bytes(b"bad")
+    fail_sha1.write_text("ffff", encoding="utf-8")
+
+    summary = PipelineSummary(
+        repository="maven-hosted",
+        results=[
+            _result("cib/jdbc/2.0.1/jdbc-2.0.1.jar", jar, verdict=Verdict.PASS),
+            _result(
+                "cib/jdbc/2.0.1/jdbc-2.0.1.jar.sha1",
+                sha1,
+                verdict=Verdict.SKIPPED,
+            ),
+            _result("cib/jdbc/2.0.1/bad.jar", fail_jar, verdict=Verdict.FAIL),
+            _result(
+                "cib/jdbc/2.0.1/bad.jar.sha1",
+                fail_sha1,
+                verdict=Verdict.SKIPPED,
+            ),
+        ],
+    )
+    # FAIL sidecar даже с локальной копией не заливаем: main не PASS.
+    summary.results[2].verify = VerifyResult(copied=False, verified_path=fail_jar)
+    summary.results[3].verify = VerifyResult(copied=True, verified_path=fail_sha1)
+
+    paths = [p for p, _local in collect_upload_items(summary)]
+    assert "cib/jdbc/2.0.1/jdbc-2.0.1.jar" in paths
+    assert "cib/jdbc/2.0.1/jdbc-2.0.1.jar.sha1" in paths
+    assert "cib/jdbc/2.0.1/jdbc-2.0.1.jar.md5" in paths
+    assert "cib/jdbc/2.0.1/bad.jar" not in paths
+    assert "cib/jdbc/2.0.1/bad.jar.sha1" not in paths
+    assert len(paths) == len(set(paths))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from nexus_control.models import (
@@ -10,6 +11,7 @@ from nexus_control.models import (
     Severity,
     SeverityCounts,
     Verdict,
+    Vulnerability,
 )
 
 SEVERITY_MAP = {
@@ -21,6 +23,27 @@ SEVERITY_MAP = {
     "negligible": Severity.NEGLIGIBLE,
     "unknown": Severity.UNKNOWN,
     "": Severity.UNKNOWN,
+}
+
+# Fail if finding severity is this level or higher. Default matches historical
+# "any finding → FAIL" (Unknown is always blocking).
+SEVERITY_THRESHOLDS = ("critical", "high", "medium", "low", "negligible")
+DEFAULT_SEVERITY_THRESHOLD = "negligible"
+
+_SEVERITY_RANK = {
+    Severity.UNKNOWN: 0,
+    Severity.NEGLIGIBLE: 1,
+    Severity.LOW: 2,
+    Severity.MEDIUM: 3,
+    Severity.HIGH: 4,
+    Severity.CRITICAL: 5,
+}
+_THRESHOLD_RANK = {
+    "negligible": 1,
+    "low": 2,
+    "medium": 3,
+    "high": 4,
+    "critical": 5,
 }
 
 KNOWN_SCANNERS = ("grype", "trivy", "osv")
@@ -60,6 +83,40 @@ def normalize_severity(value: str | None) -> Severity:
     if not value:
         return Severity.UNKNOWN
     return SEVERITY_MAP.get(str(value).strip().lower(), Severity.UNKNOWN)
+
+
+def parse_severity_threshold(value: object | None) -> str:
+    """Normalize ``critical|high|medium|low|negligible`` (case-insensitive)."""
+    text = str(value if value is not None else DEFAULT_SEVERITY_THRESHOLD).strip().lower()
+    if not text:
+        return DEFAULT_SEVERITY_THRESHOLD
+    if text not in _THRESHOLD_RANK:
+        allowed = ", ".join(SEVERITY_THRESHOLDS)
+        raise ValueError(f"severity must be one of: {allowed}")
+    return text
+
+
+def is_blocking_severity(severity: Severity, threshold: str) -> bool:
+    """True if this finding should fail verify under ``threshold``.
+
+    ``Unknown`` is always blocking (conservative: do not silently PASS).
+    """
+    if severity == Severity.UNKNOWN:
+        return True
+    floor = _THRESHOLD_RANK.get(threshold, _THRESHOLD_RANK[DEFAULT_SEVERITY_THRESHOLD])
+    return _SEVERITY_RANK.get(severity, 0) >= floor
+
+
+def verdict_from_vulnerabilities(
+    vulns: Iterable[Vulnerability],
+    threshold: str | None = None,
+) -> Verdict:
+    """PASS unless a finding meets the fail-on-severity threshold."""
+    floor = parse_severity_threshold(threshold)
+    for vuln in vulns:
+        if is_blocking_severity(vuln.severity, floor):
+            return Verdict.FAIL
+    return Verdict.PASS
 
 
 def format_text_report(
