@@ -31,8 +31,13 @@ upload = true
 # scanners = "grype,trivy,osv"
 # severity = "high"    # fail on high+; empty/omit = config default
 # Single prefix (string) or several (array); both keys also merge if set together.
+# GAV include (OR). Empty = whole repo.
 # path_prefix = "com/example"
 # path_prefixes = ["com/", "org/"]
+# Skip download/scan for these prefixes (OR), after includes.
+# maven-other: no path_prefix + excluded_prefixes = ["com/"] keeps root catalog.xml
+# excluded_prefix = "com/"
+# excluded_prefixes = ["com/", "org/experimental/"]
 # workers = 4
 # limit = 100          # max assets needing download/re-download
 # scan_limit = 20      # max mains to verify (handy for debug on large repos)

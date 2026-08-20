@@ -182,8 +182,15 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
             raise ScheduleStoreError(
                 f"rules[{index}] ({rule_id}): {exc}"
             ) from exc
-    path_prefixes = _parse_path_prefixes(
+    path_prefixes = _parse_prefix_list(
         item,
+        keys=("path_prefix", "path_prefixes"),
+        rule_id=rule_id,
+        index=index,
+    )
+    excluded_prefixes = _parse_prefix_list(
+        item,
+        keys=("excluded_prefix", "excluded_prefixes"),
         rule_id=rule_id,
         index=index,
     )
@@ -232,6 +239,7 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         scanners=str(scanners).strip() if scanners else None,
         severity=severity,
         path_prefixes=path_prefixes,
+        excluded_prefixes=excluded_prefixes,
         workers=workers,
         limit=limit,
         scan_limit=scan_limit,
@@ -239,17 +247,18 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
     )
 
 
-def _parse_path_prefixes(
+def _parse_prefix_list(
     item: dict[str, Any],
     *,
+    keys: tuple[str, ...],
     rule_id: str,
     index: int,
 ) -> list[str]:
-    """Accept ``path_prefix`` (str|list) and/or ``path_prefixes`` (str|list)."""
+    """Accept each key as str or list of strings; merge and normalize."""
     from nexus_control.utils.path_prefixes import normalize_path_prefixes
 
     chunks: list[str] = []
-    for key in ("path_prefix", "path_prefixes"):
+    for key in keys:
         raw = item.get(key)
         if raw is None:
             continue
@@ -359,6 +368,10 @@ def _rule_to_dict(rule: ScheduleRule) -> dict[str, Any]:
         data["path_prefix"] = rule.path_prefixes[0]
     elif len(rule.path_prefixes) > 1:
         data["path_prefixes"] = list(rule.path_prefixes)
+    if len(rule.excluded_prefixes) == 1:
+        data["excluded_prefix"] = rule.excluded_prefixes[0]
+    elif len(rule.excluded_prefixes) > 1:
+        data["excluded_prefixes"] = list(rule.excluded_prefixes)
     if rule.workers is not None:
         data["workers"] = rule.workers
     if rule.limit is not None:

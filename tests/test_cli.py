@@ -13,14 +13,31 @@ from nexus_control.cli.assets import (
 from nexus_control.config import Settings
 from nexus_control.models import NexusAsset
 from nexus_control.services.scan_common import is_scan_ignored_path
+from nexus_control.utils.path_prefixes import path_allowed_by_filters
 
 
-def _asset(path: str) -> NexusAsset:
+def _asset(path: str, fmt: str | None = None) -> NexusAsset:
     return NexusAsset(
         id=path,
         path=path,
         download_url=None,
         repository="repo",
+        format=fmt,
+    )
+
+
+def test_path_allowed_by_filters() -> None:
+    assert path_allowed_by_filters("com/a.jar") is True
+    assert path_allowed_by_filters("com/a.jar", prefixes=["com/"]) is True
+    assert path_allowed_by_filters("org/a.jar", prefixes=["com/"]) is False
+    assert path_allowed_by_filters(
+        "archetype-catalog.xml", excluded_prefixes=["com/"]
+    )
+    assert not path_allowed_by_filters("com/a.jar", excluded_prefixes=["com/"])
+    assert not path_allowed_by_filters(
+        "com/internal/a.jar",
+        prefixes=["com/"],
+        excluded_prefixes=["com/internal/"],
     )
 
 
@@ -59,6 +76,18 @@ def test_parser_verify_flags() -> None:
         ["verify", "--repo", "r", "--path-prefix", "com/", "--path-prefix", "org/"]
     )
     assert multi.path_prefix == ["com/", "org/"]
+    excluded = parser.parse_args(
+        [
+            "verify",
+            "--repo",
+            "r",
+            "--exclude-prefix",
+            "com/",
+            "--exclude-prefix",
+            "org/experimental/",
+        ]
+    )
+    assert excluded.exclude_prefix == ["com/", "org/experimental/"]
     assert args.limit == 5
     assert args.scan_limit == 3
     assert args.workers == 8
@@ -169,6 +198,37 @@ def test_filter_path_prefix_and_limit() -> None:
     assert {a.path for a in scan_limited if is_scan_ignored_path(a.path)} == {
         "com/a/1.0/a.jar.md5",
         "com/a/1.0/a.jar.sha1",
+    }
+
+
+def test_filter_excluded_prefixes() -> None:
+    assets = [
+        _asset("archetype-catalog.xml"),
+        _asset("archetype-catalog.xml.sha1"),
+        _asset("com/a/1.0/a.jar"),
+        _asset("com/a/1.0/a.jar.md5"),
+        _asset("org/x/1.0/x.jar"),
+        _asset("org/x/1.0/x.jar.sha1"),
+    ]
+    without_com = filter_assets_for_pipeline(
+        assets, exclude_prefix="com/", limit=None
+    )
+    assert {a.path for a in without_com} == {
+        "archetype-catalog.xml",
+        "archetype-catalog.xml.sha1",
+        "org/x/1.0/x.jar",
+        "org/x/1.0/x.jar.sha1",
+    }
+
+    include_and_exclude = filter_assets_for_pipeline(
+        assets,
+        path_prefix=["com/", "org/"],
+        exclude_prefix="com/a/",
+        limit=None,
+    )
+    assert {a.path for a in include_and_exclude} == {
+        "org/x/1.0/x.jar",
+        "org/x/1.0/x.jar.sha1",
     }
 
 

@@ -143,7 +143,7 @@ def collect_upload_items(summary: PipelineSummary) -> list[tuple[str, Path]]:
             continue
         main_key = _normalize_asset_path_key(result.asset_path)
         for side in iter_local_companion_sidecars(local):
-            suffix = side.name[len(local.name) :]
+            suffix = side.name[len(local.name):]
             add(main_key + suffix, side)
 
     return items

@@ -71,6 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_verify.add_argument(
+        "--exclude-prefix",
+        action="append",
+        default=None,
+        dest="exclude_prefix",
+        help=(
+            "Skip assets whose path starts with this prefix; "
+            "repeat the flag for several prefixes (OR). Applied after --path-prefix"
+        ),
+    )
+    p_verify.add_argument(
         "--limit",
         type=int,
         default=None,

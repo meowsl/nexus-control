@@ -202,6 +202,46 @@ def test_parse_path_prefixes_string_and_list(tmp_path: Path) -> None:
     assert reloaded.rules[0].path_prefixes == ["com/", "org/"]
 
 
+def test_parse_excluded_prefixes_string_and_list(tmp_path: Path) -> None:
+    as_string = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "s",
+                    "cron": "0 1 * * *",
+                    "repos": ["r"],
+                    "excluded_prefix": "/com/",
+                }
+            ]
+        }
+    )
+    assert as_string.rules[0].excluded_prefixes == ["com/"]
+    assert as_string.rules[0].path_prefixes == []
+
+    as_list = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "m",
+                    "cron": "0 1 * * *",
+                    "repos": ["r"],
+                    "path_prefixes": ["com/", "org/"],
+                    "excluded_prefixes": ["com/internal/", "/org/exp/"],
+                }
+            ]
+        }
+    )
+    assert as_list.rules[0].path_prefixes == ["com/", "org/"]
+    assert as_list.rules[0].excluded_prefixes == ["com/internal/", "org/exp/"]
+
+    out = tmp_path / "s.toml"
+    save_schedule(as_list, out)
+    text = out.read_text(encoding="utf-8")
+    assert "excluded_prefixes" in text
+    reloaded = load_schedule(out)
+    assert reloaded.rules[0].excluded_prefixes == ["com/internal/", "org/exp/"]
+
+
 def test_parse_rejects_duplicate_ids() -> None:
     with pytest.raises(ScheduleStoreError, match="Duplicate"):
         parse_schedule_dict(

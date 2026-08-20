@@ -42,6 +42,7 @@ _MAVEN_PUT_SUFFIXES = (
     ".tar.gz",
     ".tgz",
     ".module",
+    ".xml",
 )
 _MAVEN_SIDE_SUFFIXES = (".md5", ".sha1", ".sha256", ".sha512", ".asc")
 
@@ -184,6 +185,8 @@ def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
         # Nexus при HTTP PUT отдельных файлов сам maven-metadata не генерирует —
         # нужно заливать metadata (+ checksum sidecars) вместе с артефактами.
         if name == "maven-metadata.xml" or name.startswith("maven-metadata.xml."):
+            return True
+        if name == "archetype-catalog.xml" or name.startswith("archetype-catalog.xml."):
             return True
         if path.endswith(_MAVEN_PUT_SUFFIXES):
             return True

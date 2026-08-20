@@ -41,6 +41,9 @@ def test_is_uploadable_by_format() -> None:
         "maven2",
         "org/apache/commons/commons-text/1.9/commons-text-1.9.jar.md5",
     )
+    assert is_uploadable_asset("maven2", "archetype-catalog.xml")
+    assert is_uploadable_asset("maven2", "archetype-catalog.xml.sha1")
+    assert is_uploadable_asset("maven2", "maven-metadata.xml")
     assert is_uploadable_asset("raw", "docs/readme.txt")
     assert not is_uploadable_asset("docker", "library/alpine/latest")
     assert is_uploadable_asset(
