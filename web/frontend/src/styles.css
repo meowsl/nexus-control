@@ -628,7 +628,8 @@ code {
   box-shadow: var(--shadow);
 }
 
-.pill-row { display: flex; flex-wrap: wrap; gap: 0; margin-top: 12px; }
+.tab-panel { display: none; }
+.tab-panel.is-active { display: block; }
 
 /* Asset browse tree (Nexus-style folders) */
 .tree-status { align-self: flex-end; padding-bottom: 10px; }

@@ -10,6 +10,7 @@ import {
   nodeKind,
   type AssetTreeNode,
 } from "./assetTree";
+import { readAssetCache, writeAssetCache } from "./assetCache";
 import type { Asset } from "./types";
 
 function fileWord(n: number): string {
@@ -89,17 +90,25 @@ function NodeGlyph({ kind }: { kind: ReturnType<typeof nodeKind> }) {
 }
 
 export default function AssetBrowser({ repo, format }: { repo: string; format?: string }) {
-  const [items, setItems] = useState<Asset[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<Asset[]>(() => readAssetCache(repo)?.items ?? []);
+  const [loading, setLoading] = useState(() => !readAssetCache(repo));
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const loadAll = useCallback(async (signal: AbortSignal) => {
-    setLoading(true);
-    setError("");
-    setItems([]);
-    setExpanded(new Set());
+    const hit = readAssetCache(repo);
+    if (hit) {
+      setItems(hit.items);
+      setLoading(false);
+      setError("");
+      if (hit.fresh) return;
+    } else {
+      setLoading(true);
+      setItems([]);
+      setExpanded(new Set());
+      setError("");
+    }
     let token: string | null = null;
     const collected: Asset[] = [];
     try {
@@ -114,6 +123,7 @@ export default function AssetBrowser({ repo, format }: { repo: string; format?: 
         token = data.continuation;
       } while (token);
       if (signal.aborted) return;
+      writeAssetCache(repo, collected);
       setItems(collected);
     } catch (ex) {
       if (signal.aborted) return;

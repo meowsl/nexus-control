@@ -79,7 +79,9 @@ export default function RepositoryDetailPage() {
           </button>
         ))}
       </div>
-      {tab === "assets" && <AssetBrowser repo={repo.name} format={repo.format} />}
+      <div className={tab === "assets" ? "tab-panel is-active" : "tab-panel"}>
+        <AssetBrowser key={repo.name} repo={repo.name} format={repo.format} />
+      </div>
       {tab === "labels" && <LabelsTab repo={repo} onSaved={() => void load()} />}
       {tab === "scan" && <ScanTab repo={repo.name} />}
       {tab === "history" && <RepoHistoryTab repo={repo.name} />}
