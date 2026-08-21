@@ -370,7 +370,7 @@ class PipelineService:
             except OSError as exc:
                 logger.error("Failed to write unverified assets list: %s", exc)
 
-        if history_source in {"tui", "cli", "scheduler"}:
+        if history_source in {"tui", "cli", "scheduler", "web"}:
             defectdojo_engagement_id: int | None = None
             if (
                 verify

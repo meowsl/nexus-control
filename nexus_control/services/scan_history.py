@@ -29,7 +29,7 @@ from nexus_control.utils.safe_path import sanitize_repo_name
 
 logger = logging.getLogger(__name__)
 
-HistorySource = Literal["tui", "cli", "scheduler"]
+HistorySource = Literal["tui", "cli", "scheduler", "web"]
 MAX_VULNS_PER_SCANNER = 20
 INDEX_FILENAME = "index.json"
 RUNS_DIRNAME = "runs"
@@ -307,7 +307,7 @@ def _meta_from_dict(data: dict[str, Any]) -> ScanRunMeta:
         checkpoint_skipped=int(totals_raw.get("checkpoint_skipped") or 0),
     )
     source = str(data.get("source") or "cli")
-    if source not in {"tui", "cli", "scheduler"}:
+    if source not in {"tui", "cli", "scheduler", "web"}:
         source = "cli"
     return ScanRunMeta(
         run_id=str(data.get("run_id") or ""),
