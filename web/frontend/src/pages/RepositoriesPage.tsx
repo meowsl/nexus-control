@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import Select from "../Select";
 import type { Label, Repo } from "../types";
 
 export default function RepositoriesPage() {
@@ -60,42 +61,43 @@ export default function RepositoriesPage() {
         </label>
         <label>
           Формат
-          <select value={fmt} onChange={(e) => setFmt(e.target.value)}>
-            <option value="">Все форматы</option>
-            {formats.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={fmt}
+            onChange={setFmt}
+            options={[
+              { value: "", label: "Все форматы" },
+              ...formats.map((f) => ({ value: f, label: f })),
+            ]}
+          />
         </label>
         <label>
           Тип
-          <select value={kind} onChange={(e) => setKind(e.target.value)}>
-            <option value="">Все типы</option>
-            <option value="hosted">hosted</option>
-            <option value="proxy">proxy</option>
-            <option value="group">group</option>
-          </select>
+          <Select
+            value={kind}
+            onChange={setKind}
+            options={[
+              { value: "", label: "Все типы" },
+              { value: "hosted", label: "hosted" },
+              { value: "proxy", label: "proxy" },
+              { value: "group", label: "group" },
+            ]}
+          />
         </label>
         <label>
           Метка
-          <select
+          <Select
             value={label}
-            onChange={(e) => {
-              const next = new URLSearchParams(params);
-              if (e.target.value) next.set("label", e.target.value);
-              else next.delete("label");
-              setParams(next, { replace: true });
+            onChange={(next) => {
+              const paramsNext = new URLSearchParams(params);
+              if (next) paramsNext.set("label", next);
+              else paramsNext.delete("label");
+              setParams(paramsNext, { replace: true });
             }}
-          >
-            <option value="">Все метки</option>
-            {labels.map((l) => (
-              <option key={l.id} value={l.name}>
-                {l.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: "Все метки" },
+              ...labels.map((l) => ({ value: l.name, label: l.name })),
+            ]}
+          />
         </label>
       </div>
       <div className="table-wrap">

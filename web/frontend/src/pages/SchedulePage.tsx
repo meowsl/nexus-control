@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import Select from "../Select";
 import When from "../When";
 import type { Rule } from "../types";
 
@@ -79,18 +80,26 @@ export default function SchedulePage() {
         </label>
         <label>
           Действие
-          <select value={action} onChange={(e) => setAction(e.target.value)}>
-            <option value="verify_upload">verify_upload</option>
-            <option value="verify">verify</option>
-            <option value="upload">upload</option>
-          </select>
+          <Select
+            value={action}
+            onChange={setAction}
+            options={[
+              { value: "verify_upload", label: "verify_upload" },
+              { value: "verify", label: "verify" },
+              { value: "upload", label: "upload" },
+            ]}
+          />
         </label>
         <label>
           Режим
-          <select value={scanMode} onChange={(e) => setScanMode(e.target.value)}>
-            <option value="incremental">incremental</option>
-            <option value="full">full</option>
-          </select>
+          <Select
+            value={scanMode}
+            onChange={setScanMode}
+            options={[
+              { value: "incremental", label: "incremental" },
+              { value: "full", label: "full" },
+            ]}
+          />
         </label>
         <button className="btn primary" type="submit">
           Добавить

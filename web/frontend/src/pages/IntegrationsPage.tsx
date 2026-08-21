@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
+import Select from "../Select";
 
 type DefectDojo = {
   enabled: boolean;
@@ -273,12 +274,16 @@ function WebhookCard({
         </label>
         <label>
           Auth
-          <select value={auth} onChange={(e) => setAuth(e.target.value)}>
-            <option value="none">none</option>
-            <option value="bearer">bearer</option>
-            <option value="basic">basic</option>
-            <option value="header">header</option>
-          </select>
+          <Select
+            value={auth}
+            onChange={setAuth}
+            options={[
+              { value: "none", label: "none" },
+              { value: "bearer", label: "bearer" },
+              { value: "basic", label: "basic" },
+              { value: "header", label: "header" },
+            ]}
+          />
         </label>
         {auth === "bearer" ? (
           <label>
@@ -396,10 +401,15 @@ function VkCard({
         </label>
         <label>
           Когда слать
-          <select value={notify} onChange={(e) => setNotify(e.target.value)} disabled={!enabled}>
-            <option value="always">always — каждый прогон</option>
-            <option value="failures">failures — только FAIL</option>
-          </select>
+          <Select
+            value={notify}
+            onChange={setNotify}
+            disabled={!enabled}
+            options={[
+              { value: "always", label: "always — каждый прогон" },
+              { value: "failures", label: "failures — только FAIL" },
+            ]}
+          />
         </label>
         <label>
           API URL

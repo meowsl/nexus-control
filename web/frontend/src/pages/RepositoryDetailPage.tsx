@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import AssetBrowser from "../AssetBrowser";
 import { api } from "../api";
+import Select from "../Select";
 import When from "../When";
 import type { HistoryRun, Label, Repo } from "../types";
 
@@ -182,10 +183,14 @@ function ScanTab({ repo }: { repo: string }) {
       <div className="form-grid">
         <label>
           Режим
-          <select value={scanMode} onChange={(e) => setScanMode(e.target.value)}>
-            <option value="incremental">incremental — пропуск неизменённого PASS</option>
-            <option value="full">full — полный rescan</option>
-          </select>
+          <Select
+            value={scanMode}
+            onChange={setScanMode}
+            options={[
+              { value: "incremental", label: "incremental — пропуск неизменённого PASS" },
+              { value: "full", label: "full — полный rescan" },
+            ]}
+          />
         </label>
         <label className="check">
           <input type="checkbox" checked={upload} onChange={(e) => setUpload(e.target.checked)} />
