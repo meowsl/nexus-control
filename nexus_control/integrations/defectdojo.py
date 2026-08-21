@@ -323,6 +323,45 @@ class DefectDojoClient:
         except ValueError:
             return {"status_code": response.status_code}
 
+    def ping(self) -> dict[str, Any]:
+        headers = {"Authorization": f"Token {self.api_key}"}
+        with httpx.Client(
+            base_url=self.base_url,
+            verify=self.verify_ssl,
+            timeout=min(self.timeout, 15.0),
+            follow_redirects=True,
+        ) as client:
+            response = client.get("/api/v2/users/", params={"limit": 1}, headers=headers)
+        if response.status_code >= 400:
+            body = (response.text or "")[:300]
+            raise RuntimeError(
+                f"DefectDojo ping failed HTTP {response.status_code}: {body}"
+            )
+        try:
+            return response.json()
+        except ValueError:
+            return {"status_code": response.status_code}
+
+
+def ping_defectdojo(settings: Settings) -> DefectDojoPushResult:
+    """Проверка URL + API-ключа (GET /api/v2/users/)."""
+    cfg = resolve_defectdojo_settings(settings)
+    url = (cfg.defectdojo_url or "").strip().rstrip("/")
+    api_key = (cfg.defectdojo_api_key or "").strip()
+    if not url or not api_key:
+        return DefectDojoPushResult(
+            findings=0, skipped=True, error="DefectDojo URL or API key is missing"
+        )
+    try:
+        DefectDojoClient(
+            base_url=url,
+            api_key=api_key,
+            verify_ssl=cfg.defectdojo_verify_ssl,
+        ).ping()
+    except Exception as exc:  # noqa: BLE001
+        return DefectDojoPushResult(findings=0, error=str(exc)[:500])
+    return DefectDojoPushResult(findings=0, status_code=200)
+
 
 def defectdojo_engagement_url(settings: Settings, engagement_id: int | None) -> str | None:
     """Публичный URL engagement в UI DefectDojo, если интеграция включена."""
