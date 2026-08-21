@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState, type ReactNode, type SVGProps } from "react";
+import BrandMark from "../BrandMark";
 import { api } from "../api";
 import type { Status } from "../types";
 
@@ -127,8 +128,11 @@ export default function AppShell() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <strong>Nexus Control</strong>
-          <div className="brand-sub">управление репозиториями</div>
+          <BrandMark className="brand-mark" />
+          <div>
+            <strong>Nexus Control</strong>
+            <div className="brand-sub">управление репозиториями</div>
+          </div>
         </div>
         <nav className="nav">
           {GROUPS.map((group) => (

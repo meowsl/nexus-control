@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import BrandMark from "../BrandMark";
 import { api } from "../api";
 
 export default function LoginPage() {
@@ -26,7 +27,10 @@ export default function LoginPage() {
     <div className="login">
       <aside className="login-aside">
         <div>
-          <p className="login-product">Nexus Control</p>
+          <p className="login-product">
+            <BrandMark className="login-mark" />
+            Nexus Control
+          </p>
           <p className="lede">
             Каталог, метки и расписание сканов — в одном месте. Артефакты по-прежнему
             в Nexus.
