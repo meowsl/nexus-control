@@ -162,7 +162,10 @@ input[type="color"] {
   background: var(--surface);
   cursor: pointer;
 }
-input:focus, select:focus, textarea:focus, button:focus-visible {
+input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -766,7 +769,42 @@ code {
 
 .check-grid { display: grid; gap: 8px; margin: 12px 0; }
 .check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9375rem; }
-.check input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
+.check input[type="checkbox"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.check input[type="checkbox"]:hover {
+  border-color: var(--muted);
+}
+.check input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.check input[type="checkbox"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  margin-top: -2px;
+  border: 2px solid var(--primary-fg);
+  border-top: 0;
+  border-right: 0;
+  transform: rotate(-45deg);
+}
+.check input[type="checkbox"]:focus {
+  outline: none;
+}
+.check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .progress {
   height: 6px;
   background: var(--surface-muted);
@@ -948,22 +986,34 @@ code {
   inset: 0;
   z-index: 80;
   display: flex;
-  align-items: flex-start;
+  align-items: safe center;
   justify-content: center;
-  padding: 8vh 16px 32px;
+  padding: 32px 16px;
   overflow: auto;
   background: rgba(24, 24, 27, 0.45);
+  animation: modal-backdrop-in 0.22s ease;
 }
 html[data-theme="dark"] .modal-backdrop {
   background: rgba(0, 0, 0, 0.62);
 }
+.modal-backdrop.is-leaving {
+  animation: modal-backdrop-out 0.18s ease forwards;
+  pointer-events: none;
+}
 .modal {
-  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: none;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 16px;
   box-shadow: 0 16px 48px rgba(24, 24, 27, 0.18);
   outline: none;
+  animation: modal-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal-backdrop.is-leaving .modal {
+  animation: modal-out 0.18s ease forwards;
 }
 html[data-theme="dark"] .modal {
   box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
@@ -973,7 +1023,32 @@ html[data-theme="dark"] .modal {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px 0;
+  padding: 18px 20px 16px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-head-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.modal-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+.modal-icon img,
+.modal-icon svg {
+  display: block;
+  width: 32px;
+  height: 32px;
+}
+.modal-icon img {
+  object-fit: contain;
+  border-radius: 8px;
 }
 .modal-head h2 { font-size: 1.25rem; }
 .modal-close {
@@ -992,9 +1067,89 @@ html[data-theme="dark"] .modal {
   background: var(--surface-muted);
   color: var(--text);
 }
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.modal-form-scroll {
+  overflow: visible;
+  padding: 16px 24px 8px;
+}
+.modal-form-scroll .lede {
+  margin: 0 0 18px;
+  font-size: 0.9375rem;
+}
+.modal-enable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+}
+.modal-enable .check { margin: 0; }
+.modal-source {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-align: right;
+}
+.modal-section { margin-bottom: 20px; }
+.modal-section h3 {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.form-grid-2 { grid-template-columns: 1fr 1fr; }
+.form-grid-2 > .span-2,
+.form-grid-2 > .check { grid-column: 1 / -1; }
+.field-hint {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ok);
+}
+.field-hint.is-missing { color: var(--muted); }
+.modal-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+.modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.modal .select-menu { z-index: 90; }
 .modal-body { padding: 12px 20px 24px; }
 .modal-body .lede { margin-bottom: 16px; }
-.modal .select-menu { z-index: 90; }
+@keyframes modal-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes modal-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
 .panel > label:not(.check) {
   display: flex;
   flex-direction: column;
@@ -1193,6 +1348,12 @@ a.when-link:hover .when-date { color: var(--accent); text-decoration: underline;
   .select-chevron {
     transition: none;
   }
+  .modal-backdrop,
+  .modal,
+  .modal-backdrop.is-leaving,
+  .modal-backdrop.is-leaving .modal {
+    animation: none;
+  }
   .hex-cell,
   .hex-cell.core path {
     animation: none;
@@ -1221,6 +1382,7 @@ a.when-link:hover .when-date { color: var(--accent); text-decoration: underline;
     padding: 8px 0 0;
   }
   .metrics-card, .split { grid-template-columns: 1fr; }
+  .form-grid-2 { grid-template-columns: 1fr; }
   .login { grid-template-columns: 1fr; }
   .login-aside { padding: 48px 32px 32px; min-height: auto; }
   .login-foot { display: none; }

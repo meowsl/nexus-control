@@ -48,11 +48,6 @@ function sourceLabel(source: string) {
   return source === "web" ? "веб-настройки" : "env / config.toml";
 }
 
-function hintOr(value: string, fallback: string) {
-  const trimmed = value.trim();
-  return trimmed || fallback;
-}
-
 export default function IntegrationsPage() {
   const [data, setData] = useState<Bundle | null>(null);
   const [error, setError] = useState("");
@@ -93,7 +88,9 @@ export default function IntegrationsPage() {
               <strong>DefectDojo</strong>
               <Status on={data.defectdojo.enabled} />
             </div>
-            <p className="integration-tile-hint">{hintOr(data.defectdojo.url, "URL не задан")}</p>
+            {data.defectdojo.url.trim() ? (
+              <p className="integration-tile-hint">{data.defectdojo.url.trim()}</p>
+            ) : null}
             <span className="integration-tile-src">{sourceLabel(data.defectdojo.source)}</span>
           </button>
           <button type="button" className="integration-tile" onClick={() => setOpen("webhook")}>
@@ -104,7 +101,9 @@ export default function IntegrationsPage() {
               <strong>Webhook</strong>
               <Status on={data.webhook.enabled} />
             </div>
-            <p className="integration-tile-hint">{hintOr(data.webhook.url, "URL не задан")}</p>
+            {data.webhook.url.trim() ? (
+              <p className="integration-tile-hint">{data.webhook.url.trim()}</p>
+            ) : null}
             <span className="integration-tile-src">{sourceLabel(data.webhook.source)}</span>
           </button>
           <button type="button" className="integration-tile" onClick={() => setOpen("vk")}>
@@ -115,13 +114,27 @@ export default function IntegrationsPage() {
               <strong>VK Teams</strong>
               <Status on={data.vk_teams.enabled} />
             </div>
-            <p className="integration-tile-hint">{hintOr(data.vk_teams.chat_id, "чат не задан")}</p>
+            {data.vk_teams.chat_id.trim() ? (
+              <p className="integration-tile-hint">{data.vk_teams.chat_id.trim()}</p>
+            ) : null}
             <span className="integration-tile-src">{sourceLabel(data.vk_teams.source)}</span>
           </button>
         </div>
       )}
       {data && open ? (
-        <Modal title={title} onClose={() => setOpen(null)}>
+        <Modal
+          title={title}
+          icon={
+            open === "defectdojo" ? (
+              <IconDefectDojo />
+            ) : open === "webhook" ? (
+              <IconWebhook />
+            ) : (
+              <IconVkTeams />
+            )
+          }
+          onClose={() => setOpen(null)}
+        >
           {open === "defectdojo" ? (
             <DefectDojoForm initial={data.defectdojo} onSaved={load} />
           ) : null}
@@ -189,55 +202,65 @@ function DefectDojoForm({
   }
 
   return (
-    <form onSubmit={save}>
-      <p className="lede">
-        После verify FAIL-находки уходят в Generic Findings Import. API-ключ — из
-        профиля DefectDojo. Источник: {sourceLabel(initial.source)}.
-      </p>
-      {err ? <div className="banner error">{err}</div> : null}
-      <div className="form-grid">
-        <label className="check">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Включить
-        </label>
-        <label>
-          URL
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://defectdojo.example" />
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
-          Проверять TLS
-        </label>
-        <label>
-          Product
-          <input value={product} onChange={(e) => setProduct(e.target.value)} />
-        </label>
-        <label>
-          Engagement (пусто = имя репозитория)
-          <input value={engagement} onChange={(e) => setEngagement(e.target.value)} />
-        </label>
-        <label>
-          Product type
-          <input value={productType} onChange={(e) => setProductType(e.target.value)} />
-        </label>
-        <label>
-          API key {initial.api_key_set ? "(задан)" : "(нет)"}
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="оставьте пустым, чтобы не менять"
-          />
-        </label>
+    <form className="modal-form" onSubmit={save}>
+      <div className="modal-form-scroll">
+        <EnableRow checked={enabled} onChange={setEnabled} source={initial.source} />
+        <p className="lede">
+          После verify FAIL-находки уходят в Generic Findings Import. API-ключ — из профиля
+          DefectDojo.
+        </p>
+        {err ? <div className="banner error">{err}</div> : null}
+        <section className="modal-section">
+          <h3>Подключение</h3>
+          <div className="form-grid form-grid-2">
+            <label className="span-2">
+              URL
+              <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://defectdojo.example" />
+            </label>
+            <label className="check span-2">
+              <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
+              Проверять TLS
+            </label>
+          </div>
+        </section>
+        <section className="modal-section">
+          <h3>Проект</h3>
+          <div className="form-grid form-grid-2">
+            <label>
+              Product
+              <input value={product} onChange={(e) => setProduct(e.target.value)} />
+            </label>
+            <label>
+              Product type
+              <input value={productType} onChange={(e) => setProductType(e.target.value)} />
+            </label>
+            <label className="span-2">
+              Engagement
+              <input
+                value={engagement}
+                onChange={(e) => setEngagement(e.target.value)}
+                placeholder="пусто = имя репозитория"
+              />
+            </label>
+          </div>
+        </section>
+        <section className="modal-section">
+          <h3>Секрет</h3>
+          <div className="form-grid">
+            <label>
+              API key {initial.api_key_set ? <span className="field-hint">задан</span> : <span className="field-hint is-missing">нет</span>}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="оставьте пустым, чтобы не менять"
+              />
+            </label>
+          </div>
+        </section>
       </div>
-      <div className="form-actions">
-        <button className="btn primary" type="submit">
-          Сохранить
-        </button>
-        <TestButton path="/api/integrations/defectdojo/test" />
-        {msg ? <span className="ok">{msg}</span> : null}
-      </div>
+      <FormFooter testPath="/api/integrations/defectdojo/test" msg={msg} />
     </form>
   );
 }
@@ -303,80 +326,73 @@ function WebhookForm({
   }
 
   return (
-    <form onSubmit={save}>
-      <p className="lede">
-        POST JSON после каждого verify (тот же payload, что CLI webhook). Источник:{" "}
-        {sourceLabel(initial.source)}.
-      </p>
-      {err ? <div className="banner error">{err}</div> : null}
-      <div className="form-grid">
-        <label className="check">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Включить
-        </label>
-        <label>
-          URL
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hooks.example.com/scan" />
-        </label>
-        <label>
-          Auth
-          <Select
-            value={auth}
-            onChange={setAuth}
-            options={[
-              { value: "none", label: "none" },
-              { value: "bearer", label: "bearer" },
-              { value: "basic", label: "basic" },
-              { value: "header", label: "header" },
-            ]}
-          />
-        </label>
-        {auth === "bearer" ? (
-          <label>
-            Token {initial.token_set ? "(задан)" : ""}
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
-          </label>
-        ) : null}
-        {auth === "basic" ? (
-          <>
-            <label>
-              Username
-              <input value={username} onChange={(e) => setUsername(e.target.value)} />
+    <form className="modal-form" onSubmit={save}>
+      <div className="modal-form-scroll">
+        <EnableRow checked={enabled} onChange={setEnabled} source={initial.source} />
+        <p className="lede">POST JSON после каждого verify — тот же payload, что у CLI webhook.</p>
+        {err ? <div className="banner error">{err}</div> : null}
+        <section className="modal-section">
+          <h3>Подключение</h3>
+          <div className="form-grid form-grid-2">
+            <label className="span-2">
+              URL
+              <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hooks.example.com/scan" />
             </label>
             <label>
-              Password {initial.password_set ? "(задан)" : ""}
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
+              Auth
+              <Select
+                value={auth}
+                onChange={setAuth}
+                options={[
+                  { value: "none", label: "none" },
+                  { value: "bearer", label: "bearer" },
+                  { value: "basic", label: "basic" },
+                  { value: "header", label: "header" },
+                ]}
+              />
             </label>
-          </>
-        ) : null}
-        {auth === "header" ? (
-          <>
             <label>
-              Header name
-              <input value={headerName} onChange={(e) => setHeaderName(e.target.value)} placeholder="X-Api-Key" />
+              Timeout, сек
+              <input type="number" min={1} max={120} value={timeout} onChange={(e) => setTimeoutSec(e.target.value)} />
             </label>
-            <label>
-              Header value {initial.header_value_set ? "(задан)" : ""}
-              <input type="password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
+            {auth === "bearer" ? (
+              <label className="span-2">
+                Token {initial.token_set ? <span className="field-hint">задан</span> : null}
+                <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
+              </label>
+            ) : null}
+            {auth === "basic" ? (
+              <>
+                <label>
+                  Username
+                  <input value={username} onChange={(e) => setUsername(e.target.value)} />
+                </label>
+                <label>
+                  Password {initial.password_set ? <span className="field-hint">задан</span> : null}
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
+                </label>
+              </>
+            ) : null}
+            {auth === "header" ? (
+              <>
+                <label>
+                  Header name
+                  <input value={headerName} onChange={(e) => setHeaderName(e.target.value)} placeholder="X-Api-Key" />
+                </label>
+                <label>
+                  Header value {initial.header_value_set ? <span className="field-hint">задан</span> : null}
+                  <input type="password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="оставьте пустым, чтобы не менять" />
+                </label>
+              </>
+            ) : null}
+            <label className="check span-2">
+              <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
+              Проверять TLS
             </label>
-          </>
-        ) : null}
-        <label className="check">
-          <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
-          Проверять TLS
-        </label>
-        <label>
-          Timeout, сек
-          <input type="number" min={1} max={120} value={timeout} onChange={(e) => setTimeoutSec(e.target.value)} />
-        </label>
+          </div>
+        </section>
       </div>
-      <div className="form-actions">
-        <button className="btn primary" type="submit">
-          Сохранить
-        </button>
-        <TestButton path="/api/integrations/webhook/test" />
-        {msg ? <span className="ok">{msg}</span> : null}
-      </div>
+      <FormFooter testPath="/api/integrations/webhook/test" msg={msg} />
     </form>
   );
 }
@@ -433,64 +449,99 @@ function VkForm({
   }
 
   return (
-    <form onSubmit={save}>
-      <p className="lede">
-        Уведомления о прогонах и кнопка Upload (как в scheduler). Источник:{" "}
-        {sourceLabel(initial.source)}.
-      </p>
-      {err ? <div className="banner error">{err}</div> : null}
-      <div className="form-grid">
-        <label className="check">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Включить
-        </label>
-        <label>
-          Когда слать
-          <Select
-            value={notify}
-            onChange={setNotify}
-            disabled={!enabled}
-            options={[
-              { value: "always", label: "always — каждый прогон" },
-              { value: "failures", label: "failures — только FAIL" },
-            ]}
-          />
-        </label>
-        <label>
-          API URL
-          <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
-        </label>
-        <label>
-          Chat ID
-          <input value={chatId} onChange={(e) => setChatId(e.target.value)} />
-        </label>
-        <label>
-          Bot token {initial.token_set ? "(задан)" : "(нет)"}
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="оставьте пустым, чтобы не менять"
-          />
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={uploadButton} onChange={(e) => setUploadButton(e.target.checked)} />
-          Кнопка Upload в сообщении
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
-          Проверять TLS
-        </label>
+    <form className="modal-form" onSubmit={save}>
+      <div className="modal-form-scroll">
+        <EnableRow checked={enabled} onChange={setEnabled} source={initial.source} />
+        <p className="lede">Уведомления о прогонах и кнопка Upload — как в scheduler.</p>
+        {err ? <div className="banner error">{err}</div> : null}
+        <section className="modal-section">
+          <h3>Подключение</h3>
+          <div className="form-grid form-grid-2">
+            <label className="span-2">
+              API URL
+              <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
+            </label>
+            <label>
+              Chat ID
+              <input value={chatId} onChange={(e) => setChatId(e.target.value)} />
+            </label>
+            <label>
+              Когда слать
+              <Select
+                value={notify}
+                onChange={setNotify}
+                disabled={!enabled}
+                options={[
+                  { value: "always", label: "always — каждый прогон" },
+                  { value: "failures", label: "failures — только FAIL" },
+                ]}
+              />
+            </label>
+          </div>
+        </section>
+        <section className="modal-section">
+          <h3>Секрет</h3>
+          <div className="form-grid">
+            <label>
+              Bot token {initial.token_set ? <span className="field-hint">задан</span> : <span className="field-hint is-missing">нет</span>}
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="оставьте пустым, чтобы не менять"
+              />
+            </label>
+          </div>
+        </section>
+        <section className="modal-section">
+          <h3>Опции</h3>
+          <div className="modal-checks">
+            <label className="check">
+              <input type="checkbox" checked={uploadButton} onChange={(e) => setUploadButton(e.target.checked)} />
+              Кнопка Upload в сообщении
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={verifySsl} onChange={(e) => setVerifySsl(e.target.checked)} />
+              Проверять TLS
+            </label>
+          </div>
+        </section>
       </div>
-      <div className="form-actions">
-        <button className="btn primary" type="submit">
-          Сохранить
-        </button>
-        <TestButton path="/api/integrations/vk-teams/test" />
-        {msg ? <span className="ok">{msg}</span> : null}
-      </div>
+      <FormFooter testPath="/api/integrations/vk-teams/test" msg={msg} />
     </form>
+  );
+}
+
+function EnableRow({
+  checked,
+  onChange,
+  source,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  source: string;
+}) {
+  return (
+    <div className="modal-enable">
+      <label className="check">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        Включить интеграцию
+      </label>
+      <span className="modal-source">{sourceLabel(source)}</span>
+    </div>
+  );
+}
+
+function FormFooter({ testPath, msg }: { testPath: string; msg: string }) {
+  return (
+    <div className="modal-foot">
+      <button className="btn primary" type="submit">
+        Сохранить
+      </button>
+      <TestButton path={testPath} />
+      {msg ? <span className="ok">{msg}</span> : null}
+    </div>
   );
 }
 
