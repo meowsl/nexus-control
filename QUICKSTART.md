@@ -66,6 +66,7 @@ nexus-control
 ```
 
 Legacy `.env` в CWD всё ещё поддерживается (см. `.env.example`), но не обязателен.
+Веб-интерфейс: каталог `web/` (`cp .env.example .env && docker compose up --build`).
 
 Частые опции для лаборатории (env или TOML):
 

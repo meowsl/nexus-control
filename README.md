@@ -401,7 +401,7 @@ nexus-control
 
 Все пути с `~` раскрываются через `Path.expanduser()`. Каталоги downloads / reports / verified / logs создаются при старте.
 
-Legacy `.env` — см. [.env.example](.env.example). Для повседневного использования достаточно wizard / TOML.
+Legacy `.env` для TUI/CLI — [.env.example](.env.example). Для повседневного TUI достаточно wizard / TOML. Веб — [web/.env.example](web/.env.example).
 ---
 
 ## Запуск
@@ -637,7 +637,12 @@ nexus-control/
 ├── uv.lock
 ├── config.toml.example
 ├── schedule.toml.example        # пример правил планировщика
-├── .env.example                 # legacy env
+├── .env.example                 # TUI / CLI env
+├── web/                         # Web UI (compose, Docker, SPA)
+│   ├── compose.yaml
+│   ├── .env.example
+│   ├── docker/
+│   └── frontend/
 ├── QUICKSTART.md
 ├── README.md
 ├── scripts/                     # вспомогательные скрипты
@@ -695,3 +700,19 @@ nexus-control/
 ## License
 
 [MIT](LICENSE) — © 2026 meowsl
+
+## Web UI
+
+Отдельный стек в каталоге `web/` (не смешивается с TUI/CLI). Nexus CE не входит в образ — см. [LEGAL.md](LEGAL.md).
+
+```bash
+cd web
+cp .env.example .env
+docker compose up --build
+```
+
+Откройте http://127.0.0.1:8088 и войдите учёткой Nexus. Стек ходит в Nexus по `127.0.0.1` (сеть хоста), как TUI/CLI.
+
+Страницы: обзор, репозитории, карточка репозитория, метки, задачи, расписание, история, интеграции.
+
+Локально без Docker: `pip install -e '.[web]'`, `uvicorn nexus_control.web.app:app --port 8000`, в `web/frontend` — `npm install && npm run dev`.

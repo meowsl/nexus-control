@@ -38,6 +38,5 @@ downloads/
 reports/
 logs/
 
-# Session / tool caches (if created under project)
-.cache/
+node_modules/
 *.log
