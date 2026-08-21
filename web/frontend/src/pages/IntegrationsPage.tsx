@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
+import { IconDefectDojo, IconVkTeams, IconWebhook } from "../IntegrationMarks";
+import Modal from "../Modal";
 import Select from "../Select";
 
 type DefectDojo = {
@@ -40,10 +42,21 @@ type VkTeams = {
 };
 
 type Bundle = { defectdojo: DefectDojo; webhook: Webhook; vk_teams: VkTeams };
+type OpenId = "defectdojo" | "webhook" | "vk" | null;
+
+function sourceLabel(source: string) {
+  return source === "web" ? "веб-настройки" : "env / config.toml";
+}
+
+function hintOr(value: string, fallback: string) {
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
 
 export default function IntegrationsPage() {
   const [data, setData] = useState<Bundle | null>(null);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState<OpenId>(null);
 
   async function load() {
     setData(await api<Bundle>("/api/integrations"));
@@ -52,6 +65,9 @@ export default function IntegrationsPage() {
   useEffect(() => {
     load().catch((ex) => setError(ex instanceof Error ? ex.message : "Ошибка"));
   }, []);
+
+  const title =
+    open === "defectdojo" ? "DefectDojo" : open === "webhook" ? "Webhook" : open === "vk" ? "VK Teams" : "";
 
   return (
     <>
@@ -68,25 +84,60 @@ export default function IntegrationsPage() {
       {!data ? (
         <p className="muted">Загрузка…</p>
       ) : (
-        <div className="cards">
-          <DefectDojoCard initial={data.defectdojo} onSaved={load} />
-          <WebhookCard initial={data.webhook} onSaved={load} />
-          <VkCard initial={data.vk_teams} onSaved={load} />
+        <div className="integration-grid">
+          <button type="button" className="integration-tile" onClick={() => setOpen("defectdojo")}>
+            <div className="integration-tile-top">
+              <span className="integration-mark">
+                <IconDefectDojo />
+              </span>
+              <strong>DefectDojo</strong>
+              <Status on={data.defectdojo.enabled} />
+            </div>
+            <p className="integration-tile-hint">{hintOr(data.defectdojo.url, "URL не задан")}</p>
+            <span className="integration-tile-src">{sourceLabel(data.defectdojo.source)}</span>
+          </button>
+          <button type="button" className="integration-tile" onClick={() => setOpen("webhook")}>
+            <div className="integration-tile-top">
+              <span className="integration-mark">
+                <IconWebhook />
+              </span>
+              <strong>Webhook</strong>
+              <Status on={data.webhook.enabled} />
+            </div>
+            <p className="integration-tile-hint">{hintOr(data.webhook.url, "URL не задан")}</p>
+            <span className="integration-tile-src">{sourceLabel(data.webhook.source)}</span>
+          </button>
+          <button type="button" className="integration-tile" onClick={() => setOpen("vk")}>
+            <div className="integration-tile-top">
+              <span className="integration-mark">
+                <IconVkTeams />
+              </span>
+              <strong>VK Teams</strong>
+              <Status on={data.vk_teams.enabled} />
+            </div>
+            <p className="integration-tile-hint">{hintOr(data.vk_teams.chat_id, "чат не задан")}</p>
+            <span className="integration-tile-src">{sourceLabel(data.vk_teams.source)}</span>
+          </button>
         </div>
       )}
+      {data && open ? (
+        <Modal title={title} onClose={() => setOpen(null)}>
+          {open === "defectdojo" ? (
+            <DefectDojoForm initial={data.defectdojo} onSaved={load} />
+          ) : null}
+          {open === "webhook" ? <WebhookForm initial={data.webhook} onSaved={load} /> : null}
+          {open === "vk" ? <VkForm initial={data.vk_teams} onSaved={load} /> : null}
+        </Modal>
+      ) : null}
     </>
   );
 }
 
-function Source({ source }: { source: string }) {
-  return (
-    <span className="muted">
-      источник: {source === "web" ? "веб-настройки" : "env / config.toml"}
-    </span>
-  );
+function Status({ on }: { on: boolean }) {
+  return <span className={`badge ${on ? "status-on" : "status-off"}`}>{on ? "Вкл" : "Выкл"}</span>;
 }
 
-function DefectDojoCard({
+function DefectDojoForm({
   initial,
   onSaved,
 }: {
@@ -138,14 +189,10 @@ function DefectDojoCard({
   }
 
   return (
-    <form className="panel" onSubmit={save}>
-      <header>
-        <h2>DefectDojo</h2>
-        <Source source={initial.source} />
-      </header>
+    <form onSubmit={save}>
       <p className="lede">
         После verify FAIL-находки уходят в Generic Findings Import. API-ключ — из
-        профиля DefectDojo.
+        профиля DefectDojo. Источник: {sourceLabel(initial.source)}.
       </p>
       {err ? <div className="banner error">{err}</div> : null}
       <div className="form-grid">
@@ -195,7 +242,7 @@ function DefectDojoCard({
   );
 }
 
-function WebhookCard({
+function WebhookForm({
   initial,
   onSaved,
 }: {
@@ -256,12 +303,11 @@ function WebhookCard({
   }
 
   return (
-    <form className="panel" onSubmit={save}>
-      <header>
-        <h2>Webhook</h2>
-        <Source source={initial.source} />
-      </header>
-      <p className="lede">POST JSON после каждого verify (тот же payload, что CLI webhook).</p>
+    <form onSubmit={save}>
+      <p className="lede">
+        POST JSON после каждого verify (тот же payload, что CLI webhook). Источник:{" "}
+        {sourceLabel(initial.source)}.
+      </p>
       {err ? <div className="banner error">{err}</div> : null}
       <div className="form-grid">
         <label className="check">
@@ -335,7 +381,7 @@ function WebhookCard({
   );
 }
 
-function VkCard({
+function VkForm({
   initial,
   onSaved,
 }: {
@@ -387,12 +433,11 @@ function VkCard({
   }
 
   return (
-    <form className="panel" onSubmit={save}>
-      <header>
-        <h2>VK Teams</h2>
-        <Source source={initial.source} />
-      </header>
-      <p className="lede">Уведомления о прогонах и кнопка Upload (как в scheduler).</p>
+    <form onSubmit={save}>
+      <p className="lede">
+        Уведомления о прогонах и кнопка Upload (как в scheduler). Источник:{" "}
+        {sourceLabel(initial.source)}.
+      </p>
       {err ? <div className="banner error">{err}</div> : null}
       <div className="form-grid">
         <label className="check">
