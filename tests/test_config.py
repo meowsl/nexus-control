@@ -11,6 +11,7 @@ from nexus_control.config import (
     Settings,
     clear_settings_cache,
     load_settings,
+    rewrite_loopback_nexus_url,
     warn_if_ssl_unverified,
 )
 from nexus_control.config_io import read_toml, write_toml_atomic
@@ -208,6 +209,35 @@ def test_normalize_url() -> None:
     assert normalize_nexus_url(" http://x:8081/ ") == "http://x:8081"
     with pytest.raises(ConfigError):
         normalize_nexus_url("not-a-url")
+
+
+def test_rewrite_loopback_nexus_url_in_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NEXUS_CONTROL_IN_CONTAINER", raising=False)
+    assert rewrite_loopback_nexus_url("http://localhost:8081") == "http://localhost:8081"
+    monkeypatch.setenv("NEXUS_CONTROL_IN_CONTAINER", "true")
+    assert (
+        rewrite_loopback_nexus_url("http://localhost:8081")
+        == "http://host.docker.internal:8081"
+    )
+    assert (
+        rewrite_loopback_nexus_url("http://127.0.0.1:8081")
+        == "http://host.docker.internal:8081"
+    )
+    assert (
+        rewrite_loopback_nexus_url("http://nexus.example:8081")
+        == "http://nexus.example:8081"
+    )
+    settings = Settings(
+        nexus_url="http://localhost:8081",
+        nexus_cache_dir=tmp_path / "cache",
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "rp",
+        verified_root=tmp_path / "vf",
+        log_file=tmp_path / "logs" / "t.log",
+    )
+    assert settings.nexus_url == "http://host.docker.internal:8081"
 
 
 def test_invalid_toml_raises(

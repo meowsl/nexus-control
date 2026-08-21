@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -31,6 +33,39 @@ WebhookAuthMode = Literal["none", "bearer", "basic", "header"]
 _active_toml_path: Path | None = None
 # WARNING про отключённый TLS — один раз за процесс, не на каждый Settings().
 _ssl_disabled_warned: bool = False
+
+
+def _running_in_container() -> bool:
+    flag = os.environ.get("NEXUS_CONTROL_IN_CONTAINER", "").strip().lower()
+    return flag in {"1", "true", "yes"}
+
+
+def rewrite_loopback_nexus_url(url: str) -> str:
+    """Inside Docker, localhost is the container — talk to the host instead.
+
+    TUI/CLI on the host keep ``http://localhost:8081``. Compose sets
+    ``NEXUS_CONTROL_IN_CONTAINER=true`` and ``extra_hosts`` for
+    ``host.docker.internal``.
+    """
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        return url
+    if not _running_in_container():
+        return url
+    replacement = (
+        os.environ.get("NEXUS_DOCKER_HOST", "").strip() or "host.docker.internal"
+    )
+    port = parsed.port
+    netloc = f"{replacement}:{port}" if port else replacement
+    rewritten = urlunsplit(parsed._replace(netloc=netloc)).rstrip("/")
+    if rewritten != url:
+        logger.warning(
+            "NEXUS_URL %s is loopback inside a container; using %s",
+            url,
+            rewritten,
+        )
+    return rewritten
 
 
 def _expand_path(value: str | Path) -> Path:
@@ -298,7 +333,7 @@ class Settings(BaseSettings):
     def _normalize_url(cls, value: object) -> str:
         if not value or not str(value).strip():
             raise ValueError("NEXUS_URL is required")
-        return str(value).strip().rstrip("/")
+        return rewrite_loopback_nexus_url(str(value).strip().rstrip("/"))
 
     @field_validator(
         "nexus_username",
@@ -430,11 +465,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _post_init_dirs(self) -> Settings:
-        ensure_dir(self.download_root)
-        ensure_dir(self.reports_root)
-        ensure_dir(self.verified_root)
-        ensure_parent_dir(self.log_file)
-        ensure_dir(self.nexus_cache_dir, mode=0o700)
+        for path in (
+            self.download_root,
+            self.reports_root,
+            self.verified_root,
+            self.nexus_cache_dir,
+        ):
+            try:
+                ensure_dir(path, mode=0o700 if path == self.nexus_cache_dir else None)
+            except OSError as exc:
+                logger.warning("Cannot create %s: %s", path, exc)
+        try:
+            ensure_parent_dir(self.log_file)
+        except OSError as err:
+            logger.warning("Cannot create log dir for %s: %s", self.log_file, err)
         return self
 
     @property
