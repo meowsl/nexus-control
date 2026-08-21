@@ -63,7 +63,7 @@ export default function RepositoryDetailPage() {
       <div className="tabs">
         {(
           [
-            ["assets", "Ассеты"],
+            ["assets", "Артефакты"],
             ["labels", "Метки"],
             ["scan", "Сканирование"],
             ["history", "История"],

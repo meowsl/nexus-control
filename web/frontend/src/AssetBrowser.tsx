@@ -16,9 +16,9 @@ import type { Asset } from "./types";
 function fileWord(n: number): string {
   const n10 = n % 10;
   const n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return `${n} файл`;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return `${n} файла`;
-  return `${n} файлов`;
+  if (n10 === 1 && n100 !== 11) return `${n} артефакт`;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return `${n} артефакта`;
+  return `${n} артефактов`;
 }
 
 function FolderGlyph() {
@@ -176,7 +176,7 @@ export default function AssetBrowser({ repo, format }: { repo: string; format?: 
       {loading ? (
         <div className="table-wrap">
           {error ? <div className="banner error">{error}</div> : null}
-          <HexLoader label="Собираем каталог" />
+          <HexLoader label="Собираем артефакты" />
         </div>
       ) : (
         <>
@@ -186,7 +186,7 @@ export default function AssetBrowser({ repo, format }: { repo: string; format?: 
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="путь или имя файла"
+            placeholder="путь или имя артефакта"
           />
         </label>
         <button type="button" className="btn" onClick={expandAll} disabled={filtering}>
@@ -257,7 +257,7 @@ export default function AssetBrowser({ repo, format }: { repo: string; format?: 
           </tbody>
         </table>
         {items.length === 0 && !loading ? (
-          <p className="empty">В репозитории нет ассетов (или нет прав на просмотр).</p>
+          <p className="empty">В репозитории нет артефактов (или нет прав на просмотр).</p>
         ) : null}
         {filtering && rows.length === 0 && items.length > 0 ? (
           <p className="empty">Ничего не совпало с фильтром.</p>

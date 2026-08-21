@@ -129,10 +129,7 @@ export default function AppShell() {
       <aside className="sidebar">
         <div className="brand">
           <BrandMark className="brand-mark" />
-          <div>
-            <strong>Nexus Control</strong>
-            <div className="brand-sub">управление репозиториями</div>
-          </div>
+          <strong>Nexus Control</strong>
         </div>
         <nav className="nav">
           {GROUPS.map((group) => (

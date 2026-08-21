@@ -1,7 +1,7 @@
 import BrandMark from "./BrandMark";
 
 /** Honeycomb packing — catalog assembling, not a spinner. */
-export default function HexLoader({ label = "Собираем каталог" }: { label?: string }) {
+export default function HexLoader({ label = "Собираем артефакты" }: { label?: string }) {
   return (
     <div className="hex-loader" role="status" aria-live="polite" aria-label={label}>
       <div className="hex-honeycomb">
