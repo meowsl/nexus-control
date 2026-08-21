@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import When from "../When";
 import type { Rule } from "../types";
 
 export default function SchedulePage() {
@@ -116,7 +117,7 @@ export default function SchedulePage() {
                 <td>
                   {r.action} / {r.scan_mode}
                 </td>
-                <td className="muted">{r.last_fire || "—"}</td>
+                <td><When value={r.last_fire} /></td>
                 <td>
                   <button
                     type="button"

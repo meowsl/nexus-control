@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import When from "../When";
 import type { HistoryRun } from "../types";
 
 export default function HistoryPage() {
@@ -39,7 +40,9 @@ export default function HistoryPage() {
             {rows.map((r) => (
               <tr key={r.run_id}>
                 <td>
-                  <Link to={`/history/${r.run_id}`}>{r.started_at}</Link>
+                  <Link to={`/history/${r.run_id}`} className="when-link">
+                    <When value={r.started_at} />
+                  </Link>
                 </td>
                 <td>
                   <Link to={`/repositories/${encodeURIComponent(r.repository)}`}>

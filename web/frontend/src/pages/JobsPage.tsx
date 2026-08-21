@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { jobStatusLabel } from "../format";
+import When from "../When";
 import type { Job } from "../types";
 
 export default function JobsPage() {
@@ -60,7 +61,7 @@ export default function JobsPage() {
                   </div>
                   <div className="muted">{j.progress_text || j.error || "—"}</div>
                 </td>
-                <td className="muted">{j.created_at ?? "—"}</td>
+                <td><When value={j.created_at} /></td>
               </tr>
             ))}
           </tbody>

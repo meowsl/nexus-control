@@ -1,7 +1,9 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, formatBytes } from "../api";
-import type { Asset, HistoryRun, Label, Repo } from "../types";
+import AssetBrowser from "../AssetBrowser";
+import { api } from "../api";
+import When from "../When";
+import type { HistoryRun, Label, Repo } from "../types";
 
 type Tab = "assets" | "labels" | "scan" | "history";
 
@@ -77,80 +79,11 @@ export default function RepositoryDetailPage() {
           </button>
         ))}
       </div>
-      {tab === "assets" && <AssetsTab repo={repo.name} />}
+      {tab === "assets" && <AssetBrowser repo={repo.name} format={repo.format} />}
       {tab === "labels" && <LabelsTab repo={repo} onSaved={() => void load()} />}
       {tab === "scan" && <ScanTab repo={repo.name} />}
       {tab === "history" && <RepoHistoryTab repo={repo.name} />}
     </>
-  );
-}
-
-function AssetsTab({ repo }: { repo: string }) {
-  const [items, setItems] = useState<Asset[]>([]);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const load = useCallback(
-    async (continuation?: string | null, append = false) => {
-      setLoading(true);
-      setError("");
-      try {
-        const qs = continuation
-          ? `?continuation=${encodeURIComponent(continuation)}`
-          : "";
-        const data = await api<{ items: Asset[]; continuation: string | null }>(
-          `/api/repos/${encodeURIComponent(repo)}/assets${qs}`,
-        );
-        setItems((prev) => (append ? [...prev, ...data.items] : data.items));
-        setToken(data.continuation);
-      } catch (ex) {
-        setError(ex instanceof Error ? ex.message : "Ошибка");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [repo],
-  );
-
-  useEffect(() => {
-    void load(null, false);
-  }, [load]);
-
-  return (
-    <div className="table-wrap">
-      {error ? <div className="banner error">{error}</div> : null}
-      <table>
-        <thead>
-          <tr>
-            <th>Путь</th>
-            <th>Размер</th>
-            <th>Изменён</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((a) => (
-            <tr key={a.path}>
-              <td className="mono">{a.path}</td>
-              <td>{formatBytes(a.file_size)}</td>
-              <td className="muted">{a.last_modified ?? "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {items.length === 0 && !loading ? (
-        <p className="empty">В репозитории нет ассетов (или нет прав на просмотр).</p>
-      ) : null}
-      {token ? (
-        <button
-          className="btn"
-          disabled={loading}
-          onClick={() => void load(token, true)}
-        >
-          {loading ? "Загрузка…" : "Ещё страница"}
-        </button>
-      ) : null}
-    </div>
   );
 }
 
@@ -294,7 +227,9 @@ function RepoHistoryTab({ repo }: { repo: string }) {
           {rows.map((r) => (
             <tr key={r.run_id}>
               <td>
-                <Link to={`/history/${r.run_id}`}>{r.started_at}</Link>
+                <Link to={`/history/${r.run_id}`} className="when-link">
+                  <When value={r.started_at} />
+                </Link>
               </td>
               <td>{r.source}</td>
               <td>{r.totals.passed}</td>
