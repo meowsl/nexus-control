@@ -29,7 +29,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print JSON to stdout",
     )
+    p_repos.add_argument(
+        "--label",
+        default=None,
+        help="Only repositories with this console label",
+    )
     p_repos.set_defaults(_handler="repos")
+
+    p_labels = sub.add_parser(
+        "labels",
+        help="Harbor-like labels (console DB; attach to Nexus repositories)",
+    )
+    p_labels.add_argument(
+        "labels_action",
+        nargs="?",
+        default="list",
+        choices=["list", "create", "delete", "attach", "detach"],
+    )
+    p_labels.add_argument("--name", default=None, help="Label name")
+    p_labels.add_argument("--color", default="#3D7EA6", help="Label color #RRGGBB")
+    p_labels.add_argument("--description", default="", help="Label description")
+    p_labels.add_argument("--repo", default=None, help="Repository name (attach/detach)")
+    p_labels.add_argument("--json", action="store_true", help="JSON stdout")
+    p_labels.set_defaults(_handler="labels")
 
     p_verify = sub.add_parser(
         "verify",
@@ -367,6 +389,10 @@ def main(argv: list[str] | None = None) -> None:
             from nexus_control.cli.cmd_repos import run_repos
 
             code = run_repos(args)
+        elif args._handler == "labels":
+            from nexus_control.cli.cmd_labels import run_labels
+
+            code = run_labels(args)
         elif args._handler == "verify":
             from nexus_control.cli.cmd_verify import run_verify
 
