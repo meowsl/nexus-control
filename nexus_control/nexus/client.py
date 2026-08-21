@@ -219,7 +219,9 @@ class NexusClient:
                 f"Nexus request timed out after {self.settings.nexus_timeout}s: {path}"
             ) from exc
         except httpx.RequestError as exc:
-            raise NexusNetworkError(f"Network error talking to Nexus: {exc}") from exc
+            raise NexusNetworkError(
+                f"Network error talking to Nexus ({self.settings.nexus_url}): {exc}"
+            ) from exc
 
         if response.status_code in {401, 403} and allow_reauth:
             if self._reauth_attempts < self._max_reauth:
