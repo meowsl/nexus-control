@@ -1,0 +1,131 @@
+# Nexus Control web UI. Run from this directory.
+#
+#   cp .env.example .env
+#   docker compose up --build -d
+#   open http://127.0.0.1:8088
+#
+# api / worker / web share the host network so NEXUS_URL=http://127.0.0.1:8081
+# is the same Nexus as TUI/CLI (Linux). Postgres is published on 127.0.0.1:5433.
+
+name: nexus-control-web
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql+psycopg://nexusctl:${POSTGRES_PASSWORD}@127.0.0.1:5433/nexusctl
+  NEXUS_URL: ${NEXUS_URL:-http://127.0.0.1:8081}
+  NEXUS_USERNAME: ${NEXUS_USERNAME:-}
+  NEXUS_PASSWORD: ${NEXUS_PASSWORD:-}
+  NEXUS_CONTROL_SECRET: ${NEXUS_CONTROL_SECRET:?set NEXUS_CONTROL_SECRET in .env}
+  NEXUS_CONTROL_COOKIE_SECURE: ${NEXUS_CONTROL_COOKIE_SECURE:-false}
+  NEXUS_VERIFY_SSL: ${NEXUS_VERIFY_SSL:-true}
+  DOWNLOAD_ROOT: /app/nexus-control/downloads
+  REPORTS_ROOT: /app/nexus-control/reports
+  VERIFIED_ROOT: /app/nexus-control
+  NEXUS_CACHE_DIR: /app/.cache/nexus-control
+  LOG_FILE: /app/nexus-control/logs/nexus-control.log
+  HOME: /app
+  XDG_CONFIG_HOME: /app/.config
+  XDG_CACHE_HOME: /app/.cache
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexusctl
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: nexusctl
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexusctl -d nexusctl"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: ..
+      dockerfile: web/docker/Dockerfile.api
+    command:
+      [
+        "uvicorn",
+        "nexus_control.web.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "127.0.0.1",
+      ]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *app-environment
+    volumes:
+      - cache:/app/.cache
+      - data:/app/nexus-control
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+  worker:
+    build:
+      context: ..
+      dockerfile: web/docker/Dockerfile.api
+    command: ["python", "-m", "nexus_control.web.worker"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *app-environment
+    volumes:
+      - cache:/app/.cache
+      - data:/app/nexus-control
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      disable: true
+
+  web:
+    build:
+      context: ..
+      dockerfile: web/docker/Dockerfile.web
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+
+volumes:
+  pgdata:
+  cache:
+  data:
