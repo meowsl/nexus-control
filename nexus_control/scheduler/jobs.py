@@ -33,9 +33,23 @@ def run_rule(
         logger.warning("Rule %s has no repos", rule.id)
         return 0
 
+    repos = list(rule.repos)
+    try:
+        from nexus_control.web.db import SessionLocal, init_db
+        from nexus_control.web.deps import expand_repo_selectors
+
+        init_db()
+        db = SessionLocal()
+        try:
+            repos = expand_repo_selectors(db, repos)
+        finally:
+            db.close()
+    except Exception:
+        logger.debug("label expansion skipped", exc_info=True)
+
     effective_scan_limit = scan_limit if scan_limit is not None else rule.scan_limit
     worst = 0
-    for repo in rule.repos:
+    for repo in repos:
         if on_repo_start is not None:
             on_repo_start(repo)
         code = _run_repo(
