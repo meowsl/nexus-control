@@ -351,6 +351,7 @@ class PipelineService:
         history_path_prefix: str | None = None,
         history_workers: int | None = None,
         history_checkpoint_skipped: int = 0,
+        skip_defectdojo: bool = False,
     ) -> None:
         """Записать reports/manifest/history в конце (в т.ч. после batch-оркестрации)."""
         summary.finished_at = datetime.now(timezone.utc)
@@ -371,7 +372,11 @@ class PipelineService:
 
         if history_source in {"tui", "cli", "scheduler"}:
             defectdojo_engagement_id: int | None = None
-            if verify and getattr(self.settings, "defectdojo_enabled", False):
+            if (
+                verify
+                and not skip_defectdojo
+                and getattr(self.settings, "defectdojo_enabled", False)
+            ):
                 try:
                     from nexus_control.integrations.defectdojo import (
                         push_pipeline_findings,

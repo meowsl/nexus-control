@@ -10,11 +10,33 @@ from pathlib import Path
 from typing import Any
 
 from nexus_control.config import Settings
-from nexus_control.models import AssetPipelineResult, NexusAsset, ScanStatus, Verdict
+from nexus_control.models import (
+    AssetKind,
+    AssetPipelineResult,
+    DownloadResult,
+    DownloadStatus,
+    NexusAsset,
+    ScanResult,
+    ScanStatus,
+    Verdict,
+    VerifyResult,
+)
 from nexus_control.utils.fs import write_json
 from nexus_control.utils.hashing import hash_file, remote_identity_unchanged
 
 _VERSION = 1
+SCAN_MODES = ("incremental", "full")
+DEFAULT_SCAN_MODE = "incremental"
+
+
+def parse_scan_mode(value: object | None) -> str:
+    """``incremental`` (default) or ``full``."""
+    text = str(value if value is not None else DEFAULT_SCAN_MODE).strip().lower()
+    if not text:
+        return DEFAULT_SCAN_MODE
+    if text not in SCAN_MODES:
+        raise ValueError("scan_mode must be incremental or full")
+    return text
 
 
 def checkpoint_path(local_path: Path) -> Path:
@@ -71,8 +93,14 @@ def checkpoint_is_valid(
     local_path: Path,
     scanners: Sequence[str],
     scanner_versions: Mapping[str, str | None],
+    ignore_ttl: bool = False,
 ) -> bool:
-    """Проверить PASS-checkpoint, remote/local identity и TTL."""
+    """Проверить PASS-checkpoint, remote/local identity и (опционально) TTL.
+
+    ``scan_checkpoint_ttl = 0`` полностью выключает skip.
+    ``ignore_ttl=True`` (scan_mode=incremental) не протухает по возрасту —
+    полный rescan делается отдельным ``scan_mode=full``.
+    """
     ttl = settings.scan_checkpoint_ttl
     if ttl <= 0:
         return False
@@ -95,7 +123,9 @@ def checkpoint_is_valid(
             scanned_at = scanned_at.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - scanned_at).total_seconds()
         local = raw["local"]
-        if age < 0 or age > ttl:
+        if age < 0:
+            return False
+        if not ignore_ttl and age > ttl:
             return False
         if stat.st_size != int(local["size"]):
             return False
@@ -145,6 +175,55 @@ def checkpoint_is_valid(
     except (KeyError, TypeError, ValueError, OSError):
         return False
     return True
+
+
+def load_pass_checkpoint(local_path: Path) -> dict[str, Any] | None:
+    """Прочитать ``*.scan-checkpoint.json`` или ``None``."""
+    path = checkpoint_path(local_path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict) or raw.get("version") != _VERSION:
+        return None
+    return raw
+
+
+def result_from_pass_checkpoint(
+    asset: NexusAsset,
+    local_path: Path,
+    raw: Mapping[str, Any],
+) -> AssetPipelineResult | None:
+    """Синтетический PASS-result для upload/manifest без повторного скана."""
+    verified_data = raw.get("verified")
+    if not isinstance(verified_data, dict) or not verified_data.get("path"):
+        return None
+    verified = Path(str(verified_data["path"]))
+    if not verified.is_file():
+        return None
+    names = raw.get("scanners")
+    scanners = [str(n) for n in names] if isinstance(names, list) and names else ["checkpoint"]
+    return AssetPipelineResult(
+        asset_path=asset.path,
+        kind=AssetKind.FILE,
+        download=DownloadResult(
+            status=DownloadStatus.SKIPPED_EXISTING,
+            local_path=local_path,
+        ),
+        scans={
+            name: ScanResult(
+                status=ScanStatus.SKIPPED,
+                verdict=Verdict.PASS,
+                scanner=name,
+            )
+            for name in scanners
+        },
+        verify=VerifyResult(
+            copied=False,
+            skipped_existing=True,
+            verified_path=verified,
+        ),
+    )
 
 
 def write_pass_checkpoint(

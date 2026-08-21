@@ -96,6 +96,7 @@ def _run_repo(
                 history_rule_id=rule.id,
                 allow_prompt=False,
                 on_progress=on_progress,
+                scan_mode=rule.scan_mode,
             )
         )
 

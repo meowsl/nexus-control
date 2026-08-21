@@ -22,6 +22,7 @@ from nexus_control.services.osv_offline_db import EnsureStatus, ensure_osv_offli
 from nexus_control.services.pipeline import PipelineService
 from nexus_control.services.resource_governor import DiskPressureError, resolve_limits
 from nexus_control.services.resource_pipeline import run_resourced_pipeline
+from nexus_control.services.scan_checkpoint import parse_scan_mode
 from nexus_control.services.scan_common import parse_scanner_names, parse_severity_threshold
 from nexus_control.utils.path_prefixes import format_path_filters
 from nexus_control.services.scan_history import record_scan_run
@@ -77,6 +78,14 @@ def run_verify(args: Namespace) -> int:
         if ensure.status == EnsureStatus.OK and ensure.message:
             console.print(f"[dim]{ensure.message}[/dim]")
 
+        try:
+            scan_mode = parse_scan_mode(getattr(args, "scan_mode", None))
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 2
+        use_checkpoints = scan_mode == "incremental"
+        ignore_checkpoint_ttl = scan_mode == "incremental"
+
         severity_arg = getattr(args, "severity", None)
         if severity_arg:
             try:
@@ -123,9 +132,8 @@ def run_verify(args: Namespace) -> int:
             refresh=bool(args.refresh),
             scanners=enabled_scanners,
             scanner_versions=scanner_versions,
-            # Upload строится из текущего summary; checkpoint-only assets в него
-            # не входят, поэтому для --upload выполняем scan-only pipeline.
-            use_checkpoints=not bool(args.upload),
+            use_checkpoints=use_checkpoints,
+            ignore_checkpoint_ttl=ignore_checkpoint_ttl,
             on_progress=on_select_progress,
         )
         progress.status(
@@ -135,8 +143,77 @@ def run_verify(args: Namespace) -> int:
             f"checkpoint-skip={selection.checkpoint_skipped}",
             final=True,
         )
+        extra_pass = selection.checkpoint_pass_results()
         if not items:
             history_source = getattr(args, "history_source", None) or "cli"
+            history_prefix = format_path_filters(
+                args.path_prefix,
+                getattr(args, "exclude_prefix", None),
+            )
+            if args.upload and extra_pass:
+                uploader = VerifiedUploader(ctx.client)
+                summary = PipelineSummary(
+                    repository=repo_name,
+                    scanners=list(enabled_scanners),
+                    scanner_versions=dict(scanner_versions),
+                )
+                summary.results.extend(extra_pass)
+                console.print(
+                    f"Uploading [bold]{repo_name}[/bold]: "
+                    f"checkpoint-skip={selection.checkpoint_skipped} "
+                    f"(scan_mode={scan_mode}, no rescan)"
+                )
+                upload_summary = uploader.upload(
+                    summary,
+                    target_repository=args.target,
+                    on_progress=progress,
+                )
+                pipeline.finalize_summary(
+                    summary,
+                    verify=True,
+                    history_source=history_source,
+                    history_rule_id=getattr(args, "history_rule_id", None),
+                    history_path_prefix=history_prefix,
+                    history_workers=args.workers,
+                    history_checkpoint_skipped=selection.checkpoint_skipped,
+                    skip_defectdojo=True,
+                )
+                upload_info = {
+                    "target": upload_summary.target_repository,
+                    "uploaded": upload_summary.uploaded,
+                    "skipped": upload_summary.skipped,
+                    "failed": upload_summary.failed,
+                    "batches": 1,
+                }
+                console.print(
+                    f"Upload → {upload_info['target']}: "
+                    f"uploaded={upload_info['uploaded']} "
+                    f"skipped={upload_info['skipped']} "
+                    f"failed={upload_info['failed']}"
+                )
+                payload = {
+                    "repository": repo_name,
+                    "scan_mode": scan_mode,
+                    "listed": listed_total,
+                    "selected": 0,
+                    "selection": {
+                        "download_needed": selection.download_needed,
+                        "scan_only": selection.scan_only,
+                        "checkpoint_skipped": selection.checkpoint_skipped,
+                    },
+                    "passed": summary.total_passed,
+                    "upload": upload_info,
+                }
+                if args.json:
+                    json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+                    sys.stdout.write("\n")
+                else:
+                    console.print(
+                        "[green]All matching assets reused from checkpoints "
+                        f"({selection.checkpoint_skipped} skipped).[/green]"
+                    )
+                return 1 if upload_summary.failed else 0
+
             empty = PipelineSummary(
                 repository=repo_name,
                 scanners=list(enabled_scanners),
@@ -148,10 +225,7 @@ def run_verify(args: Namespace) -> int:
                 empty,
                 source=history_source,  # type: ignore[arg-type]
                 rule_id=getattr(args, "history_rule_id", None),
-                path_prefix=format_path_filters(
-                    args.path_prefix,
-                    getattr(args, "exclude_prefix", None),
-                ),
+                path_prefix=history_prefix,
                 workers=args.workers,
                 checkpoint_skipped=selection.checkpoint_skipped,
             )
@@ -159,6 +233,7 @@ def run_verify(args: Namespace) -> int:
                 json.dump(
                     {
                         "repository": repo_name,
+                        "scan_mode": scan_mode,
                         "listed": listed_total,
                         "selected": 0,
                         "selection": {
@@ -200,6 +275,7 @@ def run_verify(args: Namespace) -> int:
             f"download={selection.download_needed} "
             f"scan-only={selection.scan_only} "
             f"checkpoint-skip={selection.checkpoint_skipped}, "
+            f"scan_mode={scan_mode}, "
             f"workers={limits.pipeline_workers} "
             f"scanners_procs={limits.max_scanner_procs} "
             f"severity={run_settings.severity}"
@@ -240,6 +316,7 @@ def run_verify(args: Namespace) -> int:
                     getattr(args, "exclude_prefix", None),
                 ),
                 history_checkpoint_skipped=selection.checkpoint_skipped,
+                extra_pass_results=extra_pass,
             )
         except DiskPressureError as exc:
             console.print(f"[red]Disk pressure:[/red] {exc}")
@@ -271,6 +348,7 @@ def run_verify(args: Namespace) -> int:
             "repository": summary.repository,
             "scanners": summary.scanners,
             "severity": run_settings.severity,
+            "scan_mode": scan_mode,
             "started_at": summary.started_at.isoformat(),
             "finished_at": (
                 summary.finished_at or datetime.now(timezone.utc)

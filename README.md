@@ -74,6 +74,8 @@ nexus-control-cli repos
 
 # Verify + upload в <repo>-verified
 nexus-control-cli verify --repo maven-hosted --upload
+# Полный rescan без PASS-checkpoints (например, раз в неделю):
+nexus-control-cli verify --repo maven-hosted --upload --scan-mode full
 
 # Только upload локального *-verified
 # (только пути из последнего verified-manifest.json / PASS; stale на диске пропускаются)
@@ -163,11 +165,17 @@ CPUQuota=200%
 ```
 
 После полного PASS + verified copy рядом с локальным файлом сохраняется
-`*.scan-checkpoint.json`. Пока checksum, локальный файл, набор/версия/настройки
-сканеров не изменились и checkpoint моложе `scan_checkpoint_ttl` (по умолчанию
-сутки), повторный CLI verify пропускает этот ассет. После TTL он сканируется
-повторно для учёта обновлений vulnerability DB; `scan_checkpoint_ttl = 0`
-полностью отключает такой skip.
+`*.scan-checkpoint.json`. CLI `verify` / scheduler `verify` и **`verify_upload`**
+в режиме `scan_mode=incremental` (по умолчанию) пропускают неизменённый PASS:
+checksum, локальный файл, verified-копия, набор/версия/настройки сканеров и
+severity совпадают. TTL возраста (`scan_checkpoint_ttl`) в incremental **не**
+сжигает checkpoint — ежедневный `verify_upload` не пересканирует весь PASS.
+FAIL/ERROR checkpoint не получают и сканируются каждый прогон. `scan_mode=full`
+игнорирует checkpoints и пересканирует всё (отдельное правило, например на
+субботу). `scan_checkpoint_ttl = 0` полностью выключает skip.
+
+Пропущенный PASS всё равно попадает в upload и `verified-manifest.json`, иначе
+`--upload` не заливал бы уже проверенные артефакты.
 
 Каждый verify (TUI / CLI / scheduler) также пишет компактный snapshot в
 `~/.cache/nexus-control/scan-history/` (index + `runs/*.json`). Хранится
@@ -211,6 +219,8 @@ cron = "0 3 * * 1-5"
 description = "Основные maven/npm"
 repos = ["maven-hosted", "npm-hosted"]
 action = "verify_upload"
+# scan_mode = "incremental"  # default: reuse unchanged PASS, still upload them
+# scan_mode = "full"         # ignore checkpoints; rescan everything
 # targets = { "maven-hosted" = "maven-hosted-verified", "npm-hosted" = "npm-clean" }
 
 [[rules]]

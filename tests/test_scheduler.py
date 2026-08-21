@@ -491,7 +491,53 @@ def test_run_rule_calls_verify_per_repo() -> None:
     assert first.upload is True
     assert first.scanners == "grype"
     assert first.target == "a-clean"
+    assert first.scan_mode == "incremental"
     assert verify.call_args_list[1].args[0].target == "b-clean"
+
+
+def test_run_rule_passes_full_scan_mode() -> None:
+    rule = ScheduleRule(
+        id="weekly",
+        cron="0 0 * * 6",
+        repos=["a"],
+        action="verify_upload",
+        scan_mode="full",
+    )
+    with patch("nexus_control.scheduler.jobs.run_verify", return_value=0) as verify:
+        assert run_rule(rule) == 0
+    assert verify.call_args.args[0].scan_mode == "full"
+    assert verify.call_args.args[0].upload is True
+
+
+def test_parse_scan_mode_full() -> None:
+    parsed = parse_schedule_dict(
+        {
+            "rules": [
+                {
+                    "id": "weekly",
+                    "cron": "0 0 * * 6",
+                    "repos": ["maven-hosted"],
+                    "action": "verify_upload",
+                    "scan_mode": "full",
+                }
+            ]
+        }
+    )
+    assert parsed.rules[0].scan_mode == "full"
+
+    with pytest.raises(ScheduleStoreError, match="scan_mode"):
+        parse_schedule_dict(
+            {
+                "rules": [
+                    {
+                        "id": "bad",
+                        "cron": "0 0 * * *",
+                        "repos": ["maven-hosted"],
+                        "scan_mode": "weekly",
+                    }
+                ]
+            }
+        )
 
 
 def test_target_for_defaults_and_rejects_shared_comma_target() -> None:

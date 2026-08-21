@@ -120,6 +120,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_verify.add_argument(
+        "--scan-mode",
+        dest="scan_mode",
+        default="incremental",
+        choices=["incremental", "full"],
+        help=(
+            "incremental (default): skip unchanged PASS via checkpoints, "
+            "including with --upload / verify_upload. "
+            "full: ignore checkpoints and rescan everything"
+        ),
+    )
+    p_verify.add_argument(
         "--refresh",
         action="store_true",
         help="Ignore asset-list cache; list from Nexus",

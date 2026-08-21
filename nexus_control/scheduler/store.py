@@ -17,6 +17,7 @@ from nexus_control.scheduler.cronutil import (
 from nexus_control.scheduler.models import (
     VALID_ACTIONS,
     VALID_OVERLAP,
+    VALID_SCAN_MODES,
     ScheduleConfig,
     ScheduleRule,
 )
@@ -168,6 +169,20 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         if scan_limit < 1:
             raise ScheduleStoreError(f"rules[{index}].scan_limit must be >= 1")
 
+    scan_mode_raw = item.get("scan_mode")
+    try:
+        from nexus_control.services.scan_checkpoint import parse_scan_mode
+
+        scan_mode = parse_scan_mode(scan_mode_raw)
+    except ValueError:
+        raise ScheduleStoreError(
+            f"rules[{index}] ({rule_id}): scan_mode must be incremental or full"
+        ) from None
+    if scan_mode not in VALID_SCAN_MODES:
+        raise ScheduleStoreError(
+            f"rules[{index}] ({rule_id}): scan_mode must be incremental or full"
+        )
+
     target = item.get("target")
     targets_raw = item.get("targets")
     scanners = item.get("scanners")
@@ -244,6 +259,7 @@ def _parse_rule(item: dict[str, Any], *, index: int) -> ScheduleRule:
         limit=limit,
         scan_limit=scan_limit,
         refresh=bool(item.get("refresh", False)),
+        scan_mode=scan_mode,  # type: ignore[arg-type]
     )
 
 
@@ -330,6 +346,10 @@ def _validate_rule(rule: ScheduleRule) -> None:
         raise ScheduleStoreError(f"rule {rule.id!r}: limit must be >= 1")
     if rule.scan_limit is not None and rule.scan_limit < 1:
         raise ScheduleStoreError(f"rule {rule.id!r}: scan_limit must be >= 1")
+    if rule.scan_mode not in VALID_SCAN_MODES:
+        raise ScheduleStoreError(
+            f"rule {rule.id!r}: scan_mode must be incremental or full"
+        )
     if rule.target and "," in rule.target:
         raise ScheduleStoreError(
             f"rule {rule.id!r}: 'target' must be a single name; use 'targets'"
@@ -378,4 +398,6 @@ def _rule_to_dict(rule: ScheduleRule) -> dict[str, Any]:
         data["limit"] = rule.limit
     if rule.scan_limit is not None:
         data["scan_limit"] = rule.scan_limit
+    if rule.scan_mode != "incremental":
+        data["scan_mode"] = rule.scan_mode
     return data

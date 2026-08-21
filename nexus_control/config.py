@@ -107,8 +107,8 @@ class Settings(BaseSettings):
     max_scanner_procs: int = Field(default=0, ge=0)
     # Stop new downloads if the data volume is this full (scan local only).
     disk_critical_watermark: float = Field(default=0.95, ge=0.50, le=0.99)
-    # PASS checkpoint для неизменённых локальных ассетов. После TTL скан
-    # выполняется заново, чтобы учитывать обновления vulnerability DB.
+    # PASS checkpoint. 0 = never skip. Incremental mode ignores age TTL;
+    # use scan_mode=full (CLI/schedule) to rescan everything.
     scan_checkpoint_ttl: int = Field(default=86400, ge=0)
     # Сколько последних verify-прогонов хранить в истории (TUI h / CLI history).
     # 0 = не писать историю.

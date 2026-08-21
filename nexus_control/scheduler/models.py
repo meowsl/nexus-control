@@ -9,9 +9,11 @@ from nexus_control.scheduler.cronutil import LOCAL_TIMEZONE, effective_timezone
 
 OverlapPolicy = Literal["skip", "queue", "overlap"]
 RuleAction = Literal["verify", "upload", "verify_upload"]
+ScanMode = Literal["incremental", "full"]
 
 VALID_OVERLAP: frozenset[str] = frozenset({"skip", "queue", "overlap"})
 VALID_ACTIONS: frozenset[str] = frozenset({"verify", "upload", "verify_upload"})
+VALID_SCAN_MODES: frozenset[str] = frozenset({"incremental", "full"})
 
 
 @dataclass(slots=True)
@@ -38,6 +40,9 @@ class ScheduleRule:
     limit: int | None = None
     scan_limit: int | None = None
     refresh: bool = False
+    # incremental: reuse unchanged PASS checkpoints (also with verify_upload).
+    # full: ignore checkpoints and rescan everything (e.g. weekly).
+    scan_mode: ScanMode = "incremental"
 
     @property
     def path_prefix(self) -> str | None:
