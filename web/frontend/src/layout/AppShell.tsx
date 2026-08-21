@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState, type ReactNode, type SVGProps } from "react";
 import BrandMark from "../BrandMark";
+import ThemeToggle from "../ThemeToggle";
 import { api } from "../api";
 import type { Status } from "../types";
 
@@ -149,6 +150,10 @@ export default function AppShell() {
             </div>
           ))}
         </nav>
+        <div className="sidebar-foot">
+          <span className="theme-caption">Тема</span>
+          <ThemeToggle />
+        </div>
       </aside>
       <div className="main">
         <header className="topbar">

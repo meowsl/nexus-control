@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import BrandMark from "../BrandMark";
+import ThemeToggle from "../ThemeToggle";
 import { api } from "../api";
 
 export default function LoginPage() {
@@ -39,6 +40,9 @@ export default function LoginPage() {
         <p className="login-foot">Управление репозиториями</p>
       </aside>
       <div className="login-form-col">
+        <div className="login-theme">
+          <ThemeToggle />
+        </div>
         <form className="login-panel" onSubmit={onSubmit}>
           <h1>Вход</h1>
           <p className="lede">Учётная запись Nexus Repository.</p>
