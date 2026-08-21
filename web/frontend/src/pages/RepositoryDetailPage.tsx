@@ -51,14 +51,6 @@ export default function RepositoryDetailPage() {
             <span className={`type type-${repo.type}`}>{repo.type}</span> {repo.format}
             {repo.url ? ` · ${repo.url}` : ""}
           </p>
-          <div className="pill-row">
-            {repo.labels.map((l) => (
-              <span key={l.id} className="pill">
-                <i style={{ background: l.color }} />
-                {l.name}
-              </span>
-            ))}
-          </div>
         </div>
       </div>
       <div className="tabs">
@@ -102,6 +94,21 @@ function LabelsTab({ repo, onSaved }: { repo: Repo; onSaved: () => void }) {
     setIds(repo.labels.map((l) => l.id));
   }, [repo]);
 
+  const assigned = ids
+    .map((id) => all.find((l) => l.id === id))
+    .filter((l): l is Label => Boolean(l));
+  const available = all.filter((l) => !ids.includes(l.id));
+
+  function add(id: string) {
+    setIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setMsg("");
+  }
+
+  function remove(id: string) {
+    setIds((prev) => prev.filter((x) => x !== id));
+    setMsg("");
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
     setMsg("");
@@ -115,37 +122,63 @@ function LabelsTab({ repo, onSaved }: { repo: Repo; onSaved: () => void }) {
 
   return (
     <form onSubmit={save} className="panel">
-      <p className="lede">Метки хранятся здесь, не в Nexus.</p>
+      <p className="lede">Метки хранятся здесь, не в Nexus. Нажмите метку, чтобы перенести.</p>
       {all.length === 0 ? (
         <p className="empty">
           Сначала создайте метки на странице <Link to="/labels">Метки</Link>.
         </p>
       ) : (
-        <div className="check-grid">
-          {all.map((l) => (
-            <label key={l.id} className="check">
-              <input
-                type="checkbox"
-                checked={ids.includes(l.id)}
-                onChange={(e) =>
-                  setIds((prev) =>
-                    e.target.checked ? [...prev, l.id] : prev.filter((x) => x !== l.id),
-                  )
-                }
-              />
-              <span className="pill">
-                <i style={{ background: l.color }} />
-                {l.name}
-              </span>
-              <span className="muted">{l.description}</span>
-            </label>
-          ))}
+        <div className="buckets">
+          <div className="bucket">
+            <h3>Доступные</h3>
+            <div className="bucket-list">
+              {available.length === 0 ? (
+                <p className="bucket-empty">Все метки уже назначены</p>
+              ) : (
+                available.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className="pill bucket-pill"
+                    title={l.description || `Добавить «${l.name}»`}
+                    onClick={() => add(l.id)}
+                  >
+                    <i style={{ background: l.color }} />
+                    {l.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="bucket">
+            <h3>Назначенные</h3>
+            <div className="bucket-list">
+              {assigned.length === 0 ? (
+                <p className="bucket-empty">Пока нет</p>
+              ) : (
+                assigned.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className="pill bucket-pill"
+                    title={l.description || `Убрать «${l.name}»`}
+                    onClick={() => remove(l.id)}
+                  >
+                    <i style={{ background: l.color }} />
+                    {l.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
-      <button className="btn primary" type="submit">
-        Сохранить
-      </button>
-      {msg ? <span className="ok">{msg}</span> : null}
+      <div className="form-actions">
+        <button className="btn primary" type="submit">
+          Сохранить
+        </button>
+        {msg ? <span className="ok">{msg}</span> : null}
+      </div>
     </form>
   );
 }
