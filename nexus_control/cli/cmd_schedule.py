@@ -209,7 +209,9 @@ def _menu_list(path: Path) -> None:
             "yes" if rule.enabled else "no",
             rule.cron,
             ", ".join(rule.repos),
-            f"{rule.action}" + ("+upload" if rule.upload and rule.action == "verify" else ""),
+            f"{rule.action}"
+            + ("+upload" if rule.upload and rule.action == "verify" else "")
+            + ("/full" if rule.scan_mode == "full" else ""),
             rule.description or "",
         )
     console.print(table)
@@ -611,6 +613,26 @@ def _prompt_rule(
     ).strip()
     scan_limit = int(scan_limit_s) if scan_limit_s else None
 
+    from nexus_control.services.scan_checkpoint import parse_scan_mode
+
+    scan_mode = "incremental"
+    if action != "upload":
+        while True:
+            scan_mode_raw = Prompt.ask(
+                "scan_mode (incremental=reuse unchanged PASS checkpoints; "
+                "full=rescan everything, e.g. weekly)",
+                default=(
+                    existing.scan_mode
+                    if existing
+                    else "incremental"
+                ),
+            ).strip()
+            try:
+                scan_mode = parse_scan_mode(scan_mode_raw)
+                break
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+
     wants_upload = action in {"upload", "verify_upload"} or upload
     targets: dict[str, str] = {}
     legacy_target: str | None = None
@@ -644,6 +666,7 @@ def _prompt_rule(
         limit=limit,
         scan_limit=scan_limit,
         refresh=refresh,
+        scan_mode=scan_mode,  # type: ignore[arg-type]
     )
 
 

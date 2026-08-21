@@ -17,8 +17,9 @@ cron = "0 3 * * 1-5"
 description = "Основные maven/npm"
 repos = ["maven-hosted", "npm-hosted"]
 action = "verify_upload"
-# Optional per-repo upload targets (default = <repo>-verified):
-# targets = { maven-hosted = "maven-hosted-verified", npm-hosted = "npm-clean" }
+# incremental (default): reuse unchanged PASS checkpoints, still upload them.
+# full: ignore checkpoints and rescan everything (e.g. a separate Saturday rule).
+# scan_mode = "incremental"
 
 [[rules]]
 id = "weekend-raw"

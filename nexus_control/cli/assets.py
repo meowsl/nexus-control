@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from nexus_control.config import Settings
-from nexus_control.models import NexusAsset, Repository
+from nexus_control.models import AssetPipelineResult, NexusAsset, Repository
 from nexus_control.nexus.asset_cache import (
     iter_cached_assets,
     load_cached_assets,
@@ -15,7 +16,11 @@ from nexus_control.nexus.asset_cache import (
 )
 from nexus_control.nexus.client import NexusClient
 from nexus_control.services.downloader import Downloader
-from nexus_control.services.scan_checkpoint import checkpoint_is_valid
+from nexus_control.services.scan_checkpoint import (
+    checkpoint_is_valid,
+    load_pass_checkpoint,
+    result_from_pass_checkpoint,
+)
 from nexus_control.nexus.uploads import (
     is_scan_package_asset,
     looks_like_nuget_metadata_path,
@@ -33,10 +38,29 @@ SelectionProgressCallback = Callable[[int, "AssetSelectionStats", str], None]
 
 
 @dataclass(slots=True)
+class CheckpointSkip:
+    """PASS-ассет, пропущенный по checkpoint (для upload/manifest)."""
+
+    asset: NexusAsset
+    local_path: Path
+    raw: dict
+
+
+@dataclass(slots=True)
 class AssetSelectionStats:
     download_needed: int = 0
     scan_only: int = 0
     checkpoint_skipped: int = 0
+    skipped_passes: list[CheckpointSkip] = field(default_factory=list)
+
+    def checkpoint_pass_results(self) -> list[AssetPipelineResult]:
+        """Синтетические PASS-results для upload/manifest."""
+        out: list[AssetPipelineResult] = []
+        for skip in self.skipped_passes:
+            result = result_from_pass_checkpoint(skip.asset, skip.local_path, skip.raw)
+            if result is not None:
+                out.append(result)
+        return out
 
 
 def require_non_docker_repo(repo: Repository) -> None:
@@ -128,6 +152,7 @@ def select_assets_for_cli(
     scanners: Sequence[str] | None = None,
     scanner_versions: Mapping[str, str | None] | None = None,
     use_checkpoints: bool = True,
+    ignore_checkpoint_ttl: bool = False,
     on_progress: SelectionProgressCallback | None = None,
 ) -> tuple[list[NexusAsset], int, AssetSelectionStats]:
     """Потоково выбрать pipeline-items и вернуть ``(items, total_listed)``.
@@ -168,6 +193,7 @@ def select_assets_for_cli(
                 scanners=scanners,
                 scanner_versions=scanner_versions,
                 use_checkpoints=use_checkpoints,
+                ignore_checkpoint_ttl=ignore_checkpoint_ttl,
                 on_progress=on_progress,
                 progress_source="cache",
             )
@@ -189,6 +215,7 @@ def select_assets_for_cli(
         scanners=scanners,
         scanner_versions=scanner_versions,
         use_checkpoints=use_checkpoints,
+        ignore_checkpoint_ttl=ignore_checkpoint_ttl,
         on_progress=on_progress,
         progress_source="nexus",
     )
@@ -263,6 +290,7 @@ def _select_assets(
     scanners: Sequence[str] | None = None,
     scanner_versions: Mapping[str, str | None] | None = None,
     use_checkpoints: bool = True,
+    ignore_checkpoint_ttl: bool = False,
     on_progress: SelectionProgressCallback | None = None,
     progress_source: str = "nexus",
 ) -> tuple[list[NexusAsset], int, AssetSelectionStats]:
@@ -276,6 +304,7 @@ def _select_assets(
         scanners=scanners,
         scanner_versions=scanner_versions,
         use_checkpoints=use_checkpoints,
+        ignore_checkpoint_ttl=ignore_checkpoint_ttl,
         on_progress=on_progress,
         progress_source=progress_source,
     )
@@ -299,6 +328,7 @@ class _AssetSelector:
         scanners: Sequence[str] | None = None,
         scanner_versions: Mapping[str, str | None] | None = None,
         use_checkpoints: bool = True,
+        ignore_checkpoint_ttl: bool = False,
         on_progress: SelectionProgressCallback | None = None,
         progress_source: str = "nexus",
         progress_every: int = 50,
@@ -321,6 +351,7 @@ class _AssetSelector:
         self._scanners = list(scanners or ())
         self._scanner_versions = dict(scanner_versions or {})
         self._use_checkpoints = use_checkpoints
+        self._ignore_checkpoint_ttl = ignore_checkpoint_ttl
         self._on_progress = on_progress
         self._progress_source = progress_source
         self._progress_every = max(1, progress_every)
@@ -387,7 +418,17 @@ class _AssetSelector:
                     local_path=inspection.local_path,
                     scanners=ck_scanners,
                     scanner_versions=self._scanner_versions,
+                    ignore_ttl=self._ignore_checkpoint_ttl,
                 ):
+                    raw = load_pass_checkpoint(inspection.local_path)
+                    if raw is not None:
+                        self.stats.skipped_passes.append(
+                            CheckpointSkip(
+                                asset=asset,
+                                local_path=inspection.local_path,
+                                raw=raw,
+                            )
+                        )
                     self.stats.checkpoint_skipped += 1
                     self.emit_progress()
                     return

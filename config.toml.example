@@ -47,9 +47,9 @@ locale = "ru"
 # max_scanner_procs = 0
 # Stop new downloads if the data volume is this full (default 95%).
 # disk_critical_watermark = 0.95
-# Неизменённый PASS-ассет повторно не сканируется в пределах TTL.
-# После TTL checkpoint протухает, чтобы учитывать обновления vulnerability DB.
-# 0 = всегда сканировать. По умолчанию 86400 (сутки).
+# PASS checkpoint: incremental verify/verify_upload skips unchanged PASS
+# (identity, scanners, severity). scan_checkpoint_ttl=0 disables skip.
+# Age TTL is ignored in incremental; use scan_mode=full for a full rescan.
 # scan_checkpoint_ttl = 86400
 # Сколько последних verify-прогонов хранить (TUI h / CLI history). 0 = выкл.
 # scan_history_keep = 50

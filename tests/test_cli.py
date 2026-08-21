@@ -70,6 +70,7 @@ def test_parser_verify_flags() -> None:
     assert args._handler == "verify"
     assert args.repo == "maven-hosted"
     assert args.upload is True
+    assert args.scan_mode == "incremental"
     assert args.target == "maven-hosted-verified"
     assert args.path_prefix == ["com/example"]
     multi = parser.parse_args(

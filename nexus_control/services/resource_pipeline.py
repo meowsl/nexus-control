@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 
 from nexus_control.models import (
+    AssetPipelineResult,
     DockerTag,
     NexusAsset,
     PipelineSummary,
@@ -42,6 +43,8 @@ def run_resourced_pipeline(
     history_rule_id: str | None = None,
     history_path_prefix: str | None = None,
     history_checkpoint_skipped: int = 0,
+    extra_pass_results: Sequence[AssetPipelineResult] | None = None,
+    skip_defectdojo: bool = False,
 ) -> tuple[PipelineSummary, list[UploadSummary]]:
     """Verify с auto-limits и scanner semaphore. Без archive/purge downloads.
 
@@ -91,6 +94,9 @@ def run_resourced_pipeline(
         history_source=None,
     )
 
+    if extra_pass_results:
+        summary.results.extend(extra_pass_results)
+
     upload_summaries: list[UploadSummary] = []
     if do_upload is not None and summary.results:
         if on_status is not None:
@@ -108,6 +114,7 @@ def run_resourced_pipeline(
         history_path_prefix=history_path_prefix,
         history_workers=limits.pipeline_workers if (download or scan or verify) else None,
         history_checkpoint_skipped=history_checkpoint_skipped,
+        skip_defectdojo=skip_defectdojo,
     )
     if summary.finished_at is None:
         summary.finished_at = datetime.now(timezone.utc)
