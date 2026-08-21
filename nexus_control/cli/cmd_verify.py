@@ -51,7 +51,10 @@ def run_verify(args: Namespace) -> int:
         console.print("[red]--max-scanner-procs must be >= 1[/red]")
         return 2
 
-    with open_cli_client(allow_prompt=getattr(args, "allow_prompt", None)) as ctx:
+    with open_cli_client(
+        settings=getattr(args, "settings", None),
+        allow_prompt=getattr(args, "allow_prompt", None),
+    ) as ctx:
         repo = ctx.client.get_repository(repo_name)
         if repo is None:
             console.print(f"[red]Repository not found:[/red] {repo_name}")
