@@ -373,6 +373,9 @@ def push_pipeline_findings(
         (cfg.defectdojo_product_type_name or "Nexus").strip() or "Nexus"
     )
     test_title = f"nexus-control {summary.repository}"
+    # Incremental omits checkpoint-skipped FAIL assets. Closing missing
+    # findings would mark those CVEs mitigated until a full scan.
+    close_old = (summary.scan_mode or "").strip().lower() == "full"
 
     client = DefectDojoClient(
         base_url=url,
@@ -387,6 +390,7 @@ def push_pipeline_findings(
             engagement_name=engagement,
             product_type_name=product_type,
             test_title=test_title,
+            close_old_findings=close_old,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("DefectDojo push failed: %s", exc)
@@ -396,12 +400,14 @@ def push_pipeline_findings(
     engagement_id = _maybe_int(resp.get("engagement"))
     logger.info(
         "DefectDojo: pushed %d finding(s) repo=%s product=%s engagement=%s "
-        "test_id=%s",
+        "test_id=%s scan_mode=%s close_old_findings=%s",
         len(findings),
         summary.repository,
         product,
         engagement,
         test_id,
+        summary.scan_mode,
+        close_old,
     )
     return DefectDojoPushResult(
         findings=len(findings),

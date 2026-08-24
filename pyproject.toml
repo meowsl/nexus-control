@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-control"
-version = "0.5.4"
+version = "0.5.5"
 description = "Textual TUI + CLI for Nexus Sonatype CE: browse, download, Grype/Trivy/OSV scan, verify and upload"
 readme = "README.md"
 requires-python = ">=3.13"

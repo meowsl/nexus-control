@@ -102,13 +102,18 @@ class PipelineService:
         history_rule_id: str | None = None,
         history_path_prefix: str | None = None,
         history_checkpoint_skipped: int = 0,
+        scan_mode: str = "incremental",
     ) -> PipelineSummary:
         enabled = (
             parse_scanner_names(",".join(scanners))
             if scanners is not None
             else list(self.settings.scanners_list)
         )
-        summary = PipelineSummary(repository=repository, scanners=list(enabled))
+        summary = PipelineSummary(
+            repository=repository,
+            scanners=list(enabled),
+            scan_mode=scan_mode,
+        )
         total = max(len(items), 1)
         limits = resolve_limits(
             self.settings,
@@ -388,6 +393,7 @@ class PipelineService:
                             "DefectDojo push incomplete: %s", dd_result.error
                         )
                     defectdojo_engagement_id = dd_result.engagement_id
+                    summary.defectdojo_engagement_id = defectdojo_engagement_id
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("DefectDojo push failed: %s", exc)
 

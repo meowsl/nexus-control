@@ -45,6 +45,7 @@ def run_resourced_pipeline(
     history_checkpoint_skipped: int = 0,
     extra_pass_results: Sequence[AssetPipelineResult] | None = None,
     skip_defectdojo: bool = False,
+    scan_mode: str = "incremental",
 ) -> tuple[PipelineSummary, list[UploadSummary]]:
     """Verify с auto-limits и scanner semaphore. Без archive/purge downloads.
 
@@ -92,13 +93,14 @@ def run_resourced_pipeline(
         on_progress=on_progress,
         should_cancel=should_cancel,
         history_source=None,
+        scan_mode=scan_mode,
     )
 
     if extra_pass_results:
         summary.results.extend(extra_pass_results)
 
     upload_summaries: list[UploadSummary] = []
-    if do_upload is not None and summary.results:
+    if do_upload is not None and summary.results and not summary.cancelled:
         if on_status is not None:
             on_status("Uploading verified assets…")
         logger.info("Uploading verified assets…")

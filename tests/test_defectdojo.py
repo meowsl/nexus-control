@@ -225,12 +225,52 @@ def test_push_calls_reimport(tmp_path: Path) -> None:
         result = push_pipeline_findings(settings, summary)
     assert result.findings == 1
     assert result.test_id == 42
+    assert result.engagement_id == 7
     assert result.error is None
     mock_reimport.assert_called_once()
     args, kwargs = mock_reimport.call_args
     assert kwargs["product_name"] == "nexus-control"
     assert kwargs["engagement_name"] == "maven-hosted"
+    assert kwargs["close_old_findings"] is False
     assert args[0]["findings"][0]["cve"] == "CVE-2020-1"
+
+
+def test_full_scan_closes_old_findings(tmp_path: Path) -> None:
+    settings = Settings(
+        nexus_url="http://nexus:8081",
+        nexus_cache_dir=tmp_path,
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "rp",
+        verified_root=tmp_path / "vf",
+        archive_root=tmp_path / "ar",
+        log_file=tmp_path / "log.log",
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+        defectdojo_api_key="tok",
+    )
+    summary = PipelineSummary(
+        repository="maven-hosted",
+        scan_mode="full",
+        results=[
+            _fail_result(
+                "com/acme/lib/1.0/lib-1.0.jar",
+                [
+                    Vulnerability(
+                        id="CVE-2020-1",
+                        severity=Severity.CRITICAL,
+                        package_name="lib",
+                        package_version="1.0",
+                    )
+                ],
+            )
+        ],
+    )
+    with patch(
+        "nexus_control.integrations.defectdojo.DefectDojoClient.reimport_generic_findings",
+        return_value={"test": 1, "engagement": 2},
+    ) as mock_reimport:
+        push_pipeline_findings(settings, summary)
+    assert mock_reimport.call_args.kwargs["close_old_findings"] is True
 
 
 def test_wizard_defectdojo_yes(
