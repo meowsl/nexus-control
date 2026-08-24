@@ -271,6 +271,9 @@ class PipelineSummary:
     scanners: list[str] = field(default_factory=list)
     scanner_versions: dict[str, str | None] = field(default_factory=dict)
     cancelled: bool = False
+    defectdojo_engagement_id: int | None = None
+    # incremental: checkpoint-skip; full: rescan everything (weekend).
+    scan_mode: str = "incremental"
 
     @property
     def grype_version(self) -> str | None:

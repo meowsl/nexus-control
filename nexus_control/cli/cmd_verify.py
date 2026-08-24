@@ -156,6 +156,7 @@ def run_verify(args: Namespace) -> int:
                     repository=repo_name,
                     scanners=list(enabled_scanners),
                     scanner_versions=dict(scanner_versions),
+                    scan_mode=scan_mode,
                 )
                 summary.results.extend(extra_pass)
                 console.print(
@@ -219,6 +220,7 @@ def run_verify(args: Namespace) -> int:
                 scanners=list(enabled_scanners),
                 scanner_versions=dict(scanner_versions),
                 finished_at=datetime.now(timezone.utc),
+                scan_mode=scan_mode,
             )
             record_scan_run(
                 run_settings,
@@ -317,6 +319,7 @@ def run_verify(args: Namespace) -> int:
                 ),
                 history_checkpoint_skipped=selection.checkpoint_skipped,
                 extra_pass_results=extra_pass,
+                scan_mode=scan_mode,
             )
         except DiskPressureError as exc:
             console.print(f"[red]Disk pressure:[/red] {exc}")
