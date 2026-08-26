@@ -648,11 +648,12 @@ class ReportModal(ModalScreen[None]):
         log.write(
             "[green]"
             + _(
-                "Upload finished ({created}): uploaded={uploaded} "
-                "skipped={skipped} failed={failed}",
+                "Upload finished ({created}): uploaded={uploaded} skipped={skipped} "
+                "deleted={deleted} failed={failed}",
                 created=created,
                 uploaded=summary.uploaded,
                 skipped=summary.skipped,
+                deleted=summary.deleted,
                 failed=summary.failed,
             )
             + f"[/green] → [cyan]{summary.target_repository}[/cyan]"
@@ -662,6 +663,13 @@ class ReportModal(ModalScreen[None]):
                 log.write(
                     f"  [yellow]SKIP[/yellow] {truncate(item.asset_path, 50)}: "
                     f"{item.error or 'skipped'}"
+                )
+            elif item.deleted and item.ok:
+                log.write(f"  [red]REVOKED[/red] {truncate(item.asset_path, 70)}")
+            elif item.deleted:
+                log.write(
+                    f"  [red]REVOKE FAIL[/red] {truncate(item.asset_path, 50)}: "
+                    f"{item.error or 'unknown error'}"
                 )
             elif item.ok:
                 log.write(f"  [green]OK[/green] {truncate(item.asset_path, 70)}")

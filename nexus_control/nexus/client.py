@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Iterator
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 from tenacity import (
@@ -327,6 +327,28 @@ class NexusClient:
             fmt=fmt,
             asset_path=asset_path,
             local_path=local_path,
+        )
+
+    def delete_asset(self, asset_id: str) -> bool:
+        """Удалить ассет по id. ``True``, если удалён или уже отсутствует (404)."""
+        asset_id = str(asset_id).strip()
+        if not asset_id:
+            raise NexusAPIError("Cannot delete asset: empty id")
+        encoded = quote(asset_id, safe="")
+        try:
+            response = self._request(
+                "DELETE",
+                f"/service/rest/v1/assets/{encoded}",
+            )
+        except NexusNotFoundError:
+            logger.info("Asset %s already absent in Nexus", asset_id)
+            return True
+        if response.status_code in {200, 202, 204}:
+            return True
+        raise NexusAPIError(
+            f"Failed to delete asset {asset_id!r} "
+            f"(HTTP {response.status_code}): {_safe_body(response)}",
+            status_code=response.status_code,
         )
 
     def iter_asset_pages(self, repository: str) -> Iterator[list[NexusAsset]]:

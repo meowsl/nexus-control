@@ -141,6 +141,12 @@ def test_write_scanner_reports_aggregated(tmp_path: Path) -> None:
     assert trivy["totals"]["fail"] == 1
     assert trivy["assets"][0]["report"] == {"Results": []}
 
+    manifest = json.loads(
+        Verifier(settings).write_manifest(summary).read_text(encoding="utf-8")
+    )
+    assert [a["asset_path"] for a in manifest["passed_assets"]] == ["pkg/ok-1.0.jar"]
+    assert [a["asset_path"] for a in manifest["failed_assets"]] == ["pkg/vuln-1.0.jar"]
+
 
 def test_write_scanner_reports_loads_raw_from_disk(tmp_path: Path) -> None:
     settings = _settings(tmp_path)

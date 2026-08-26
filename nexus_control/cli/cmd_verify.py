@@ -183,6 +183,8 @@ def run_verify(args: Namespace) -> int:
                     "target": upload_summary.target_repository,
                     "uploaded": upload_summary.uploaded,
                     "skipped": upload_summary.skipped,
+                    "deleted": upload_summary.deleted,
+                    "delete_failed": upload_summary.delete_failed,
                     "failed": upload_summary.failed,
                     "batches": 1,
                 }
@@ -190,6 +192,7 @@ def run_verify(args: Namespace) -> int:
                     f"Upload → {upload_info['target']}: "
                     f"uploaded={upload_info['uploaded']} "
                     f"skipped={upload_info['skipped']} "
+                    f"deleted={upload_info['deleted']} "
                     f"failed={upload_info['failed']}"
                 )
                 payload = {
@@ -329,6 +332,8 @@ def run_verify(args: Namespace) -> int:
         if args.upload:
             uploaded = sum(u.uploaded for u in upload_parts)
             skipped = sum(u.skipped for u in upload_parts)
+            deleted = sum(u.deleted for u in upload_parts)
+            delete_failed = sum(u.delete_failed for u in upload_parts)
             failed = sum(u.failed for u in upload_parts)
             target = (
                 upload_parts[-1].target_repository
@@ -339,12 +344,15 @@ def run_verify(args: Namespace) -> int:
                 "target": target,
                 "uploaded": uploaded,
                 "skipped": skipped,
+                "deleted": deleted,
+                "delete_failed": delete_failed,
                 "failed": failed,
                 "batches": len(upload_parts),
             }
             console.print(
                 f"Upload → {target}: "
-                f"uploaded={uploaded} skipped={skipped} failed={failed}"
+                f"uploaded={uploaded} skipped={skipped} "
+                f"deleted={deleted} failed={failed}"
             )
 
         payload = {

@@ -74,11 +74,12 @@ nexus-control-cli repos
 
 # Verify + upload в <repo>-verified
 nexus-control-cli verify --repo maven-hosted --upload
-# Полный rescan без PASS-checkpoints (например, раз в неделю):
+# Полный rescan без PASS-checkpoints (например, раз в неделю).
+# FAIL снимается с remote *-verified вместе с checksum sidecar'ами:
 nexus-control-cli verify --repo maven-hosted --upload --scan-mode full
 
 # Только upload локального *-verified
-# (только пути из последнего verified-manifest.json / PASS; stale на диске пропускаются)
+# (PASS из verified-manifest.json; FAIL из failed_assets снимаются с remote)
 nexus-control-cli upload --repo maven-hosted
 
 # Smoke / узкий прогон
@@ -172,7 +173,12 @@ severity совпадают. TTL возраста (`scan_checkpoint_ttl`) в inc
 сжигает checkpoint — ежедневный `verify_upload` не пересканирует весь PASS.
 FAIL/ERROR checkpoint не получают и сканируются каждый прогон. `scan_mode=full`
 игнорирует checkpoints и пересканирует всё (отдельное правило, например на
-субботу). `scan_checkpoint_ttl = 0` полностью выключает skip.
+субботу). Если ранее PASS-артефакт на полном rescan стал FAIL (новая CVE),
+`--upload` / `verify_upload` удаляет его и checksum/signature sidecar'ы
+(`.md5`/`.sha1`/…) из remote hosted `*-verified` и из локального `*-verified`.
+ERROR сканера пакет не снимает. Учётной записи Nexus нужно право удалять
+ассеты в hosted (не только upload). `scan_checkpoint_ttl = 0` полностью
+выключает skip.
 
 Пропущенный PASS всё равно попадает в upload и `verified-manifest.json`, иначе
 `--upload` не заливал бы уже проверенные артефакты.
@@ -580,8 +586,8 @@ API-ключ: в UI DefectDojo → профиль → **API Key**.
 
 ## Ограничения текущей версии
 
-- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются PASS из последнего `verified-manifest.json` и их checksum/signature sidecar'ы (`.md5`/`.sha1`/…, без сканирования); stale-файлы в локальном `*-verified` не грузятся
-- Нет delete и произвольного admin write в Nexus
+- Upload verified создаёт hosted `<repo>-verified` **того же format**, что источник (npm/maven2/pypi/raw); npm metadata / non-package файлы при upload пропускаются; заливаются PASS из последнего `verified-manifest.json` и их checksum/signature sidecar'ы (`.md5`/`.sha1`/…, без сканирования); stale-файлы в локальном `*-verified` не грузятся. FAIL из текущего verify (и `failed_assets` в манифесте) удаляются из remote `*-verified` вместе с sidecar'ами; maven-metadata / archetype-catalog не трогаем
+- Нет произвольного admin write в Nexus (создание hosted `*-verified`, upload PASS и delete только FAIL-ассетов в этом hosted)
 - Для docker нужны skopeo или docker CLI
 - Очень большие репозитории загружают все ассеты в память для построения дерева (пагинация используется на проводе)
 - Нет порога severity — по умолчанию строгий zero vulnerabilities
