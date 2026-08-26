@@ -121,10 +121,17 @@ class OsvScanner:
             )
 
         from nexus_control.services.nuget_osv import is_nupkg_local_path
+        from nexus_control.services.pypi_identity import is_pypi_package_file
 
         # .nupkg: CLI не видит identity → nuspec → temporary osv-scanner lockfile.
         if is_nupkg_local_path(local_path):
             return self._scan_nupkg(
+                repository=repository,
+                asset_path=asset_path,
+                local_path=local_path,
+            )
+        if is_pypi_package_file(local_path):
+            return self._scan_pypi(
                 repository=repository,
                 asset_path=asset_path,
                 local_path=local_path,
@@ -248,6 +255,99 @@ class OsvScanner:
                     "name": identity.package_id,
                     "version": identity.version,
                     "ecosystem": "NuGet",
+                },
+            },
+        )
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return result
+
+    def _scan_pypi(
+        self,
+        *,
+        repository: str,
+        asset_path: str,
+        local_path: Path,
+    ) -> ScanResult:
+        """PyPI: METADATA Name+Version → custom lockfile → osv-scanner CLI."""
+        from nexus_control.services.pypi_identity import (
+            PypiIdentityError,
+            build_pypi_osv_args,
+            extract_pypi_identity,
+            write_pypi_osv_identity_lockfile,
+        )
+        from nexus_control.utils.safe_path import sanitize_filename, sanitize_repo_name
+
+        try:
+            self.resolve_backend()
+        except OsvError as exc:
+            return ScanResult(
+                status=ScanStatus.ERROR,
+                verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
+                error=str(exc),
+            )
+
+        json_path, txt_path = report_paths(
+            self.settings.reports_root,
+            repository,
+            asset_path,
+            scanner=SCANNER_NAME,
+        )
+        ensure_parent_dir(json_path)
+        version = self.get_version()
+
+        try:
+            identity = extract_pypi_identity(local_path)
+        except PypiIdentityError as exc:
+            logger.warning("PyPI identity extract failed for %s: %s", asset_path, exc)
+            _write_text(txt_path, f"SCAN_ERROR\n{exc}\n")
+            write_json(
+                json_path,
+                {"error": str(exc), "mode": "pypi-osv-scanner"},
+            )
+            return ScanResult(
+                status=ScanStatus.ERROR,
+                verdict=Verdict.ERROR,
+                scanner=SCANNER_NAME,
+                json_report_path=json_path,
+                text_report_path=txt_path,
+                error=str(exc),
+                scanner_version=version,
+            )
+
+        lock_path = (
+            self.settings.reports_root
+            / sanitize_repo_name(repository)
+            / "_pypi_osv_lockfiles"
+            / f"{sanitize_filename(asset_path.replace('/', '__'))}.osv-scanner.json"
+        )
+        write_pypi_osv_identity_lockfile(identity, lock_path)
+        osv_args = build_pypi_osv_args(
+            lock_path,
+            list(self.settings.osv_extra_args_list),
+        )
+        logger.info(
+            "PyPI osv-scanner identity scan %s → %s==%s",
+            asset_path,
+            identity.name,
+            identity.version,
+        )
+        result = self._finalize_scan(
+            osv_args,
+            asset_path=asset_path,
+            local_path=local_path,
+            json_path=json_path,
+            txt_path=txt_path,
+            version=version,
+            raw_extra={
+                "mode": "pypi-osv-scanner",
+                "package": {
+                    "name": identity.name,
+                    "version": identity.version,
+                    "ecosystem": "PyPI",
                 },
             },
         )

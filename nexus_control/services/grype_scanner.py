@@ -121,10 +121,38 @@ class GrypeScanner:
             npm_staging_dir,
             prepare_npm_identity_staging,
         )
+        from nexus_control.services.pypi_identity import (
+            PypiIdentityError,
+            is_pypi_package_file,
+            prepare_pypi_identity_staging,
+            pypi_staging_dir,
+        )
 
         scan_path = local_path
         scheme = target_scheme or _infer_scheme(local_path)
-        if is_npm_package_tarball(local_path) and (
+        if is_pypi_package_file(local_path) and (
+            target_scheme is None or scheme == "file"
+        ):
+            try:
+                staging = pypi_staging_dir(
+                    self.settings.reports_root, repository, asset_path
+                )
+                identity, staging = prepare_pypi_identity_staging(local_path, staging)
+                scan_path = staging
+                scheme = "dir"
+                logger.info(
+                    "Grype PyPI identity scan %s → %s==%s",
+                    asset_path,
+                    identity.name,
+                    identity.version,
+                )
+            except (PypiIdentityError, OSError, ValueError) as exc:
+                logger.warning(
+                    "PyPI identity staging failed for %s: %s — scanning archive as-is",
+                    asset_path,
+                    exc,
+                )
+        elif is_npm_package_tarball(local_path) and (
             target_scheme is None or scheme == "file"
         ):
             try:
