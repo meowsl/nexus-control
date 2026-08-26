@@ -9,6 +9,7 @@ import pytest
 
 from nexus_control.cli.cmd_upload import (
     _summary_from_verified_dir,
+    load_manifest_failed_paths,
     load_manifest_passed_paths,
 )
 from nexus_control.config import Settings
@@ -114,3 +115,46 @@ def test_summary_requires_manifest(tmp_path: Path) -> None:
     pkg.write_bytes(b"x")
     with pytest.raises(SystemExit, match="verified-manifest"):
         _summary_from_verified_dir(settings, "test-npm", fmt="npm")
+
+
+def test_load_manifest_failed_paths(tmp_path: Path) -> None:
+    verified = tmp_path / "repo-verified"
+    verified.mkdir()
+    (verified / "verified-manifest.json").write_text(
+        json.dumps(
+            {
+                "passed_assets": [{"asset_path": "ok.jar"}],
+                "failed_assets": [
+                    {"asset_path": "cib/jdbc/2.0.1/bad.jar"},
+                    {"asset_path": "/cib/jdbc/2.0.1/bad.jar"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_manifest_failed_paths(verified) == ["cib/jdbc/2.0.1/bad.jar"]
+
+
+def test_summary_allows_failed_only_manifest(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    root = settings.verified_repo_dir("maven-hosted")
+    stale = root / "cib" / "jdbc" / "2.0.1" / "bad.jar"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"bad")
+    (root / "verified-manifest.json").write_text(
+        json.dumps(
+            {
+                "repository": "maven-hosted",
+                "passed_assets": [],
+                "failed_assets": [{"asset_path": "cib/jdbc/2.0.1/bad.jar"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary, skipped = _summary_from_verified_dir(
+        settings, "maven-hosted", fmt="maven2"
+    )
+    assert summary.results == []
+    assert skipped == 1
+    assert load_manifest_passed_paths(root) == []
+    assert load_manifest_failed_paths(root) == ["cib/jdbc/2.0.1/bad.jar"]

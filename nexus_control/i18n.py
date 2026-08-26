@@ -204,9 +204,10 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "Verdict": "Вердикт",
         "Verified": "Verified",
         "Creating repository if missing…": "Создание репозитория при отсутствии…",
-        "Upload finished ({created}): uploaded={uploaded} skipped={skipped} failed={failed}": (
+        "Upload finished ({created}): uploaded={uploaded} skipped={skipped} "
+        "deleted={deleted} failed={failed}": (
             "Upload завершён ({created}): uploaded={uploaded} "
-            "skipped={skipped} failed={failed}"
+            "skipped={skipped} deleted={deleted} failed={failed}"
         ),
         "created": "создан",
         "existing": "существующий",

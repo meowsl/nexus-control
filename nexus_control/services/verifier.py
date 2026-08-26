@@ -191,6 +191,9 @@ class Verifier:
         repo_dir = self.verified_dir(summary.repository)
         ensure_dir(repo_dir)
         passed = [r for r in summary.results if r.verdict == Verdict.PASS]
+        from nexus_control.services.verified_uploader import collect_revoke_mains
+
+        failed_paths = collect_revoke_mains(summary)
         manifest = {
             "repository": summary.repository,
             "scanned_at": (summary.finished_at or datetime.now(timezone.utc)).isoformat(),
@@ -229,6 +232,7 @@ class Verifier:
                 for r in passed
                 if r.verify.copied or r.verify.skipped_existing
             ],
+            "failed_assets": [{"asset_path": path} for path in failed_paths],
         }
         path = repo_dir / "verified-manifest.json"
         write_json(path, manifest)

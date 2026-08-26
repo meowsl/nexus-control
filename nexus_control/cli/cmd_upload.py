@@ -38,13 +38,7 @@ console = Console(stderr=True)
 MANIFEST_NAME = "verified-manifest.json"
 
 
-def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
-    """Пути PASS из последнего ``verified-manifest.json`` (нормализованные).
-
-    Raises:
-        FileNotFoundError: нет manifest.
-        ValueError: битый / пустой manifest.
-    """
+def _read_manifest(verified_dir: Path) -> dict:
     path = verified_dir / MANIFEST_NAME
     if not path.is_file():
         raise FileNotFoundError(str(path))
@@ -54,9 +48,12 @@ def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
         raise ValueError(f"invalid {MANIFEST_NAME}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"{MANIFEST_NAME} root must be an object")
-    raw = data.get("passed_assets")
-    if not isinstance(raw, list) or not raw:
-        raise ValueError(f"{MANIFEST_NAME} has no passed_assets (run verify first)")
+    return data
+
+
+def _manifest_asset_paths(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
     out: list[str] = []
     seen: set[str] = set()
     for item in raw:
@@ -67,9 +64,33 @@ def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
             continue
         seen.add(rel)
         out.append(rel)
-    if not out:
-        raise ValueError(f"{MANIFEST_NAME} has no usable passed_assets paths")
     return out
+
+
+def load_manifest_passed_paths(verified_dir: Path) -> list[str]:
+    """Пути PASS из последнего ``verified-manifest.json`` (нормализованные).
+
+    Raises:
+        FileNotFoundError: нет manifest.
+        ValueError: битый / пустой manifest без PASS и без FAIL.
+    """
+    data = _read_manifest(verified_dir)
+    out = _manifest_asset_paths(data.get("passed_assets"))
+    if out:
+        return out
+    failed = _manifest_asset_paths(data.get("failed_assets"))
+    if failed:
+        return []
+    raise ValueError(f"{MANIFEST_NAME} has no passed_assets (run verify first)")
+
+
+def load_manifest_failed_paths(verified_dir: Path) -> list[str]:
+    """FAIL-пути из последнего manifest (для revoke в remote ``*-verified``)."""
+    try:
+        data = _read_manifest(verified_dir)
+    except FileNotFoundError:
+        return []
+    return _manifest_asset_paths(data.get("failed_assets"))
 
 
 def _path_allowed_by_manifest(rel: str, allowed: set[str]) -> bool:
@@ -194,12 +215,15 @@ def run_upload(args: Namespace) -> int:
         summary, skipped_stale = _summary_from_verified_dir(
             ctx.settings, repo_name, fmt=repo.format
         )
+        extra_revoke = load_manifest_failed_paths(
+            ctx.settings.verified_repo_dir(repo_name)
+        )
         if skipped_stale:
             console.print(
                 f"[dim]Skipped {skipped_stale} local file(s) not in last "
                 f"{MANIFEST_NAME} (stale or failed last verify).[/dim]"
             )
-        if not summary.results:
+        if not summary.results and not extra_revoke:
             console.print(
                 f"[yellow]No uploadable packages under verified dir for "
                 f"{repo_name} (format={repo.format}).[/yellow]"
@@ -216,12 +240,18 @@ def run_upload(args: Namespace) -> int:
         console.print(
             f"Uploading {len(summary.results)} local verified package(s) "
             f"for {repo_name} (format={repo.format})"
+            + (
+                f", revoke FAIL={len(extra_revoke)}"
+                if extra_revoke
+                else ""
+            )
         )
         progress = getattr(args, "on_progress", None) or ProgressPrinter()
         uploader = VerifiedUploader(ctx.client)
         up = uploader.upload(
             summary,
             target_repository=args.target,
+            extra_revoke_paths=extra_revoke,
             on_progress=progress,
         )
 
@@ -232,6 +262,8 @@ def run_upload(args: Namespace) -> int:
             "uploaded": up.uploaded,
             "skipped": up.skipped,
             "skipped_not_in_manifest": skipped_stale,
+            "deleted": up.deleted,
+            "delete_failed": up.delete_failed,
             "failed": up.failed,
             "created_repository": up.created_repository,
         }
@@ -241,6 +273,7 @@ def run_upload(args: Namespace) -> int:
         else:
             console.print(
                 f"[bold]Done[/bold] → {up.target_repository} "
-                f"uploaded={up.uploaded} skipped={up.skipped} failed={up.failed}"
+                f"uploaded={up.uploaded} skipped={up.skipped} "
+                f"deleted={up.deleted} failed={up.failed}"
             )
         return 1 if up.failed else 0

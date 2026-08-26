@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument(
         "--upload",
         action="store_true",
-        help="Upload PASS assets to remote *-verified after verify",
+        help="Upload PASS to remote *-verified; delete FAIL (+ sidecars) already there",
     )
     p_verify.add_argument(
         "--target",
