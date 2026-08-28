@@ -22,6 +22,7 @@ from nexus_control.services.scan_checkpoint import (
     result_from_pass_checkpoint,
 )
 from nexus_control.nexus.uploads import (
+    is_maven_repo_root_path,
     is_scan_package_asset,
     looks_like_nuget_metadata_path,
 )
@@ -30,6 +31,7 @@ from nexus_control.services.scan_common import main_asset_path_for_sidecar
 from nexus_control.utils.path_prefixes import (
     normalize_path_prefixes,
     path_allowed_by_filters,
+    path_is_excluded,
 )
 logger = logging.getLogger(__name__)
 
@@ -374,11 +376,15 @@ class _AssetSelector:
     def add(self, asset: NexusAsset) -> None:
         self.total += 1
         path = asset.path.replace("\\", "/").lstrip("/")
-        if not path_allowed_by_filters(
-            path,
-            prefixes=self.prefixes,
-            excluded_prefixes=self.excluded_prefixes,
-        ):
+        if is_maven_repo_root_path(path):
+            allowed = not path_is_excluded(path, self.excluded_prefixes)
+        else:
+            allowed = path_allowed_by_filters(
+                path,
+                prefixes=self.prefixes,
+                excluded_prefixes=self.excluded_prefixes,
+            )
+        if not allowed:
             self.emit_progress()
             return
         main_path = main_asset_path_for_sidecar(path)

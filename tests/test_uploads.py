@@ -5,6 +5,8 @@ from __future__ import annotations
 from nexus_control.nexus.uploads import (
     build_hosted_create_payload,
     format_api_slug,
+    is_maven_mangled_layout_path,
+    is_maven_repo_root_path,
     is_scan_package_asset,
     is_uploadable_asset,
     is_verified_local_sidecar,
@@ -44,6 +46,10 @@ def test_is_uploadable_by_format() -> None:
     assert is_uploadable_asset("maven2", "archetype-catalog.xml")
     assert is_uploadable_asset("maven2", "archetype-catalog.xml.sha1")
     assert is_uploadable_asset("maven2", "maven-metadata.xml")
+    assert not is_uploadable_asset(
+        "maven2",
+        "ru/cib/bss-fl-rest/1.0/bss-fl-rest-1.0.jar./1.0-bss-fl-rest-1.0.jar..jar",
+    )
     assert is_uploadable_asset("raw", "docs/readme.txt")
     assert not is_uploadable_asset("docker", "library/alpine/latest")
     assert is_uploadable_asset(
@@ -105,6 +111,24 @@ def test_parse_maven_coordinates() -> None:
     assert parse_maven_coordinates(
         "org/apache/commons/commons-text/1.9/commons-text-1.9.jar"
     ) == ("org.apache.commons", "commons-text", "1.9", "jar")
+
+
+def test_maven_repo_root_and_mangled_layout() -> None:
+    assert is_maven_repo_root_path("archetype-catalog.xml")
+    assert is_maven_repo_root_path("archetype-catalog.xml.sha1")
+    assert is_maven_repo_root_path("maven-metadata.xml")
+    assert not is_maven_repo_root_path("org/foo/maven-metadata.xml")
+    assert not is_maven_repo_root_path(
+        "ru/cib/bss-fl-rest/1.0/bss-fl-rest-1.0.jar"
+    )
+    mangled = (
+        "ru/cib/bss-fl-rest/1.0/bss-fl-rest-1.0.jar./1.0-bss-fl-rest-1.0.jar..jar"
+    )
+    assert is_maven_mangled_layout_path(mangled)
+    assert not is_scan_package_asset("maven2", mangled)
+    assert not is_maven_mangled_layout_path(
+        "ru/cib/bss-fl-rest/1.0/bss-fl-rest-1.0.jar"
+    )
 
 
 def test_maven_create_payload_has_maven_block() -> None:

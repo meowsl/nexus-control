@@ -184,12 +184,20 @@ def remote_assets_to_revoke(
     remote_by_path: dict[str, NexusAsset],
     revoke_keys: Iterable[str],
 ) -> list[NexusAsset]:
-    """Remote-ассеты, чьи path совпали с ключами revoke (уникальные id)."""
+    """Remote-ассеты, чьи path совпали с ключами revoke (уникальные id).
+
+    Также снимаем мусор Components API рядом с FAIL-jar:
+    ``foo.jar./…`` и ``foo.jar/…``.
+    """
+    wanted = {_normalize_asset_path_key(key) for key in revoke_keys if key}
+    prefixes = tuple(key + suffix for key in wanted for suffix in ("/", "./"))
     out: list[NexusAsset] = []
     seen_ids: set[str] = set()
-    for key in revoke_keys:
-        asset = remote_by_path.get(_normalize_asset_path_key(key))
-        if asset is None or asset.id in seen_ids:
+    for path, asset in remote_by_path.items():
+        key = _normalize_asset_path_key(path)
+        if key not in wanted and not any(key.startswith(prefix) for prefix in prefixes):
+            continue
+        if asset.id in seen_ids:
             continue
         seen_ids.add(asset.id)
         out.append(asset)

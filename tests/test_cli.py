@@ -228,6 +228,8 @@ def test_filter_excluded_prefixes() -> None:
         limit=None,
     )
     assert {a.path for a in include_and_exclude} == {
+        "archetype-catalog.xml",
+        "archetype-catalog.xml.sha1",
         "org/x/1.0/x.jar",
         "org/x/1.0/x.jar.sha1",
     }

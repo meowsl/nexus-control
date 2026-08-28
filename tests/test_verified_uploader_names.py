@@ -244,12 +244,18 @@ def test_remote_assets_to_revoke_matches_sidecars() -> None:
                 download_url=None,
                 repository="v",
             ),
+            NexusAsset(
+                id="trash-pom",
+                path="cib/jdbc/2.0.1/bad.jar./1.0-bad.jar..pom",
+                download_url=None,
+                repository="v",
+            ),
         ]
     )
     keys = expand_revoke_keys(["cib/jdbc/2.0.1/bad.jar"], fmt="maven2")
     revoked = remote_assets_to_revoke(remote, keys)
     ids = {a.id for a in revoked}
-    assert ids == {"jar", "sha1"}
+    assert ids == {"jar", "sha1", "trash-pom"}
 
 
 class _FakeNexus:
