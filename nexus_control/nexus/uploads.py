@@ -182,6 +182,8 @@ def is_uploadable_asset(fmt: str, asset_path: str) -> bool:
         # Пакеты: *.nupkg / hosted Id/version. Не registration/*.json.
         return is_nuget_uploadable_path(asset_path)
     if fmt_l == "maven2":
+        if is_maven_mangled_layout_path(asset_path):
+            return False
         # Nexus при HTTP PUT отдельных файлов сам maven-metadata не генерирует —
         # нужно заливать metadata (+ checksum sidecars) вместе с артефактами.
         if name == "maven-metadata.xml" or name.startswith("maven-metadata.xml."):
@@ -209,6 +211,8 @@ def is_scan_package_asset(fmt: str | None, asset_path: str) -> bool:
     """
     fmt_l = (fmt or "").lower().strip()
     path = asset_path.replace("\\", "/").lstrip("/")
+    if is_maven_mangled_layout_path(path):
+        return False
     if looks_like_nuget_metadata_path(path):
         return False
     if fmt_l == "nuget":
@@ -243,6 +247,37 @@ def build_hosted_create_payload(name: str, fmt: str) -> dict:
     elif fmt_l == "raw":
         payload["raw"] = {"contentDisposition": "ATTACHMENT"}
     return payload
+
+
+_MAVEN_ROOT_FILES = ("archetype-catalog.xml", "maven-metadata.xml")
+_MAVEN_MANGLED_DIR_SUFFIXES = (".jar.", ".pom.", ".war.", ".ear.", ".aar.")
+
+
+def is_maven_repo_root_path(asset_path: str) -> bool:
+    """True для файла в корне Maven-репозитория (без ``/`` в path).
+
+    ``archetype-catalog.xml`` / корневой ``maven-metadata.xml`` и их checksum
+    sidecar'ы не лежат под GAV-префиксом вроде ``com/``, поэтому path-prefix
+    фильтр их иначе выкидывает.
+    """
+    path = str(asset_path).replace("\\", "/").lstrip("/")
+    if not path or "/" in path:
+        return False
+    name = PurePosixPath(path).name.lower()
+    return any(name == root or name.startswith(root + ".") for root in _MAVEN_ROOT_FILES)
+
+
+def is_maven_mangled_layout_path(asset_path: str) -> bool:
+    """Мусор от Maven Components API: ``file.jar./version-file..ext``."""
+    posix = PurePosixPath(str(asset_path).replace("\\", "/").lstrip("/"))
+    parts = posix.parts
+    if len(parts) < 2:
+        return False
+    if ".." in parts[-1]:
+        return True
+    return any(
+        part.lower().endswith(_MAVEN_MANGLED_DIR_SUFFIXES) for part in parts[:-1]
+    )
 
 
 def parse_maven_coordinates(asset_path: str) -> tuple[str, str, str, str] | None:
@@ -447,44 +482,9 @@ class RepositoryUploader:
         )
         if response.status_code in {200, 201, 204}:
             return
-        # metadata / checksums — только PUT, Components API их не принимает.
-        lower_name = PurePosixPath(rel).name.lower()
-        if (
-            lower_name == "maven-metadata.xml"
-            or lower_name.startswith("maven-metadata.xml.")
-            or lower_name.endswith(_MAVEN_SIDE_SUFFIXES)
-        ):
-            self._raise_upload(response, repository, asset_path)
-            return
-        # Fallback: Components API с координатами из path.
-        coords = parse_maven_coordinates(asset_path)
-        if coords is None:
-            self._raise_upload(response, repository, asset_path)
-            return
-        group_id, artifact_id, version, extension = coords
-        logger.info(
-            "PUT failed (%s); falling back to components API for %s:%s:%s",
-            response.status_code,
-            group_id,
-            artifact_id,
-            version,
-        )
-        with local_path.open("rb") as fh:
-            response = self.client.post(
-                "/service/rest/v1/components",
-                params={"repository": repository},
-                data={
-                    "maven2.groupId": group_id,
-                    "maven2.artifactId": artifact_id,
-                    "maven2.version": version,
-                    "maven2.generate-pom": "true",
-                    "maven2.asset1.extension": extension,
-                },
-                files={
-                    "maven2.asset1": (local_path.name, fh, "application/octet-stream"),
-                },
-                timeout=max(self.timeout, 120.0),
-            )
+        # Только PUT: Components API с generate-pom кладёт файл как
+        # ``artifact-version.jar./version-artifact-version.jar..jar`` и плодит
+        # лишние .pom. 400 «already exists» — успех (см. ``_raise_upload``).
         self._raise_upload(response, repository, asset_path)
 
     def _raise_upload(
