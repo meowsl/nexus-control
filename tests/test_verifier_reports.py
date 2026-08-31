@@ -176,3 +176,66 @@ def test_write_scanner_reports_loads_raw_from_disk(tmp_path: Path) -> None:
     path = Verifier(settings).write_scanner_reports(summary)["grype"]
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["assets"][0]["report"]["matches"][0]["id"] == "from-disk"
+
+
+def _fail_asset(path: str) -> AssetPipelineResult:
+    return AssetPipelineResult(
+        asset_path=path,
+        kind=AssetKind.FILE,
+        download=DownloadResult(status=DownloadStatus.SUCCESS),
+        scans={
+            "grype": _scan(
+                "grype",
+                verdict=Verdict.FAIL,
+                vulns=[Vulnerability(id="CVE-1", severity=Severity.HIGH)],
+            )
+        },
+    )
+
+
+def _pass_asset(path: str) -> AssetPipelineResult:
+    return AssetPipelineResult(
+        asset_path=path,
+        kind=AssetKind.FILE,
+        download=DownloadResult(status=DownloadStatus.SUCCESS),
+        scans={"grype": _scan("grype", verdict=Verdict.PASS)},
+    )
+
+
+def test_write_unverified_list_merges_across_path_scopes(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    verifier = Verifier(settings)
+    list_path = verifier.verified_dir("maven-hosted") / "unverified_assets.txt"
+    list_path.parent.mkdir(parents=True)
+    list_path.write_text(
+        "com/acme/bad/1.0/bad-1.0.jar\norg/other/bad/2.0/bad-2.0.jar\n",
+        encoding="utf-8",
+    )
+
+    # Rule scoped to com/: fixed artifact becomes PASS → drop only within com/.
+    verifier.write_unverified_list(
+        PipelineSummary(
+            repository="maven-hosted",
+            results=[_pass_asset("com/acme/bad/1.0/bad-1.0.jar")],
+        ),
+        include_prefixes=["com/"],
+    )
+    text = list_path.read_text(encoding="utf-8")
+    assert "com/acme/bad/1.0/bad-1.0.jar" not in text
+    assert "org/other/bad/2.0/bad-2.0.jar" in text
+
+    # Rule exclude com/: org/ updated, com/ row preserved even if absent from run.
+    verifier.write_unverified_list(
+        PipelineSummary(
+            repository="maven-hosted",
+            results=[
+                _pass_asset("org/other/bad/2.0/bad-2.0.jar"),
+                _fail_asset("org/other/bad/3.0/bad-3.0.jar"),
+            ],
+        ),
+        exclude_prefixes=["com/"],
+    )
+    text = list_path.read_text(encoding="utf-8")
+    assert "com/acme/bad/1.0/bad-1.0.jar" not in text
+    assert "org/other/bad/2.0/bad-2.0.jar" not in text
+    assert "org/other/bad/3.0/bad-3.0.jar" in text

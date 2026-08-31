@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from nexus_control.utils.safe_path import (
     asset_verified_path,
     verified_scanner_report_path,
 )
+from nexus_control.utils.path_prefixes import path_in_scan_scope
 
 logger = logging.getLogger(__name__)
 
@@ -248,25 +250,69 @@ class Verifier:
         logger.info("Wrote verified manifest %s", path)
         return path
 
-    def write_unverified_list(self, summary: PipelineSummary) -> Path | None:
-        """Записать ``unverified_assets.txt`` — по одному asset_path на строку.
+    def write_unverified_list(
+        self,
+        summary: PipelineSummary,
+        *,
+        include_prefixes: Sequence[str] | None = None,
+        exclude_prefixes: Sequence[str] | None = None,
+    ) -> Path | None:
+        """Записать ``unverified_assets.txt`` — FAIL/ERROR asset_path построчно.
 
-        В список попадают ассеты с verdict FAIL или ERROR (не прошедшие проверку).
-        Если таких нет — файл не создаётся, возвращается ``None``.
+        При path/exclude фильтрах мержит с существующим файлом: обновляет только
+        пути в scope текущего прогона, остальные строки сохраняет.
         """
-        failed_paths = [
+        current_failed = {
             r.asset_path
             for r in summary.results
             if r.verdict in {Verdict.FAIL, Verdict.ERROR}
-        ]
-        if not failed_paths:
-            return None
+        }
+        scanned = {r.asset_path for r in summary.results}
+        inc = list(include_prefixes or [])
+        exc = list(exclude_prefixes or [])
+        scoped = bool(inc or exc)
 
         repo_dir = self.verified_dir(summary.repository)
-        ensure_dir(repo_dir)
         path = repo_dir / "unverified_assets.txt"
-        # Стабильный порядок + уникальность на случай дублей в summary.
-        lines = sorted(dict.fromkeys(failed_paths))
+
+        merged: list[str] = []
+        if scoped and path.is_file():
+            try:
+                previous = [
+                    line.strip()
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except OSError:
+                previous = []
+            for asset_path in previous:
+                if not path_in_scan_scope(
+                    asset_path,
+                    include_prefixes=inc,
+                    exclude_prefixes=exc,
+                ):
+                    merged.append(asset_path)
+                    continue
+                if asset_path in scanned:
+                    if asset_path in current_failed:
+                        merged.append(asset_path)
+                else:
+                    merged.append(asset_path)
+            for asset_path in current_failed:
+                if asset_path not in merged:
+                    merged.append(asset_path)
+        else:
+            merged = list(current_failed)
+
+        if not merged:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+
+        ensure_dir(repo_dir)
+        lines = sorted(dict.fromkeys(merged))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         logger.info(
             "Wrote unverified assets list %s (%d entries)",

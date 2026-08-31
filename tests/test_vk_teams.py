@@ -333,10 +333,23 @@ def test_poll_and_handle_events_disables_on_invalid_token(tmp_path: Path) -> Non
 
     assert poll_and_handle_events(settings, poll_time=1, client=client) == 0
     assert vk_teams_should_poll(settings) is False
-    client.get_events.assert_called()
+    assert client.get_events.call_count == 1
 
     poll_and_handle_events(settings, poll_time=1, client=client)
     assert client.get_events.call_count == 1
+
+
+def test_poll_disable_is_process_wide(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = MagicMock(spec=VkTeamsClient)
+    client.get_events.side_effect = VkTeamsError("VK Teams API error: Invalid token")
+    poll_and_handle_events(settings, poll_time=1, client=client)
+    assert vk_teams_should_poll(settings) is False
+    # In-memory flag survives even if disk state were missing.
+    from nexus_control.integrations import vk_notify as mod
+
+    mod._events_poll_path(settings).unlink(missing_ok=True)
+    assert vk_teams_should_poll(settings) is False
 
 
 def test_clear_events_poll_disabled_re_enables_poll(tmp_path: Path) -> None:

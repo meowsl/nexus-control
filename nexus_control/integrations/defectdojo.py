@@ -281,7 +281,7 @@ class DefectDojoClient:
         engagement_name: str,
         product_type_name: str = "Nexus",
         test_title: str = "nexus-control",
-        close_old_findings: bool = True,
+        close_old_findings: bool = False,
     ) -> dict[str, Any]:
         payload = json.dumps(report, ensure_ascii=False).encode("utf-8")
         data = {
@@ -429,9 +429,40 @@ def resolve_defectdojo_engagement_url(
     return defectdojo_engagement_url_for_repo(settings, repository)
 
 
+def defectdojo_test_title(
+    repository: str,
+    *,
+    rule_id: str | None = None,
+    path_scope: str | None = None,
+) -> str:
+    """DefectDojo test name; scoped rules must not share one test per repo."""
+    base = f"nexus-control {repository.strip()}"
+    scope = (path_scope or "").strip()
+    if scope:
+        return f"{base} [{scope}]"
+    rid = (rule_id or "").strip()
+    if rid:
+        return f"{base} [{rid}]"
+    return base
+
+
+def should_close_old_defectdojo_findings(
+    summary: PipelineSummary,
+    *,
+    path_scope: str | None = None,
+    rule_id: str | None = None,
+) -> bool:
+    """Close stale findings on full scan (per scoped DefectDojo test)."""
+    _ = path_scope, rule_id
+    return (summary.scan_mode or "").strip().lower() == "full"
+
+
 def push_pipeline_findings(
     settings: Settings,
     summary: PipelineSummary,
+    *,
+    rule_id: str | None = None,
+    path_scope: str | None = None,
 ) -> DefectDojoPushResult:
     """Отправить findings FAIL-ассетов в DefectDojo (no-op если выключено)."""
     cfg = resolve_defectdojo_settings(settings)
@@ -464,10 +495,18 @@ def push_pipeline_findings(
     product_type = (
         (cfg.defectdojo_product_type_name or "Nexus").strip() or "Nexus"
     )
-    test_title = f"nexus-control {summary.repository}"
-    # Incremental omits checkpoint-skipped FAIL assets. Closing missing
-    # findings would mark those CVEs mitigated until a full scan.
-    close_old = (summary.scan_mode or "").strip().lower() == "full"
+    test_title = defectdojo_test_title(
+        summary.repository,
+        rule_id=rule_id,
+        path_scope=path_scope,
+    )
+    # Each scheduler rule / path scope uses its own DefectDojo test so a
+    # partial reimport (e.g. exclude:com/) cannot close findings from com/.
+    close_old = should_close_old_defectdojo_findings(
+        summary,
+        path_scope=path_scope,
+        rule_id=rule_id,
+    )
 
     client = DefectDojoClient(
         base_url=url,
@@ -503,11 +542,12 @@ def push_pipeline_findings(
             )
     logger.info(
         "DefectDojo: pushed %d finding(s) repo=%s product=%s engagement=%s "
-        "test_id=%s scan_mode=%s close_old_findings=%s",
+        "test=%s test_id=%s scan_mode=%s close_old_findings=%s",
         len(findings),
         summary.repository,
         product,
         engagement,
+        test_title,
         test_id,
         summary.scan_mode,
         close_old,

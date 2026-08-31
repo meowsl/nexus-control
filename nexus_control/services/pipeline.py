@@ -106,6 +106,8 @@ class PipelineService:
         history_rule_id: str | None = None,
         history_path_prefix: str | None = None,
         history_checkpoint_skipped: int = 0,
+        scan_include_prefixes: Sequence[str] | None = None,
+        scan_exclude_prefixes: Sequence[str] | None = None,
         scan_mode: str = "incremental",
     ) -> PipelineSummary:
         enabled = (
@@ -347,6 +349,8 @@ class PipelineService:
                     worker_count if download or scan or verify else None
                 ),
                 history_checkpoint_skipped=history_checkpoint_skipped,
+                scan_include_prefixes=scan_include_prefixes,
+                scan_exclude_prefixes=scan_exclude_prefixes,
             )
         return summary
 
@@ -361,6 +365,8 @@ class PipelineService:
         history_workers: int | None = None,
         history_checkpoint_skipped: int = 0,
         skip_defectdojo: bool = False,
+        scan_include_prefixes: Sequence[str] | None = None,
+        scan_exclude_prefixes: Sequence[str] | None = None,
     ) -> None:
         """Записать reports/manifest/history в конце (в т.ч. после batch-оркестрации)."""
         summary.finished_at = datetime.now(timezone.utc)
@@ -375,7 +381,11 @@ class PipelineService:
                 except OSError as exc:
                     logger.error("Failed to write verified manifest: %s", exc)
             try:
-                self.verifier.write_unverified_list(summary)
+                self.verifier.write_unverified_list(
+                    summary,
+                    include_prefixes=scan_include_prefixes,
+                    exclude_prefixes=scan_exclude_prefixes,
+                )
             except OSError as exc:
                 logger.error("Failed to write unverified assets list: %s", exc)
 
@@ -391,7 +401,12 @@ class PipelineService:
                         push_pipeline_findings,
                     )
 
-                    dd_result = push_pipeline_findings(self.settings, summary)
+                    dd_result = push_pipeline_findings(
+                        self.settings,
+                        summary,
+                        rule_id=history_rule_id,
+                        path_scope=history_path_prefix,
+                    )
                     if dd_result.error:
                         logger.warning(
                             "DefectDojo push incomplete: %s", dd_result.error

@@ -45,6 +45,8 @@ def run_resourced_pipeline(
     history_checkpoint_skipped: int = 0,
     extra_pass_results: Sequence[AssetPipelineResult] | None = None,
     skip_defectdojo: bool = False,
+    scan_include_prefixes: Sequence[str] | None = None,
+    scan_exclude_prefixes: Sequence[str] | None = None,
     scan_mode: str = "incremental",
 ) -> tuple[PipelineSummary, list[UploadSummary]]:
     """Verify с auto-limits и scanner semaphore. Без archive/purge downloads.
@@ -117,6 +119,8 @@ def run_resourced_pipeline(
         history_workers=limits.pipeline_workers if (download or scan or verify) else None,
         history_checkpoint_skipped=history_checkpoint_skipped,
         skip_defectdojo=skip_defectdojo,
+        scan_include_prefixes=scan_include_prefixes,
+        scan_exclude_prefixes=scan_exclude_prefixes,
     )
     if summary.finished_at is None:
         summary.finished_at = datetime.now(timezone.utc)

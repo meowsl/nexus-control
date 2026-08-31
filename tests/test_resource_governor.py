@@ -138,7 +138,7 @@ def test_scanner_semaphore_caps_concurrency(tmp_path: Path) -> None:
     )
     pipeline.verifier.write_scanner_reports = lambda summary: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda summary: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda summary: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda summary, **kwargs: None  # type: ignore[method-assign]
 
     items = [
         NexusAsset(
@@ -176,7 +176,7 @@ def test_deferred_download_when_gate_closed(tmp_path: Path) -> None:
     pipeline.grype.get_version = lambda: "t"  # type: ignore[method-assign]
     pipeline.verifier.write_scanner_reports = lambda s: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda s: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda s: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda s, **kwargs: None  # type: ignore[method-assign]
 
     asset = NexusAsset(
         id="a",
@@ -227,7 +227,7 @@ def test_resourced_pipeline_runs_without_archive(tmp_path: Path) -> None:
     )
     pipeline.verifier.write_scanner_reports = lambda s: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda s: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda s: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda s, **kwargs: None  # type: ignore[method-assign]
 
     asset = NexusAsset(
         id="a",

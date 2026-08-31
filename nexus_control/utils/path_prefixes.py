@@ -79,3 +79,21 @@ def format_path_filters(
     if not inc:
         return f"exclude:{exc}"
     return f"{inc} exclude:{exc}"
+
+
+def path_in_scan_scope(
+    path: str,
+    *,
+    include_prefixes: Sequence[str] | None = None,
+    exclude_prefixes: Sequence[str] | None = None,
+) -> bool:
+    """True when path filters are empty (whole repo) or path matches rule scope."""
+    inc = normalize_path_prefixes(include_prefixes)
+    exc = normalize_path_prefixes(exclude_prefixes)
+    if not inc and not exc:
+        return True
+    return path_allowed_by_filters(
+        path,
+        prefixes=inc,
+        excluded_prefixes=exc,
+    )
