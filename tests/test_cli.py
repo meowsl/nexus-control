@@ -235,6 +235,25 @@ def test_filter_excluded_prefixes() -> None:
     }
 
 
+def test_scan_limit_keeps_maven_root_catalog_after_cap() -> None:
+    assets = [
+        _asset("com/a/1.0/a.jar", fmt="maven2"),
+        _asset("com/a/1.0/a.jar.sha1", fmt="maven2"),
+        _asset("com/b/1.0/b.jar", fmt="maven2"),
+        _asset("archetype-catalog.xml", fmt="maven2"),
+        _asset("archetype-catalog.xml.sha1", fmt="maven2"),
+    ]
+    filtered = filter_assets_for_pipeline(
+        assets, path_prefix="com/", scan_limit=1
+    )
+    paths = {a.path for a in filtered}
+    assert "com/a/1.0/a.jar" in paths
+    assert "com/a/1.0/a.jar.sha1" in paths
+    assert "com/b/1.0/b.jar" not in paths
+    assert "archetype-catalog.xml" in paths
+    assert "archetype-catalog.xml.sha1" in paths
+
+
 def test_limit_stops_streaming_listing_and_preserves_seen_sidecars(
     tmp_path: Path,
 ) -> None:

@@ -170,6 +170,27 @@ def test_collect_upload_items_includes_skipped_sidecars(tmp_path: Path) -> None:
     assert len(paths) == len(set(paths))
 
 
+def test_collect_upload_items_includes_skipped_maven_catalog(tmp_path: Path) -> None:
+    catalog = tmp_path / "archetype-catalog.xml"
+    sha1 = tmp_path / "archetype-catalog.xml.sha1"
+    catalog.write_text("<archetype-catalog/>", encoding="utf-8")
+    sha1.write_text("deadbeef", encoding="utf-8")
+    summary = PipelineSummary(
+        repository="maven-hosted",
+        results=[
+            _result("archetype-catalog.xml", catalog, verdict=Verdict.SKIPPED),
+            _result(
+                "archetype-catalog.xml.sha1",
+                sha1,
+                verdict=Verdict.SKIPPED,
+            ),
+        ],
+    )
+    paths = [p for p, _local in collect_upload_items(summary)]
+    assert "archetype-catalog.xml" in paths
+    assert "archetype-catalog.xml.sha1" in paths
+
+
 def test_collect_revoke_mains_only_fail() -> None:
     jar = Path("/tmp/x.jar")
     summary = PipelineSummary(
