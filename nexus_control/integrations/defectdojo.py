@@ -397,7 +397,7 @@ def push_pipeline_findings(
         return DefectDojoPushResult(findings=len(findings), error=str(exc))
 
     test_id = _maybe_int(resp.get("test"))
-    engagement_id = _maybe_int(resp.get("engagement"))
+    engagement_id = extract_engagement_id(resp)
     logger.info(
         "DefectDojo: pushed %d finding(s) repo=%s product=%s engagement=%s "
         "test_id=%s scan_mode=%s close_old_findings=%s",
@@ -415,6 +415,21 @@ def push_pipeline_findings(
         test_id=test_id,
         engagement_id=engagement_id,
     )
+
+
+def extract_engagement_id(resp: dict[str, Any]) -> int | None:
+    """ID engagement из ответа ``/api/v2/reimport-scan/`` (поля различаются по версии DD)."""
+    for key in ("engagement_id", "engagement"):
+        parsed = _maybe_int(resp.get(key))
+        if parsed is not None:
+            return parsed
+    test = resp.get("test")
+    if isinstance(test, dict):
+        for key in ("engagement_id", "engagement"):
+            parsed = _maybe_int(test.get(key))
+            if parsed is not None:
+                return parsed
+    return None
 
 
 def _maybe_int(value: object) -> int | None:

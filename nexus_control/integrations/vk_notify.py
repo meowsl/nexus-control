@@ -20,6 +20,7 @@ from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
     apply_vk_teams_vault,
+    merge_inline_keyboards,
     upload_keyboard,
 )
 from nexus_control.scheduler.models import ScheduleRule
@@ -248,13 +249,10 @@ def _format_time_range(meta: ScanRunMeta | None) -> str:
     return f"{start} - {end}"
 
 
-def _defectdojo_link(settings: Settings, meta: ScanRunMeta | None) -> str | None:
+def _defectdojo_url(settings: Settings, meta: ScanRunMeta | None) -> str | None:
     if meta is None:
         return None
-    url = defectdojo_engagement_url(settings, meta.defectdojo_engagement_id)
-    if not url:
-        return None
-    return f'<a href="{html.escape(url)}">Смотреть в DefectDojo</a>'
+    return defectdojo_engagement_url(settings, meta.defectdojo_engagement_id)
 
 
 def _format_repo_block(
@@ -274,13 +272,38 @@ def _format_repo_block(
         "",
         f"📦 <b>{html.escape(repo)}</b>",
         f"✅ Артефакты без уязвимостей: {passed}",
-        f"⚠️ Выявлено проблем: {failed}",
+        f"⚠️ Выявлено уязвимостей: {failed}",
     ]
-    dd_link = _defectdojo_link(settings, meta)
-    if dd_link:
-        lines.append("")
-        lines.append(dd_link)
     return "\n".join(lines)
+
+
+def build_rule_notify_keyboard(
+    settings: Settings,
+    rule: ScheduleRule,
+    metas_by_repo: dict[str, ScanRunMeta | None],
+    *,
+    upload_callback: str | None = None,
+) -> list[list[dict[str, str]]] | None:
+    """Inline-кнопки: Upload (callback) + DefectDojo (url) только при FAIL > 0."""
+    upload_rows = upload_keyboard(upload_callback) if upload_callback else None
+
+    dd_rows: list[list[dict[str, str]]] = []
+    vuln_repos: list[tuple[str, str]] = []
+    for repo in rule.repos:
+        meta = metas_by_repo.get(repo)
+        if meta is None or meta.totals.failed <= 0:
+            continue
+        url = _defectdojo_url(settings, meta)
+        if url:
+            vuln_repos.append((repo, url))
+
+    for repo, url in vuln_repos:
+        label = "Смотреть в DefectDojo"
+        if len(vuln_repos) > 1:
+            label = f"{repo} · DefectDojo"
+        dd_rows.append([{"text": label, "url": url}])
+
+    return merge_inline_keyboards(upload_rows, dd_rows)
 
 
 def build_rule_message(
@@ -343,6 +366,7 @@ def notify_rule_finished(
 
     keyboard = None
     pending: PendingUpload | None = None
+    upload_callback: str | None = None
     show_button = (
         settings.vk_teams_upload_button
         and not rule.wants_upload()
@@ -362,7 +386,14 @@ def notify_rule_finished(
             created_at=time.time(),
             chat_id=chat_id,
         )
-        keyboard = upload_keyboard(f"{CALLBACK_PREFIX}{token}")
+        upload_callback = f"{CALLBACK_PREFIX}{token}"
+
+    keyboard = build_rule_notify_keyboard(
+        settings,
+        rule,
+        metas_by_repo,
+        upload_callback=upload_callback,
+    )
 
     try:
         response = bot.send_text(
