@@ -42,6 +42,9 @@ _upload_lock = threading.Lock()
 _upload_busy = False
 _upload_thread: threading.Thread | None = None
 
+_events_poll_lock = threading.Lock()
+_events_poll_disabled_keys: set[str] = set()
+
 
 @dataclass(slots=True)
 class PendingUpload:
@@ -169,7 +172,15 @@ def _events_poll_path(settings: Settings) -> Path:
     return _vk_root(settings) / EVENTS_POLL_FILENAME
 
 
+def _events_poll_key(settings: Settings) -> str:
+    return str(Path(settings.nexus_cache_dir).expanduser().resolve())
+
+
 def _events_poll_disabled(settings: Settings) -> bool:
+    key = _events_poll_key(settings)
+    with _events_poll_lock:
+        if key in _events_poll_disabled_keys:
+            return True
     path = _events_poll_path(settings)
     if not path.is_file():
         return False
@@ -177,10 +188,17 @@ def _events_poll_disabled(settings: Settings) -> bool:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return False
-    return bool(data.get("disabled"))
+    disabled = bool(data.get("disabled"))
+    if disabled:
+        with _events_poll_lock:
+            _events_poll_disabled_keys.add(key)
+    return disabled
 
 
 def _disable_events_poll(settings: Settings, reason: str) -> None:
+    key = _events_poll_key(settings)
+    with _events_poll_lock:
+        _events_poll_disabled_keys.add(key)
     path = _events_poll_path(settings)
     ensure_dir(path.parent, mode=0o700)
     payload = {"disabled": True, "reason": reason}
@@ -193,6 +211,9 @@ def _disable_events_poll(settings: Settings, reason: str) -> None:
 
 def clear_events_poll_disabled(settings: Settings) -> None:
     """Re-enable events/get after vk-teams configure."""
+    key = _events_poll_key(settings)
+    with _events_poll_lock:
+        _events_poll_disabled_keys.discard(key)
     path = _events_poll_path(settings)
     try:
         path.unlink(missing_ok=True)
@@ -200,8 +221,14 @@ def clear_events_poll_disabled(settings: Settings) -> None:
         logger.debug("Failed to clear events poll disable flag: %s", exc)
 
 
-def _is_invalid_vk_token(exc: VkTeamsError) -> bool:
-    return "invalid token" in str(exc).lower()
+def _is_invalid_vk_token(exc: BaseException) -> bool:
+    msg = str(exc).casefold()
+    return (
+        "invalid token" in msg
+        or "invalid bot token" in msg
+        or "unauthorized" in msg
+        or "auth failed" in msg
+    )
 
 
 def vk_teams_configured(settings: Settings) -> bool:
@@ -667,14 +694,13 @@ def poll_and_handle_events(
                 return _process_polled_events(settings, bot, events, last_id=0)
 
         if _is_invalid_vk_token(exc):
-            if not _events_poll_disabled(settings):
-                _disable_events_poll(settings, str(exc))
-                logger.error(
-                    "VK Teams events/get disabled (%s). Notifications still work, "
-                    "but Upload button callbacks will not until events API accepts "
-                    "the token (restart scheduler after vk-teams configure).",
-                    exc,
-                )
+            _disable_events_poll(settings, str(exc))
+            logger.error(
+                "VK Teams events/get disabled (%s). Notifications still work, "
+                "but Upload button callbacks will not until events API accepts "
+                "the token (set vk_teams_upload_button=false or run vk-teams configure).",
+                exc,
+            )
             return last_id
 
         logger.warning("VK Teams getEvents failed: %s", exc)

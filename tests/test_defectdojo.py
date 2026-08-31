@@ -15,6 +15,7 @@ from nexus_control.integrations.defectdojo import (
     DefectDojoVault,
     build_generic_report,
     collect_findings,
+    defectdojo_test_title,
     extract_engagement_id,
     map_severity,
     push_pipeline_findings,
@@ -236,7 +237,23 @@ def test_push_calls_reimport(tmp_path: Path) -> None:
     assert args[0]["findings"][0]["cve"] == "CVE-2020-1"
 
 
-def test_full_scan_closes_old_findings(tmp_path: Path) -> None:
+def test_defectdojo_test_title_scoped_by_path_filters() -> None:
+    assert defectdojo_test_title("maven-hosted") == "nexus-control maven-hosted"
+    assert (
+        defectdojo_test_title("maven-hosted", path_scope="com/")
+        == "nexus-control maven-hosted [com/]"
+    )
+    assert (
+        defectdojo_test_title("maven-hosted", path_scope="exclude:com/")
+        == "nexus-control maven-hosted [exclude:com/]"
+    )
+    assert (
+        defectdojo_test_title("maven-hosted", rule_id="maven-com")
+        == "nexus-control maven-hosted [maven-com]"
+    )
+
+
+def test_full_scan_closes_old_findings_within_scoped_test(tmp_path: Path) -> None:
     settings = Settings(
         nexus_url="http://nexus:8081",
         nexus_cache_dir=tmp_path,
@@ -270,8 +287,54 @@ def test_full_scan_closes_old_findings(tmp_path: Path) -> None:
         "nexus_control.integrations.defectdojo.DefectDojoClient.reimport_generic_findings",
         return_value={"test": 1, "engagement": 2},
     ) as mock_reimport:
-        push_pipeline_findings(settings, summary)
+        push_pipeline_findings(
+            settings,
+            summary,
+            path_scope="com/",
+        )
     assert mock_reimport.call_args.kwargs["close_old_findings"] is True
+    assert (
+        mock_reimport.call_args.kwargs["test_title"]
+        == "nexus-control maven-hosted [com/]"
+    )
+
+
+def test_exclude_scope_uses_separate_defectdojo_test(tmp_path: Path) -> None:
+    settings = Settings(
+        nexus_url="http://nexus:8081",
+        nexus_cache_dir=tmp_path,
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "rp",
+        verified_root=tmp_path / "vf",
+        archive_root=tmp_path / "ar",
+        log_file=tmp_path / "log.log",
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+        defectdojo_api_key="tok",
+    )
+    summary = PipelineSummary(
+        repository="maven-hosted",
+        scan_mode="full",
+        results=[
+            _fail_result(
+                "org/example/lib/1.0/lib-1.0.jar",
+                [Vulnerability(id="CVE-2020-2", severity=Severity.HIGH)],
+            )
+        ],
+    )
+    with patch(
+        "nexus_control.integrations.defectdojo.DefectDojoClient.reimport_generic_findings",
+        return_value={"test": 2, "engagement": 2},
+    ) as mock_reimport:
+        push_pipeline_findings(
+            settings,
+            summary,
+            path_scope="exclude:com/",
+        )
+    assert (
+        mock_reimport.call_args.kwargs["test_title"]
+        == "nexus-control maven-hosted [exclude:com/]"
+    )
 
 
 def test_extract_engagement_id_accepts_both_field_names() -> None:

@@ -637,12 +637,21 @@ def _vk_poll_during_job(settings: Settings) -> Iterator[None]:
 
     def _run() -> None:
         while not stop.is_set():
+            if not vk_teams_should_poll(settings):
+                if stop.wait(1.0):
+                    return
+                continue
             try:
                 poll_and_handle_events(settings, poll_time=VK_BUSY_POLL_TIME)
             except Exception:  # noqa: BLE001
                 logger.exception("VK Teams event poll failed (busy)")
                 if stop.wait(1.0):
                     return
+                continue
+            if not vk_teams_should_poll(settings):
+                if stop.wait(1.0):
+                    return
+                continue
             if stop.wait(0.05):
                 return
 

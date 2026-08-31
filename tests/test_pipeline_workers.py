@@ -78,7 +78,7 @@ def test_pipeline_parallel_downloads_overlap(tmp_path: Path) -> None:
     )
     pipeline.verifier.write_scanner_reports = lambda summary: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda summary: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda summary: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda summary, **kwargs: None  # type: ignore[method-assign]
 
     items = [_asset(f"pkg/{i}/a.jar") for i in range(6)]
     summary = pipeline.run(
@@ -139,7 +139,7 @@ def test_pipeline_workers_one_is_sequential(tmp_path: Path) -> None:
     )  # type: ignore[method-assign]
     pipeline.verifier.write_scanner_reports = lambda summary: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda summary: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda summary: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda summary, **kwargs: None  # type: ignore[method-assign]
 
     items = [_asset(f"pkg/{i}/a.jar") for i in range(3)]
     pipeline.run(repository="repo", items=items, workers=1)
@@ -192,7 +192,7 @@ def test_verify_downloads_sidecars_only_for_passed_main(tmp_path: Path) -> None:
     )
     pipeline.verifier.write_scanner_reports = lambda summary: None  # type: ignore[method-assign]
     pipeline.verifier.write_manifest = lambda summary: None  # type: ignore[method-assign]
-    pipeline.verifier.write_unverified_list = lambda summary: None  # type: ignore[method-assign]
+    pipeline.verifier.write_unverified_list = lambda summary, **kwargs: None  # type: ignore[method-assign]
 
     items = [
         _asset("pkg/good.jar"),

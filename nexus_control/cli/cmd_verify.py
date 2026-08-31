@@ -24,7 +24,7 @@ from nexus_control.services.resource_governor import DiskPressureError, resolve_
 from nexus_control.services.resource_pipeline import run_resourced_pipeline
 from nexus_control.services.scan_checkpoint import parse_scan_mode
 from nexus_control.services.scan_common import parse_scanner_names, parse_severity_threshold
-from nexus_control.utils.path_prefixes import format_path_filters
+from nexus_control.utils.path_prefixes import format_path_filters, normalize_path_prefixes
 from nexus_control.services.scan_history import record_scan_run
 from nexus_control.services.verified_uploader import VerifiedUploader
 
@@ -85,6 +85,10 @@ def run_verify(args: Namespace) -> int:
             return 2
         use_checkpoints = scan_mode == "incremental"
         ignore_checkpoint_ttl = scan_mode == "incremental"
+        scan_include_prefixes = normalize_path_prefixes(args.path_prefix) or None
+        scan_exclude_prefixes = (
+            normalize_path_prefixes(getattr(args, "exclude_prefix", None)) or None
+        )
 
         severity_arg = getattr(args, "severity", None)
         if severity_arg:
@@ -178,6 +182,8 @@ def run_verify(args: Namespace) -> int:
                     history_workers=args.workers,
                     history_checkpoint_skipped=selection.checkpoint_skipped,
                     skip_defectdojo=True,
+                    scan_include_prefixes=scan_include_prefixes,
+                    scan_exclude_prefixes=scan_exclude_prefixes,
                 )
                 upload_info = {
                     "target": upload_summary.target_repository,
@@ -323,6 +329,8 @@ def run_verify(args: Namespace) -> int:
                 history_checkpoint_skipped=selection.checkpoint_skipped,
                 extra_pass_results=extra_pass,
                 scan_mode=scan_mode,
+                scan_include_prefixes=scan_include_prefixes,
+                scan_exclude_prefixes=scan_exclude_prefixes,
             )
         except DiskPressureError as exc:
             console.print(f"[red]Disk pressure:[/red] {exc}")
