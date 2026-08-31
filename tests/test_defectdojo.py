@@ -278,6 +278,7 @@ def test_extract_engagement_id_accepts_both_field_names() -> None:
     assert extract_engagement_id({"engagement": 7}) == 7
     assert extract_engagement_id({"engagement_id": 9}) == 9
     assert extract_engagement_id({"test": {"engagement_id": 11}}) == 11
+    assert extract_engagement_id({"engagement": {"id": 13}}) == 13
     assert extract_engagement_id({}) is None
 
 

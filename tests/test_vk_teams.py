@@ -18,9 +18,11 @@ from nexus_control.integrations.vk_notify import (
     PendingUploadStore,
     build_rule_message,
     build_rule_notify_keyboard,
+    clear_events_poll_disabled,
     format_vk_datetime,
     handle_callback,
     notify_rule_finished,
+    poll_and_handle_events,
     should_notify,
     upload_in_flight,
     vk_teams_configured,
@@ -289,6 +291,64 @@ def test_notify_rule_finished_adds_defectdojo_button(tmp_path: Path) -> None:
     ]
 
 
+def test_build_rule_notify_keyboard_defectdojo_url_without_engagement_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+    )
+    rule = ScheduleRule(
+        id="nightly",
+        cron="0 3 * * *",
+        repos=["test-npm"],
+        action="verify",
+    )
+    monkeypatch.setattr(
+        "nexus_control.integrations.vk_notify.resolve_defectdojo_engagement_url",
+        lambda _s, *, repository, engagement_id: (
+            f"http://localhost:8080/engagement/77"
+            if repository == "test-npm" and engagement_id is None
+            else None
+        ),
+    )
+    keyboard = build_rule_notify_keyboard(
+        settings,
+        rule,
+        {
+            "test-npm": _meta("test-npm", passed=1, failed=3, scanned=4),
+        },
+    )
+    assert keyboard == [
+        [{"text": "Смотреть в DefectDojo", "url": "http://localhost:8080/engagement/77"}]
+    ]
+
+
+def test_poll_and_handle_events_disables_on_invalid_token(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = MagicMock(spec=VkTeamsClient)
+    client.get_events.side_effect = VkTeamsError("VK Teams API error: Invalid token")
+
+    assert poll_and_handle_events(settings, poll_time=1, client=client) == 0
+    assert vk_teams_should_poll(settings) is False
+    client.get_events.assert_called()
+
+    poll_and_handle_events(settings, poll_time=1, client=client)
+    assert client.get_events.call_count == 1
+
+
+def test_clear_events_poll_disabled_re_enables_poll(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = MagicMock(spec=VkTeamsClient)
+    client.get_events.side_effect = VkTeamsError("VK Teams API error: Invalid token")
+    poll_and_handle_events(settings, poll_time=1, client=client)
+    assert vk_teams_should_poll(settings) is False
+    clear_events_poll_disabled(settings)
+    assert vk_teams_should_poll(settings) is True
+
+
 def test_build_rule_message_manual_verify_upload(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     rule = ScheduleRule(
@@ -485,11 +545,11 @@ def test_client_send_text_posts(monkeypatch: pytest.MonkeyPatch) -> None:
         inline_keyboard=upload_keyboard("up:x"),
     )
     assert out["ok"] is True
-    assert captured["method"] == "POST"
+    assert captured["method"] == "GET"
     assert captured["path"] == "/messages/sendText"
     assert captured["params"]["token"] == "t"
-    assert captured["data"]["chatId"] == "chat"
-    assert "inlineKeyboardMarkup" in captured["data"]
+    assert captured["params"]["chatId"] == "chat"
+    assert "inlineKeyboardMarkup" in captured["params"]
 
 
 def test_client_api_error(monkeypatch: pytest.MonkeyPatch) -> None:

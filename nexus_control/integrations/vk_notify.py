@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import threading
 import time
@@ -15,7 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from nexus_control.config import Settings
-from nexus_control.integrations.defectdojo import defectdojo_engagement_url
+from nexus_control.integrations.defectdojo import resolve_defectdojo_engagement_url
 from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
@@ -35,6 +36,7 @@ PENDING_TTL_SEC = 24 * 3600
 CALLBACK_PREFIX = "up:"
 LAST_EVENT_FILENAME = "last_event_id"
 PENDING_FILENAME = "pending.json"
+EVENTS_POLL_FILENAME = "events_poll.json"
 
 _upload_lock = threading.Lock()
 _upload_busy = False
@@ -163,6 +165,45 @@ class PendingUploadStore:
             del self._items[key]
 
 
+def _events_poll_path(settings: Settings) -> Path:
+    return _vk_root(settings) / EVENTS_POLL_FILENAME
+
+
+def _events_poll_disabled(settings: Settings) -> bool:
+    path = _events_poll_path(settings)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return bool(data.get("disabled"))
+
+
+def _disable_events_poll(settings: Settings, reason: str) -> None:
+    path = _events_poll_path(settings)
+    ensure_dir(path.parent, mode=0o700)
+    payload = {"disabled": True, "reason": reason}
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        path.chmod(0o600)
+    except OSError as exc:
+        logger.debug("Failed to persist events poll disable flag: %s", exc)
+
+
+def clear_events_poll_disabled(settings: Settings) -> None:
+    """Re-enable events/get after vk-teams configure."""
+    path = _events_poll_path(settings)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.debug("Failed to clear events poll disable flag: %s", exc)
+
+
+def _is_invalid_vk_token(exc: VkTeamsError) -> bool:
+    return "invalid token" in str(exc).lower()
+
+
 def vk_teams_configured(settings: Settings) -> bool:
     cfg = apply_vk_teams_vault(settings)
     token = str(getattr(cfg, "vk_teams_token", "") or "").strip()
@@ -177,7 +218,9 @@ def vk_teams_should_poll(settings: Settings) -> bool:
     token = str(getattr(cfg, "vk_teams_token", "") or "").strip()
     chat_id = str(getattr(cfg, "vk_teams_chat_id", "") or "").strip()
     upload_button = bool(getattr(cfg, "vk_teams_upload_button", False))
-    return bool(token and chat_id and upload_button)
+    if not (token and chat_id and upload_button):
+        return False
+    return not _events_poll_disabled(cfg)
 
 
 def upload_in_flight() -> bool:
@@ -249,10 +292,19 @@ def _format_time_range(meta: ScanRunMeta | None) -> str:
     return f"{start} - {end}"
 
 
-def _defectdojo_url(settings: Settings, meta: ScanRunMeta | None) -> str | None:
+def _defectdojo_url(
+    settings: Settings,
+    meta: ScanRunMeta | None,
+    *,
+    repository: str,
+) -> str | None:
     if meta is None:
         return None
-    return defectdojo_engagement_url(settings, meta.defectdojo_engagement_id)
+    return resolve_defectdojo_engagement_url(
+        settings,
+        repository=repository,
+        engagement_id=meta.defectdojo_engagement_id,
+    )
 
 
 def _format_repo_block(
@@ -293,9 +345,17 @@ def build_rule_notify_keyboard(
         meta = metas_by_repo.get(repo)
         if meta is None or meta.totals.failed <= 0:
             continue
-        url = _defectdojo_url(settings, meta)
+        url = _defectdojo_url(settings, meta, repository=repo)
         if url:
             vuln_repos.append((repo, url))
+        elif meta.totals.failed > 0:
+            logger.info(
+                "VK Teams: no DefectDojo button for %s "
+                "(engagement_id=%s, defectdojo_enabled=%s)",
+                repo,
+                meta.defectdojo_engagement_id,
+                bool(getattr(settings, "defectdojo_enabled", False)),
+            )
 
     for repo, url in vuln_repos:
         label = "Смотреть в DefectDojo"
@@ -589,15 +649,47 @@ def poll_and_handle_events(
     settings = apply_vk_teams_vault(settings)
     if not settings.vk_teams_token.strip():
         return _load_last_event_id(settings)
+    if _events_poll_disabled(settings):
+        return _load_last_event_id(settings)
 
     bot = client or VkTeamsClient.from_settings(settings)
     last_id = _load_last_event_id(settings)
     try:
         events = bot.get_events(last_id, poll_time=poll_time)
     except VkTeamsError as exc:
+        if _is_invalid_vk_token(exc) and last_id != 0:
+            _save_last_event_id(settings, 0)
+            try:
+                events = bot.get_events(0, poll_time=poll_time)
+            except VkTeamsError as retry_exc:
+                exc = retry_exc
+            else:
+                return _process_polled_events(settings, bot, events, last_id=0)
+
+        if _is_invalid_vk_token(exc):
+            if not _events_poll_disabled(settings):
+                _disable_events_poll(settings, str(exc))
+                logger.error(
+                    "VK Teams events/get disabled (%s). Notifications still work, "
+                    "but Upload button callbacks will not until events API accepts "
+                    "the token (restart scheduler after vk-teams configure).",
+                    exc,
+                )
+            return last_id
+
         logger.warning("VK Teams getEvents failed: %s", exc)
         return last_id
 
+    return _process_polled_events(settings, bot, events, last_id=last_id)
+
+
+def _process_polled_events(
+    settings: Settings,
+    bot: VkTeamsClient,
+    events: list,
+    *,
+    last_id: int,
+) -> int:
     max_id = last_id
     for event in events:
         if event.event_id > max_id:

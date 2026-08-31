@@ -323,18 +323,110 @@ class DefectDojoClient:
         except ValueError:
             return {"status_code": response.status_code}
 
+    def find_engagement_id(
+        self,
+        *,
+        product_name: str,
+        engagement_name: str,
+    ) -> int | None:
+        """Найти engagement по имени продукта и engagement (UI deep-link fallback)."""
+        headers = {"Authorization": f"Token {self.api_key}"}
+        with httpx.Client(
+            base_url=self.base_url,
+            verify=self.verify_ssl,
+            timeout=self.timeout,
+            follow_redirects=True,
+        ) as client:
+            response = client.get(
+                "/api/v2/engagements/",
+                params={"name": engagement_name, "limit": 50},
+                headers=headers,
+            )
+        if response.status_code >= 400:
+            logger.warning(
+                "DefectDojo engagement lookup failed HTTP %s: %s",
+                response.status_code,
+                (response.text or "")[:300],
+            )
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        results = body.get("results") if isinstance(body, dict) else None
+        if not isinstance(results, list):
+            return None
+        product_l = product_name.strip().lower()
+        engagement_l = engagement_name.strip().lower()
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("name") or "").strip().lower() != engagement_l:
+                continue
+            product = item.get("product")
+            if isinstance(product, dict):
+                pname = str(product.get("name") or "").strip().lower()
+                if pname and pname != product_l:
+                    continue
+            parsed = _maybe_int(item.get("id"))
+            if parsed is not None:
+                return parsed
+        if len(results) == 1 and isinstance(results[0], dict):
+            return _maybe_int(results[0].get("id"))
+        return None
+
 
 def defectdojo_engagement_url(settings: Settings, engagement_id: int | None) -> str | None:
-    """Публичный URL engagement в UI DefectDojo, если интеграция включена."""
+    """Публичный URL engagement в UI DefectDojo."""
     if engagement_id is None:
         return None
     cfg = resolve_defectdojo_settings(settings)
-    if not cfg.defectdojo_enabled:
-        return None
     base = (cfg.defectdojo_url or "").strip().rstrip("/")
     if not base:
         return None
     return f"{base}/engagement/{int(engagement_id)}"
+
+
+def defectdojo_engagement_url_for_repo(
+    settings: Settings,
+    repository: str,
+) -> str | None:
+    """Fallback: найти engagement по имени репозитория через DefectDojo API."""
+    cfg = resolve_defectdojo_settings(settings)
+    if not cfg.defectdojo_enabled:
+        return None
+    url = (cfg.defectdojo_url or "").strip().rstrip("/")
+    api_key = (cfg.defectdojo_api_key or "").strip()
+    if not url or not api_key:
+        return None
+    product = (cfg.defectdojo_product_name or "nexus-control").strip() or "nexus-control"
+    engagement = (cfg.defectdojo_engagement_name or "").strip() or repository
+    client = DefectDojoClient(
+        base_url=url,
+        api_key=api_key,
+        verify_ssl=cfg.defectdojo_verify_ssl,
+        timeout=max(30.0, float(cfg.nexus_timeout)),
+    )
+    engagement_id = client.find_engagement_id(
+        product_name=product,
+        engagement_name=engagement,
+    )
+    return defectdojo_engagement_url(cfg, engagement_id)
+
+
+def resolve_defectdojo_engagement_url(
+    settings: Settings,
+    *,
+    repository: str,
+    engagement_id: int | None,
+) -> str | None:
+    """URL engagement для уведомлений: id из history или lookup по имени."""
+    url = defectdojo_engagement_url(settings, engagement_id)
+    if url:
+        return url
+    if engagement_id is not None:
+        return None
+    return defectdojo_engagement_url_for_repo(settings, repository)
 
 
 def push_pipeline_findings(
@@ -398,6 +490,17 @@ def push_pipeline_findings(
 
     test_id = _maybe_int(resp.get("test"))
     engagement_id = extract_engagement_id(resp)
+    if engagement_id is None and findings:
+        engagement_id = client.find_engagement_id(
+            product_name=product,
+            engagement_name=engagement,
+        )
+        if engagement_id is not None:
+            logger.info(
+                "DefectDojo: resolved engagement id=%s for repo=%s via API lookup",
+                engagement_id,
+                summary.repository,
+            )
     logger.info(
         "DefectDojo: pushed %d finding(s) repo=%s product=%s engagement=%s "
         "test_id=%s scan_mode=%s close_old_findings=%s",
@@ -420,16 +523,26 @@ def push_pipeline_findings(
 def extract_engagement_id(resp: dict[str, Any]) -> int | None:
     """ID engagement из ответа ``/api/v2/reimport-scan/`` (поля различаются по версии DD)."""
     for key in ("engagement_id", "engagement"):
-        parsed = _maybe_int(resp.get(key))
+        parsed = _coerce_id(resp.get(key))
         if parsed is not None:
             return parsed
     test = resp.get("test")
     if isinstance(test, dict):
         for key in ("engagement_id", "engagement"):
-            parsed = _maybe_int(test.get(key))
+            parsed = _coerce_id(test.get(key))
             if parsed is not None:
                 return parsed
     return None
+
+
+def _coerce_id(value: object) -> int | None:
+    if isinstance(value, dict):
+        for key in ("id", "engagement_id", "engagement"):
+            parsed = _maybe_int(value.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+    return _maybe_int(value)
 
 
 def _maybe_int(value: object) -> int | None:
