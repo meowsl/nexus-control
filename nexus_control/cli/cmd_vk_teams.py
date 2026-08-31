@@ -13,7 +13,10 @@ from nexus_control.config import Settings, load_settings
 from nexus_control.config_io import read_toml, write_toml_atomic
 from nexus_control.config_paths import resolve_config_path
 from nexus_control.i18n import set_locale
-from nexus_control.integrations.vk_notify import vk_teams_configured
+from nexus_control.integrations.vk_notify import (
+    clear_events_poll_disabled,
+    vk_teams_configured,
+)
 from nexus_control.integrations.vk_teams import (
     VkTeamsClient,
     VkTeamsError,
@@ -97,6 +100,7 @@ def _configure() -> int:
     data.pop("vk_teams_token", None)
     write_toml_atomic(path, data)
     vault.save(token, chat_id=chat_id)
+    clear_events_poll_disabled(cfg)
     console.print(f"Wrote {path}")
     console.print(f"Token saved to {vault.vault_path} (encrypted).")
     return 0
@@ -147,6 +151,22 @@ def _test() -> int:
         )
         return 2
     bot = VkTeamsClient.from_settings(cfg)
+    try:
+        bot.self_get()
+    except VkTeamsError as exc:
+        console.print(f"[yellow]VK Teams self/get warning:[/yellow] {exc}")
+    if cfg.vk_teams_upload_button:
+        try:
+            bot.get_events(0, poll_time=1)
+        except VkTeamsError as exc:
+            if "invalid token" in str(exc).lower():
+                console.print(
+                    "[yellow]VK Teams events/get rejected this token "
+                    "(sendText may still work). Upload button callbacks "
+                    "will not work until events API accepts the token.[/yellow]"
+                )
+            else:
+                console.print(f"[yellow]VK Teams events/get warning:[/yellow] {exc}")
     try:
         bot.send_text(
             cfg.vk_teams_chat_id,

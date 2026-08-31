@@ -235,19 +235,19 @@ class VkTeamsClient:
         parse_mode: str | None = "HTML",
         inline_keyboard: list[list[dict[str, str]]] | None = None,
     ) -> dict[str, Any]:
-        data: dict[str, Any] = {
+        params: dict[str, Any] = {
             "chatId": chat_id,
             "text": text,
         }
         if parse_mode:
-            data["parseMode"] = parse_mode
+            params["parseMode"] = parse_mode
         if inline_keyboard is not None:
-            data["inlineKeyboardMarkup"] = json.dumps(
+            params["inlineKeyboardMarkup"] = json.dumps(
                 inline_keyboard,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-        return self._request("POST", "/messages/sendText", data=data)
+        return self._request("GET", "/messages/sendText", params=params)
 
     def edit_text(
         self,
@@ -258,23 +258,27 @@ class VkTeamsClient:
         parse_mode: str | None = "HTML",
         inline_keyboard: list[list[dict[str, str]]] | None = None,
     ) -> dict[str, Any]:
-        data: dict[str, Any] = {
+        params: dict[str, Any] = {
             "chatId": chat_id,
             "msgId": str(msg_id),
             "text": text,
         }
         if parse_mode:
-            data["parseMode"] = parse_mode
+            params["parseMode"] = parse_mode
         if inline_keyboard is not None:
-            data["inlineKeyboardMarkup"] = json.dumps(
+            params["inlineKeyboardMarkup"] = json.dumps(
                 inline_keyboard,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
         else:
             # Empty keyboard removes buttons.
-            data["inlineKeyboardMarkup"] = "[]"
-        return self._request("POST", "/messages/editText", data=data)
+            params["inlineKeyboardMarkup"] = "[]"
+        return self._request("GET", "/messages/editText", params=params)
+
+    def self_get(self) -> dict[str, Any]:
+        """Bot identity probe (``/self/get``)."""
+        return self._request("GET", "/self/get")
 
     def answer_callback_query(
         self,
