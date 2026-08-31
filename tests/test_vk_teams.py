@@ -17,6 +17,7 @@ from nexus_control.integrations.vk_notify import (
     PendingUpload,
     PendingUploadStore,
     build_rule_message,
+    build_rule_notify_keyboard,
     format_vk_datetime,
     handle_callback,
     notify_rule_finished,
@@ -192,11 +193,100 @@ def test_build_rule_message_verify_only(tmp_path: Path) -> None:
     assert "<b>test-pypi</b>" in text
     assert "<b>test-npm</b>" in text
     assert "Артефакты без уязвимостей: 7" in text
-    assert "Выявлено проблем: 2" in text
+    assert "Выявлено уязвимостей: 2" in text
     assert "10.08.2026 06:00 - 10.08.2026 06:15" in text
     assert "10.08.2026 06:00 - 10.08.2026 06:20" in text
-    assert "Смотреть в DefectDojo" in text
-    assert "http://localhost:8080/engagement/42" in text
+    assert "DefectDojo" not in text
+
+    keyboard = build_rule_notify_keyboard(
+        settings,
+        rule,
+        {
+            "test-pypi": _meta(
+                "test-pypi",
+                passed=0,
+                failed=0,
+                scanned=0,
+                checkpoint_skipped=8,
+            ),
+            "test-npm": _meta(
+                "test-npm",
+                passed=7,
+                failed=2,
+                copied=7,
+                scanned=9,
+                defectdojo_engagement_id=42,
+            ),
+        },
+    )
+    assert keyboard is not None
+    assert keyboard[-1] == [
+        {"text": "Смотреть в DefectDojo", "url": "http://localhost:8080/engagement/42"}
+    ]
+
+
+def test_build_rule_notify_keyboard_skips_dd_without_failures(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+    )
+    rule = ScheduleRule(
+        id="nightly",
+        cron="0 3 * * *",
+        repos=["clean-repo"],
+        action="verify",
+    )
+    assert (
+        build_rule_notify_keyboard(
+            settings,
+            rule,
+            {
+                "clean-repo": _meta(
+                    "clean-repo",
+                    passed=10,
+                    failed=0,
+                    defectdojo_engagement_id=99,
+                ),
+            },
+        )
+        is None
+    )
+
+
+def test_notify_rule_finished_adds_defectdojo_button(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+        vk_teams_upload_button=False,
+    )
+    rule = ScheduleRule(
+        id="nightly",
+        cron="0 3 * * *",
+        repos=["npm-hosted"],
+        action="verify",
+    )
+    client = MagicMock(spec=VkTeamsClient)
+    client.send_text.return_value = {"ok": True, "msgId": "99"}
+    with patch(
+        "nexus_control.integrations.vk_notify.latest_run_for_repo",
+        return_value=_meta(
+            "npm-hosted",
+            passed=810,
+            failed=2,
+            scanned=812,
+            defectdojo_engagement_id=55,
+        ),
+    ):
+        notify_rule_finished(settings, rule, 1, client=client)
+
+    keyboard = client.send_text.call_args[1]["inline_keyboard"]
+    assert keyboard == [
+        [{"text": "Смотреть в DefectDojo", "url": "http://localhost:8080/engagement/55"}]
+    ]
 
 
 def test_build_rule_message_manual_verify_upload(tmp_path: Path) -> None:
@@ -216,7 +306,7 @@ def test_build_rule_message_manual_verify_upload(tmp_path: Path) -> None:
     assert "Сканирование <b>r1</b>" in text
     assert "— - —" in text
     assert "Артефакты без уязвимостей: 0" in text
-    assert "Выявлено проблем: 0" in text
+    assert "Выявлено уязвимостей: 0" in text
     assert "DefectDojo" not in text
 
 

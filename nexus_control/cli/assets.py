@@ -25,6 +25,7 @@ from nexus_control.nexus.uploads import (
     is_maven_repo_root_path,
     is_scan_package_asset,
     looks_like_nuget_metadata_path,
+    parse_maven_coordinates,
 )
 from nexus_control.services.pipeline import checkpoint_scanners_for_asset
 from nexus_control.services.scan_common import main_asset_path_for_sidecar
@@ -344,6 +345,8 @@ class _AssetSelector:
         self._mains: list[NexusAsset] = []
         self._main_paths: set[str] = set()
         self._sidecars: dict[str, list[NexusAsset]] = {}
+        self._seen_maven = False
+        self._have_maven_root = False
         self._settings = settings
         self._downloader = (
             Downloader(settings, client)
@@ -358,13 +361,22 @@ class _AssetSelector:
         self._progress_source = progress_source
         self._progress_every = max(1, progress_every)
 
-    @property
-    def limit_reached(self) -> bool:
+    def _caps_reached_for_new_mains(self) -> bool:
         if self.limit is not None and self.stats.download_needed >= self.limit:
             return True
         if self.scan_limit is not None and len(self._mains) >= self.scan_limit:
             return True
         return False
+
+    @property
+    def limit_reached(self) -> bool:
+        if not self._caps_reached_for_new_mains():
+            return False
+        # После cap продолжаем listing, пока не поймаем корневой
+        # archetype-catalog.xml / maven-metadata.xml (они часто в конце).
+        if self._seen_maven and not self._have_maven_root:
+            return False
+        return True
 
     def emit_progress(self, *, force: bool = False) -> None:
         if self._on_progress is None:
@@ -387,8 +399,22 @@ class _AssetSelector:
         if not allowed:
             self.emit_progress()
             return
+        if (
+            (asset.format or "").lower() == "maven2"
+            or is_maven_repo_root_path(path)
+            or parse_maven_coordinates(path) is not None
+        ):
+            self._seen_maven = True
         main_path = main_asset_path_for_sidecar(path)
         if main_path is not None:
+            after_cap = self._caps_reached_for_new_mains()
+            if (
+                after_cap
+                and main_path not in self._main_paths
+                and not is_maven_repo_root_path(main_path)
+            ):
+                self.emit_progress()
+                return
             self._sidecars.setdefault(main_path, []).append(asset)
             self.emit_progress()
             return
@@ -398,7 +424,12 @@ class _AssetSelector:
         ):
             self.emit_progress()
             return
-        if self.scan_limit is not None and len(self._mains) >= self.scan_limit:
+        maven_root = is_maven_repo_root_path(path)
+        if (
+            self.scan_limit is not None
+            and len(self._mains) >= self.scan_limit
+            and not maven_root
+        ):
             self.emit_progress()
             return
         if self._downloader is not None and self._settings is not None:
@@ -407,11 +438,16 @@ class _AssetSelector:
                 if (
                     self.limit is not None
                     and self.stats.download_needed >= self.limit
+                    and not maven_root
                 ):
                     self.emit_progress()
                     return
                 self.stats.download_needed += 1
-            elif self._use_checkpoints and inspection.local_path is not None:
+            elif (
+                self._use_checkpoints
+                and inspection.local_path is not None
+                and not maven_root
+            ):
                 ck_scanners = checkpoint_scanners_for_asset(
                     self._scanners,
                     asset_fmt=asset.format,
@@ -443,10 +479,13 @@ class _AssetSelector:
                 self.stats.scan_only += 1
         elif self.limit is not None and len(self._mains) >= self.limit:
             # Без downloader ``limit`` трактуем как max mains (legacy).
-            self.emit_progress()
-            return
+            if not maven_root:
+                self.emit_progress()
+                return
         self._mains.append(asset)
         self._main_paths.add(path)
+        if maven_root:
+            self._have_maven_root = True
         self.emit_progress()
 
     def finish(self) -> list[NexusAsset]:

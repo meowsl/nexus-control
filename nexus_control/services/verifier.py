@@ -22,6 +22,7 @@ from nexus_control.utils.fs import (
     read_json,
     write_json,
 )
+from nexus_control.nexus.uploads import is_maven_repo_metadata_path
 from nexus_control.utils.safe_path import (
     UnsafePathError,
     asset_verified_path,
@@ -190,7 +191,15 @@ class Verifier:
     def write_manifest(self, summary: PipelineSummary) -> Path:
         repo_dir = self.verified_dir(summary.repository)
         ensure_dir(repo_dir)
-        passed = [r for r in summary.results if r.verdict == Verdict.PASS]
+        passed = [
+            r
+            for r in summary.results
+            if r.verdict == Verdict.PASS
+            or (
+                r.verdict == Verdict.SKIPPED
+                and is_maven_repo_metadata_path(r.asset_path)
+            )
+        ]
         from nexus_control.services.verified_uploader import collect_revoke_mains
 
         failed_paths = collect_revoke_mains(summary)

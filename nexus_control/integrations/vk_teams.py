@@ -333,3 +333,14 @@ def upload_keyboard(callback_data: str, *, label: str = "Загрузить в N
 ]:
     """Одна кнопка «Загрузить в Nexus» с callbackData ``up:<token>``."""
     return [[{"text": label, "callbackData": callback_data}]]
+
+
+def merge_inline_keyboards(
+    *keyboards: list[list[dict[str, str]]] | None,
+) -> list[list[dict[str, str]]] | None:
+    """Склеить несколько inline-клавиатур (каждая строка — отдельный ряд кнопок)."""
+    rows: list[list[dict[str, str]]] = []
+    for keyboard in keyboards:
+        if keyboard:
+            rows.extend(keyboard)
+    return rows or None

@@ -37,7 +37,11 @@ from nexus_control.services.scan_common import (
 )
 from nexus_control.services.trivy_scanner import TrivyScanner
 from nexus_control.services.verifier import Verifier, apply_verify_for_result
-from nexus_control.nexus.uploads import is_nuget_package_path, is_scan_package_asset
+from nexus_control.nexus.uploads import (
+    is_maven_repo_metadata_path,
+    is_nuget_package_path,
+    is_scan_package_asset,
+)
 from nexus_control.services.nuget_osv import is_nupkg_local_path
 
 logger = logging.getLogger(__name__)
@@ -529,6 +533,17 @@ class PipelineService:
                         verdict=Verdict.SKIPPED,
                         scanner=name,
                     )
+            elif is_maven_repo_metadata_path(asset_path):
+                logger.info(
+                    "Skipping vulnerability scan for Maven repo metadata: %s",
+                    asset_path,
+                )
+                for name in enabled:
+                    scans[name] = ScanResult(
+                        status=ScanStatus.SKIPPED,
+                        verdict=Verdict.SKIPPED,
+                        scanner=name,
+                    )
             elif not dl.local_path:
                 for name in enabled:
                     scans[name] = ScanResult(
@@ -582,6 +597,20 @@ class PipelineService:
                 result,
                 is_docker=isinstance(item, DockerTag),
                 tag=item.tag if isinstance(item, DockerTag) else None,
+            )
+        elif (
+            verify
+            and is_maven_repo_metadata_path(asset_path)
+            and result.verdict == Verdict.SKIPPED
+            and dl.local_path is not None
+            and dl.status != DownloadStatus.ERROR
+        ):
+            report(asset_path, "verify")
+            result.verify = self.verifier.copy_if_pass(
+                repository=repository,
+                asset_path=asset_path,
+                local_path=dl.local_path,
+                is_docker=False,
             )
         elif (
             verify
@@ -820,7 +849,9 @@ def _main_artifact_verified(
     for result in results:
         if result.asset_path != main_asset_path:
             continue
-        if result.verdict != Verdict.PASS:
-            return False
-        return bool(result.verify.copied or result.verify.skipped_existing)
+        if result.verdict == Verdict.PASS:
+            return bool(result.verify.copied or result.verify.skipped_existing)
+        if is_maven_repo_metadata_path(result.asset_path):
+            return bool(result.verify.copied or result.verify.skipped_existing)
+        return False
     return False

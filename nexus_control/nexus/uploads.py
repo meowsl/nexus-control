@@ -253,18 +253,21 @@ _MAVEN_ROOT_FILES = ("archetype-catalog.xml", "maven-metadata.xml")
 _MAVEN_MANGLED_DIR_SUFFIXES = (".jar.", ".pom.", ".war.", ".ear.", ".aar.")
 
 
+def is_maven_repo_metadata_path(asset_path: str) -> bool:
+    """True для ``maven-metadata.xml`` / ``archetype-catalog.xml`` и checksum sidecar'ов."""
+    name = PurePosixPath(str(asset_path).replace("\\", "/").lstrip("/")).name.lower()
+    return any(name == root or name.startswith(root + ".") for root in _MAVEN_ROOT_FILES)
+
+
 def is_maven_repo_root_path(asset_path: str) -> bool:
-    """True для файла в корне Maven-репозитория (без ``/`` в path).
+    """True для metadata-файла в корне Maven-репозитория (без ``/`` в path).
 
     ``archetype-catalog.xml`` / корневой ``maven-metadata.xml`` и их checksum
     sidecar'ы не лежат под GAV-префиксом вроде ``com/``, поэтому path-prefix
     фильтр их иначе выкидывает.
     """
     path = str(asset_path).replace("\\", "/").lstrip("/")
-    if not path or "/" in path:
-        return False
-    name = PurePosixPath(path).name.lower()
-    return any(name == root or name.startswith(root + ".") for root in _MAVEN_ROOT_FILES)
+    return bool(path) and "/" not in path and is_maven_repo_metadata_path(path)
 
 
 def is_maven_mangled_layout_path(asset_path: str) -> bool:
@@ -338,6 +341,8 @@ class RepositoryUploader:
                     f"expected {fmt_l!r}. Delete the old repository (e.g. leftover "
                     f"raw {name!r}) and retry Upload verified."
                 )
+            if fmt_l == "maven2":
+                self._ensure_maven_permissive_layout(name)
             return existing
 
         payload = build_hosted_create_payload(name, fmt_l)
@@ -360,6 +365,49 @@ class RepositoryUploader:
         if created is None:
             raise NexusAPIError(f"Repository {name!r} created but not visible via API")
         return created
+
+    def _ensure_maven_permissive_layout(self, name: str) -> None:
+        """STRICT layoutPolicy отклоняет корневой ``archetype-catalog.xml``."""
+        endpoint = f"/service/rest/v1/repositories/maven/hosted/{quote(name, safe='')}"
+        try:
+            response = self.client.get(endpoint, timeout=self.timeout)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Cannot read Maven repository config for %s: %s",
+                name,
+                exc,
+            )
+            return
+        if response.status_code != 200:
+            logger.warning(
+                "Cannot read Maven repository config for %s (HTTP %s)",
+                name,
+                response.status_code,
+            )
+            return
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning("Invalid Maven repository config JSON for %s", name)
+            return
+        if not isinstance(data, dict):
+            return
+        maven = data.get("maven")
+        if not isinstance(maven, dict):
+            maven = {}
+        if str(maven.get("layoutPolicy", "")).upper() == "PERMISSIVE":
+            return
+        maven["layoutPolicy"] = "PERMISSIVE"
+        data["maven"] = maven
+        logger.info("Setting Maven layoutPolicy=PERMISSIVE on %s", name)
+        put = self.client.put(endpoint, json=data, timeout=self.timeout)
+        if put.status_code not in {200, 201, 204}:
+            logger.warning(
+                "Failed to set layoutPolicy=PERMISSIVE on %s (HTTP %s): %s",
+                name,
+                put.status_code,
+                _safe_body(put),
+            )
 
     def upload_asset(
         self,
@@ -474,10 +522,15 @@ class RepositoryUploader:
         encoded = quote(rel, safe="/")
         url = f"/repository/{quote(repository, safe='')}/{encoded}"
         logger.info("Uploading %s -> maven://%s/%s", local_path, repository, rel)
+        content_type = (
+            "application/xml"
+            if PurePosixPath(rel).suffix.lower() == ".xml"
+            else "application/octet-stream"
+        )
         response = self.client.put(
             url,
             content=local_path.read_bytes(),
-            headers={"Content-Type": "application/octet-stream"},
+            headers={"Content-Type": content_type},
             timeout=max(self.timeout, 120.0),
         )
         if response.status_code in {200, 201, 204}:

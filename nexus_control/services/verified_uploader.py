@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from nexus_control.models import AssetPipelineResult, NexusAsset, PipelineSummary, Verdict
 from nexus_control.nexus.client import NexusAPIError, NexusClient
 from nexus_control.nexus.uploads import (
+    is_maven_repo_metadata_path,
     is_nuget_package_path,
     is_uploadable_asset,
     is_verified_local_sidecar,
@@ -226,6 +227,8 @@ def is_upload_result_candidate(
     key = _normalize_asset_path_key(result.asset_path)
     if result.verdict == Verdict.PASS:
         return True
+    if is_maven_repo_metadata_path(key) and result.verdict == Verdict.SKIPPED:
+        return True
     if result.verdict != Verdict.SKIPPED or not is_scan_ignored_path(key):
         return False
     main = main_asset_path_for_sidecar(key)
@@ -261,9 +264,13 @@ def collect_upload_items(summary: PipelineSummary) -> list[tuple[str, Path]]:
         add(result.asset_path, local)
 
     for result in summary.results:
-        if result.verdict != Verdict.PASS or not _verified_copy_ok(result):
+        if not _verified_copy_ok(result):
             continue
         if is_scan_ignored_path(result.asset_path):
+            continue
+        if result.verdict != Verdict.PASS and not is_maven_repo_metadata_path(
+            result.asset_path
+        ):
             continue
         local = result.verify.verified_path
         if local is None:

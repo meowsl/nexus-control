@@ -26,6 +26,7 @@ from nexus_control.models import (
     VerifyResult,
 )
 from nexus_control.nexus.uploads import (
+    is_maven_repo_root_path,
     is_uploadable_asset,
     is_verified_local_sidecar,
 )
@@ -97,6 +98,8 @@ def _path_allowed_by_manifest(rel: str, allowed: set[str]) -> bool:
     """PASS из manifest, либо checksum sidecar рядом с таким PASS."""
     key = rel.replace("\\", "/").lstrip("/")
     if key in allowed:
+        return True
+    if is_maven_repo_root_path(key):
         return True
     main = main_asset_path_for_sidecar(key)
     return bool(main and main.replace("\\", "/").lstrip("/") in allowed)

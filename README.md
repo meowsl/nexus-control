@@ -292,7 +292,7 @@ vk_teams_upload_button = true
 или, для CI, `VK_TEAMS_TOKEN` в окружении. Env/TOML перекрывают vault.
 
 - `failures` — только при `exit_code != 0` или FAIL/ERROR в истории прогона.
-- Сообщение по каждому репозиторию правила: заголовок («Плановое сканирование …» / «Сканирование …» при ручном `schedule run`), интервал времени (Europe/Moscow), PASS/FAIL, ссылка на DefectDojo engagement (если был push), кнопка **Загрузить в Nexus** для `action=verify`.
+- Сообщение по каждому репозиторию правила: заголовок («Плановое сканирование …» / «Сканирование …» при ручном `schedule run`), интервал времени (Europe/Moscow), PASS/FAIL, кнопка **Смотреть в DefectDojo** (если были уязвимости и push в DD прошёл), кнопка **Загрузить в Nexus** для `action=verify`.
 - При `verify_upload` кнопка не показывается (upload уже выполнен).
 - Callbacks обрабатывает **тот же** scheduler daemon (long-poll `events/get`
   в idle и коротким poll во время длинного verify). Upload идёт в фоне и не

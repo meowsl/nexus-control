@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from nexus_control.nexus.uploads import (
+    RepositoryUploader,
     build_hosted_create_payload,
     format_api_slug,
     is_maven_mangled_layout_path,
+    is_maven_repo_metadata_path,
     is_maven_repo_root_path,
     is_scan_package_asset,
     is_uploadable_asset,
@@ -117,6 +119,12 @@ def test_maven_repo_root_and_mangled_layout() -> None:
     assert is_maven_repo_root_path("archetype-catalog.xml")
     assert is_maven_repo_root_path("archetype-catalog.xml.sha1")
     assert is_maven_repo_root_path("maven-metadata.xml")
+    assert is_maven_repo_metadata_path("archetype-catalog.xml")
+    assert is_maven_repo_metadata_path("org/foo/maven-metadata.xml")
+    assert is_maven_repo_metadata_path("org/foo/maven-metadata.xml.sha1")
+    assert not is_maven_repo_metadata_path(
+        "org/foo/1.0/foo-1.0.jar"
+    )
     assert not is_maven_repo_root_path("org/foo/maven-metadata.xml")
     assert not is_maven_repo_root_path(
         "ru/cib/bss-fl-rest/1.0/bss-fl-rest-1.0.jar"
@@ -136,3 +144,56 @@ def test_maven_create_payload_has_maven_block() -> None:
     assert payload["maven"]["versionPolicy"] == "MIXED"
     npm = build_hosted_create_payload("n-verified", "npm")
     assert "maven" not in npm
+
+
+def test_ensure_hosted_existing_maven_sets_permissive_layout() -> None:
+    from unittest.mock import MagicMock
+
+    from nexus_control.models import Repository
+
+    client = MagicMock()
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json.return_value = {
+        "name": "m-verified",
+        "maven": {"versionPolicy": "RELEASE", "layoutPolicy": "STRICT"},
+        "storage": {},
+    }
+    put_resp = MagicMock()
+    put_resp.status_code = 204
+    client.get.return_value = get_resp
+    client.put.return_value = put_resp
+    repo = Repository(name="m-verified", format="maven2", type="hosted")
+
+    result = RepositoryUploader(client).ensure_hosted(
+        "m-verified",
+        "maven2",
+        get_repository=lambda _name: repo,
+    )
+    assert result is repo
+    client.put.assert_called_once()
+    body = client.put.call_args.kwargs["json"]
+    assert body["maven"]["layoutPolicy"] == "PERMISSIVE"
+
+
+def test_ensure_hosted_existing_maven_skips_put_when_already_permissive() -> None:
+    from unittest.mock import MagicMock
+
+    from nexus_control.models import Repository
+
+    client = MagicMock()
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json.return_value = {
+        "name": "m-verified",
+        "maven": {"layoutPolicy": "PERMISSIVE"},
+    }
+    client.get.return_value = get_resp
+    repo = Repository(name="m-verified", format="maven2", type="hosted")
+
+    RepositoryUploader(client).ensure_hosted(
+        "m-verified",
+        "maven2",
+        get_repository=lambda _name: repo,
+    )
+    client.put.assert_not_called()

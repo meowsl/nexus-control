@@ -15,6 +15,7 @@ from nexus_control.integrations.defectdojo import (
     DefectDojoVault,
     build_generic_report,
     collect_findings,
+    extract_engagement_id,
     map_severity,
     push_pipeline_findings,
     resolve_defectdojo_settings,
@@ -271,6 +272,43 @@ def test_full_scan_closes_old_findings(tmp_path: Path) -> None:
     ) as mock_reimport:
         push_pipeline_findings(settings, summary)
     assert mock_reimport.call_args.kwargs["close_old_findings"] is True
+
+
+def test_extract_engagement_id_accepts_both_field_names() -> None:
+    assert extract_engagement_id({"engagement": 7}) == 7
+    assert extract_engagement_id({"engagement_id": 9}) == 9
+    assert extract_engagement_id({"test": {"engagement_id": 11}}) == 11
+    assert extract_engagement_id({}) is None
+
+
+def test_push_reads_engagement_id_field(tmp_path: Path) -> None:
+    settings = Settings(
+        nexus_url="http://nexus:8081",
+        nexus_cache_dir=tmp_path,
+        download_root=tmp_path / "dl",
+        reports_root=tmp_path / "rp",
+        verified_root=tmp_path / "vf",
+        archive_root=tmp_path / "ar",
+        log_file=tmp_path / "log.log",
+        defectdojo_enabled=True,
+        defectdojo_url="http://localhost:8080",
+        defectdojo_api_key="tok",
+    )
+    summary = PipelineSummary(
+        repository="npm-hosted",
+        results=[
+            _fail_result(
+                "pkg/bad/1.0/bad-1.0.tgz",
+                [Vulnerability(id="CVE-1", severity=Severity.HIGH)],
+            )
+        ],
+    )
+    with patch(
+        "nexus_control.integrations.defectdojo.DefectDojoClient.reimport_generic_findings",
+        return_value={"test": 3, "engagement_id": 55},
+    ):
+        result = push_pipeline_findings(settings, summary)
+    assert result.engagement_id == 55
 
 
 def test_wizard_defectdojo_yes(
